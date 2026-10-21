@@ -2,7 +2,17 @@
 
 import numpy as np
 
+from hafnium.basis import BasisLibrary, BasisSet
 from hafnium.integrals import ShellTable
+from hafnium.molecule import Molecule
+
+LIBRARY = BasisLibrary(offline=True)
+
+
+def table_for(molecule: Molecule, basis_name: str) -> ShellTable:
+    """The shell table of ``molecule`` in the bundled basis set ``basis_name``."""
+    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+    return ShellTable.from_basis(basis, molecule.positions_array())
 
 
 def reversed_table(table: ShellTable) -> tuple[ShellTable, np.ndarray]:

@@ -4,25 +4,23 @@ import numpy as np
 import pytest
 
 from hafnium import _kernels
-from hafnium.basis import BasisLibrary, BasisSet, Shell
+from hafnium.basis import BasisSet, Shell
 from hafnium.integrals import RustEngine, ShellTable
 from hafnium.molecule import Molecule
 from tests.molecules import water
+from tests.reciprocal_vectors import G_VECTORS
+from tests.shell_tables import table_for
 from tests.tolerances import INTEGRAL_TOL, QUADRATURE_TOL, RECIPROCAL_SPACE_TOL
-from tests.vectors import G_VECTORS
 
-LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
 ZERO = np.zeros((1, 3))
 
 
-def table_for(molecule: Molecule, name: str) -> ShellTable:
-    basis = BasisSet.for_molecule(molecule, name, library=LIBRARY)
-    return ShellTable.from_basis(basis, molecule.positions_array())
+def spd_tables() -> tuple[ShellTable, ShellTable]:
+    """s, p and d shells with exponents of at least 0.8 on two centres.
 
-
-def spd_table() -> ShellTable:
-    """s, p and d shells with exponents of at least 0.8 on two centres."""
+    Returns the table of both centres and that of the first centre alone.
+    """
     molecule = Molecule.from_atoms(
         [("He", (0.3, -0.2, 0.4)), ("He", (-0.6, 0.5, -0.9))], unit="bohr"
     )
@@ -32,7 +30,12 @@ def spd_table() -> ShellTable:
         Shell(2, (1.1,), ((1.0,),)),
     )
     basis = BasisSet("spd", ("He", "He"), shells * 2, (0, 0, 0, 1, 1, 1))
-    return ShellTable.from_basis(basis, molecule.positions_array())
+    first = BasisSet("spd", ("He",), shells, (0, 0, 0))
+    positions = molecule.positions_array()
+    return (
+        ShellTable.from_basis(basis, positions),
+        ShellTable.from_basis(first, positions[:1]),
+    )
 
 
 def grid_values(
@@ -98,7 +101,7 @@ def test_pair_transform_at_zero_is_the_overlap() -> None:
 
 
 def test_transforms_match_numerical_quadrature() -> None:
-    table = spd_table()
+    table, first = spd_tables()
     values, points, volume = grid_values(table, 6.5, 0.2)
     phases = np.exp(-1j * points @ G_VECTORS.T)
     single = ENGINE.fourier_transform(table, G_VECTORS)
@@ -106,20 +109,29 @@ def test_transforms_match_numerical_quadrature() -> None:
         single, volume * (values @ phases).T, atol=QUADRATURE_TOL
     )
     pair = ENGINE.pair_fourier_transform(table, table, ZERO, G_VECTORS)[0]
+    # Different bra and ket tables: the first centre's functions as the ket.
+    mixed = ENGINE.pair_fourier_transform(table, first, ZERO, G_VECTORS)[0]
+    assert mixed.shape == (len(G_VECTORS), table.n_functions, first.n_functions)
     for ig in range(len(G_VECTORS)):
         expected = volume * (values * phases[:, ig]) @ values.T
         np.testing.assert_allclose(pair[ig], expected, atol=QUADRATURE_TOL)
+        np.testing.assert_allclose(
+            mixed[ig], expected[:, : first.n_functions], atol=QUADRATURE_TOL
+        )
 
 
 def test_pair_transform_conjugates_and_translates() -> None:
     molecule = water()
     table = table_for(molecule, "sto-3g")
-    g = G_VECTORS[4:5]
     translation = np.array([0.6, -0.2, 0.5])
-    both = ENGINE.pair_fourier_transform(
-        table, table, translation[None], np.concatenate([g, -g])
-    )[0]
-    np.testing.assert_allclose(both[0].conj(), both[1], atol=INTEGRAL_TOL)
+    translations = np.stack([np.zeros(3), translation])
+    vectors = np.concatenate([G_VECTORS, -G_VECTORS])
+    both = ENGINE.pair_fourier_transform(table, table, translations, vectors)
+    assert both.shape == (2, 2 * len(G_VECTORS), table.n_functions, table.n_functions)
+    n_g = len(G_VECTORS)
+    np.testing.assert_allclose(both[:, :n_g].conj(), both[:, n_g:], atol=INTEGRAL_TOL)
+    # Without a translation the pair transform is symmetric.
+    np.testing.assert_allclose(both[0], np.swapaxes(both[0], 1, 2), atol=INTEGRAL_TOL)
     moved = Molecule.from_atoms(
         zip(
             molecule.symbols,
@@ -128,12 +140,18 @@ def test_pair_transform_conjugates_and_translates() -> None:
         ),
         unit="bohr",
     )
-    direct = ENGINE.pair_fourier_transform(table, table_for(moved, "sto-3g"), ZERO, g)
-    np.testing.assert_allclose(both[0], direct[0, 0], atol=INTEGRAL_TOL)
+    direct = ENGINE.pair_fourier_transform(
+        table, table_for(moved, "sto-3g"), ZERO, vectors
+    )
+    np.testing.assert_allclose(both[1], direct[0], atol=INTEGRAL_TOL)
     # Swapping the pair: ρ̃_{u v_T}(G) = exp(−i G·T) ρ̃_{v u_{−T}}(G).
-    swapped = ENGINE.pair_fourier_transform(table, table, -translation[None], g)[0, 0]
-    phase = np.exp(-1j * g[0] @ translation)
-    np.testing.assert_allclose(both[0], phase * swapped.T, atol=INTEGRAL_TOL)
+    swapped = ENGINE.pair_fourier_transform(table, table, -translation[None], vectors)
+    phases = np.exp(-1j * vectors @ translation)
+    np.testing.assert_allclose(
+        both[1],
+        phases[:, None, None] * np.swapaxes(swapped[0], 1, 2),
+        atol=INTEGRAL_TOL,
+    )
 
 
 def test_metric_from_the_transform_matches_the_coulomb_kernel() -> None:

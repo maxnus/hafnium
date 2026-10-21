@@ -166,3 +166,15 @@ def fourier_transform_reference(
         "single": np.asarray(ft_ao.ft_ao(mol, g)),
         "pair": np.asarray(ft_ao.ft_aopair(mol, g)),
     }
+
+
+def mixed_fourier_transform_reference(
+    molecule: Molecule, first: BasisSet, second: BasisSet, g_vectors: np.ndarray
+) -> np.ndarray:
+    """Pair transforms ``[G, ao_first, ao_second]`` between two basis sets."""
+    ft_ao: Any = pytest.importorskip("pyscf.gto.ft_ao")
+    mol_first = pyscf_molecule(molecule, first)
+    joined = gto.conc_mol(mol_first, pyscf_molecule(molecule, second))
+    slices = (0, mol_first.nbas, mol_first.nbas, joined.nbas)
+    g = np.ascontiguousarray(g_vectors, dtype=float)
+    return np.asarray(ft_ao.ft_aopair(joined, g, shls_slice=slices))

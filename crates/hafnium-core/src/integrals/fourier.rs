@@ -32,7 +32,7 @@ pub fn fourier_transform(
     table: &ShellTable,
     g_vectors: &[[f64; 3]],
 ) -> Result<Vec<Complex64>, Error> {
-    check_finite(g_vectors)?;
+    check_finite(g_vectors, "G vectors")?;
     let tables = Tables::new(table.max_angular_momentum());
     let (n_g, n) = (g_vectors.len(), table.n_functions());
     let offsets = table.function_offsets();
@@ -76,8 +76,8 @@ pub fn pair_fourier_transform(
     translations: &[[f64; 3]],
     g_vectors: &[[f64; 3]],
 ) -> Result<Vec<Complex64>, Error> {
-    check_finite(translations)?;
-    check_finite(g_vectors)?;
+    check_finite(translations, "translations")?;
+    check_finite(g_vectors, "G vectors")?;
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
     let tables = Tables::new(max_l);
     let (n_g, n_bra, n_ket) = (g_vectors.len(), bra.n_functions(), ket.n_functions());
@@ -152,8 +152,7 @@ fn accumulate(
         for (ig, g) in g_vectors.iter().enumerate() {
             let g_squared: f64 = g.iter().map(|x| x * x).sum();
             let g_dot_p: f64 = (0..3).map(|axis| g[axis] * pair.center[axis]).sum();
-            let prefactor =
-                scale * (-g_squared / (4.0 * pair.p)).exp() * Complex64::new(0.0, -g_dot_p).exp();
+            let prefactor = scale * (-g_squared / (4.0 * pair.p)).exp() * Complex64::cis(-g_dot_p);
             for axis in 0..3 {
                 powers[0] = Complex64::new(1.0, 0.0);
                 for t in 1..=order {
@@ -186,35 +185,9 @@ fn accumulate(
 mod tests {
     use super::*;
     use crate::integrals::overlap;
+    use crate::integrals::test_tables::{s_shell, sp_table, sp_table_at};
 
     const ZERO: [f64; 3] = [0.0; 3];
-
-    /// One normalized s primitive of exponent `a` at `center`.
-    fn s_shell(a: f64, center: [f64; 3]) -> ShellTable {
-        let norm = (2.0 * a / PI).powf(0.75) * (4.0 * PI).sqrt();
-        ShellTable::new(vec![0], vec![center], vec![0, 1], vec![a], vec![norm]).expect("valid")
-    }
-
-    /// An s and a p shell of two primitives each on two centres.
-    fn sp_table_at(shift: [f64; 3]) -> ShellTable {
-        let centers = [[0.0; 3], [1.2, -0.3, 0.4]];
-        let moved = |center: [f64; 3]| -> [f64; 3] {
-            std::array::from_fn(|axis| center[axis] + shift[axis])
-        };
-        ShellTable::new(
-            vec![0, 1, 0, 1],
-            vec![
-                moved(centers[0]),
-                moved(centers[0]),
-                moved(centers[1]),
-                moved(centers[1]),
-            ],
-            vec![0, 2, 4, 6, 8],
-            vec![1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
-            vec![0.7, 0.5, 0.6, 0.4, 0.8, 0.3, 0.5, 0.5],
-        )
-        .expect("valid")
-    }
 
     fn close(x: Complex64, y: Complex64) -> bool {
         (x - y).norm() < 1e-13
@@ -258,7 +231,7 @@ mod tests {
 
     #[test]
     fn transforms_at_zero_are_overlaps_and_integrals() {
-        let table = sp_table_at(ZERO);
+        let table = sp_table();
         let translation = [0.3, -0.5, 0.2];
         let pair =
             pair_fourier_transform(&table, &table, &[ZERO, translation], &[ZERO]).expect("valid");
@@ -280,40 +253,85 @@ mod tests {
 
     #[test]
     fn pair_transform_conjugates_and_translates() {
-        let table = sp_table_at(ZERO);
+        let table = sp_table();
         let n = table.n_functions();
         let g = [0.4, 0.9, -0.3];
         let minus_g = [-0.4, -0.9, 0.3];
         let translation = [0.6, -0.2, 0.5];
-        let both =
-            pair_fourier_transform(&table, &table, &[translation], &[g, minus_g]).expect("valid");
+        // Two images and two vectors: `[image][g][u][v]`.
+        let both = pair_fourier_transform(&table, &table, &[ZERO, translation], &[g, minus_g])
+            .expect("valid");
+        let at =
+            |image: usize, ig: usize, u: usize, v: usize| both[((image * 2 + ig) * n + u) * n + v];
         for u in 0..n {
             for v in 0..n {
-                let value = both[u * n + v];
-                let negated = both[n * n + u * n + v];
-                assert!(close(value.conj(), negated));
+                for image in 0..2 {
+                    assert!(close(at(image, 0, u, v).conj(), at(image, 1, u, v)));
+                }
+                // Without a translation the pair transform is symmetric.
+                assert!(close(at(0, 0, u, v), at(0, 0, v, u)));
             }
         }
         // The ket translated by T is the ket table moved by T.
         let moved = sp_table_at(translation);
-        let direct = pair_fourier_transform(&table, &moved, &[ZERO], &[g]).expect("valid");
-        for (b, d) in both.iter().zip(&direct) {
+        let direct = pair_fourier_transform(&table, &moved, &[ZERO], &[g, minus_g]).expect("valid");
+        for (b, d) in both[2 * n * n..].iter().zip(&direct) {
             assert!(close(*b, *d));
         }
         // Swapping the pair: ρ̃_{a b_T}(G) = exp(−i G·T) ρ̃_{b a_{−T}}(G).
         let minus_t: [f64; 3] = std::array::from_fn(|k| -translation[k]);
         let swapped = pair_fourier_transform(&table, &table, &[minus_t], &[g]).expect("valid");
-        let phase = Complex64::new(0.0, -(0..3).map(|k| g[k] * translation[k]).sum::<f64>()).exp();
+        let phase = Complex64::cis(-(0..3).map(|k| g[k] * translation[k]).sum::<f64>());
         for u in 0..n {
             for v in 0..n {
-                assert!(close(both[u * n + v], phase * swapped[v * n + u]));
+                assert!(close(at(1, 0, u, v), phase * swapped[v * n + u]));
             }
         }
     }
 
     #[test]
+    fn pair_transform_handles_different_tables() {
+        // (s | s p s p) against the matching block of (s s p s p | s s p s p).
+        let single = s_shell(0.9, [0.0; 3]);
+        let table = sp_table();
+        let n = table.n_functions();
+        let g = [0.4, 0.9, -0.3];
+        let mixed = pair_fourier_transform(&single, &table, &[ZERO], &[g]).expect("valid");
+        assert_eq!(mixed.len(), n);
+        // The same s function as the first entry of a combined table.
+        let combined = ShellTable::new(
+            vec![0, 0, 1, 0, 1],
+            vec![
+                [0.0; 3],
+                [0.0; 3],
+                [0.0; 3],
+                [1.2, -0.3, 0.4],
+                [1.2, -0.3, 0.4],
+            ],
+            vec![0, 1, 3, 5, 7, 9],
+            vec![0.9, 1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
+            vec![
+                (2.0 * 0.9 / PI).powf(0.75) * (4.0 * PI).sqrt(),
+                0.7,
+                0.5,
+                0.6,
+                0.4,
+                0.8,
+                0.3,
+                0.5,
+                0.5,
+            ],
+        )
+        .expect("valid");
+        let full = pair_fourier_transform(&combined, &combined, &[ZERO], &[g]).expect("valid");
+        for v in 0..n {
+            assert!(close(mixed[v], full[v + 1]));
+        }
+    }
+
+    #[test]
     fn rejects_non_finite_vectors() {
-        let table = sp_table_at(ZERO);
+        let table = sp_table();
         assert!(fourier_transform(&table, &[[f64::NAN; 3]]).is_err());
         assert!(pair_fourier_transform(&table, &table, &[ZERO], &[[f64::INFINITY; 3]]).is_err());
         assert!(pair_fourier_transform(&table, &table, &[[f64::NAN; 3]], &[ZERO]).is_err());

@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from hafnium.basis import BasisSet
+from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
     density_fitting_reference,
     four_center_reference,
@@ -39,7 +40,6 @@ from tests.reference.test_one_electron_reference import (
     MOLECULES,
     STORED_CASES,
 )
-from tests.vectors import G_VECTORS
 
 DIRECTORY = Path(__file__).parent / "data"
 

@@ -12,6 +12,8 @@ mod fourier;
 mod hermite;
 mod one_electron;
 mod pairs;
+#[cfg(test)]
+mod test_tables;
 mod two_electron;
 
 pub use cartesian::{cartesian_components, n_cartesian, spherical_transformation, transform_index};
