@@ -16,6 +16,7 @@ from hafnium.structured import (
     is_kramers_symmetric,
     time_reverse,
 )
+from tests.random_matrices import random_hermitian, random_positive_definite
 from tests.tolerances import EIGEN_TOL, STRUCTURE_TOL
 
 STRUCTURES: dict[str, BlockStructure] = {
@@ -61,16 +62,6 @@ PAIRED = ["paired-unrestricted", "paired-generalized"]
 seeds = st.integers(min_value=0, max_value=2**31 - 1)
 sizes = st.integers(min_value=1, max_value=4)
 names = st.sampled_from(sorted(STRUCTURES))
-
-
-def random_hermitian(rng: np.random.Generator, size: int) -> np.ndarray:
-    x = rng.standard_normal((size, size)) + 1j * rng.standard_normal((size, size))
-    return (x + x.conj().T) / 2
-
-
-def random_positive_definite(rng: np.random.Generator, size: int) -> np.ndarray:
-    x = rng.standard_normal((size, size))
-    return x @ x.T + size * np.eye(size)
 
 
 def member(name: str, n: int, rng: np.random.Generator) -> BlockMatrix:

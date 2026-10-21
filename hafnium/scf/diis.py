@@ -82,7 +82,9 @@ def _coefficients(errors: tuple[BlockMatrix, ...]) -> Array:
             for a in errors
         ]
     )
-    overlaps = overlaps / xp.max(xp.linalg.diagonal(overlaps))
+    # All errors exactly zero (a one-function block) leave nothing to scale.
+    scale = xp.max(xp.linalg.diagonal(overlaps))
+    overlaps = overlaps / xp.where(scale > 0.0, scale, 1.0)
     top = xp.concat([overlaps, -xp.ones((m, 1), dtype=xp.float64)], axis=1)
     bottom = xp.concat(
         [-xp.ones((1, m), dtype=xp.float64), xp.zeros((1, 1), dtype=xp.float64)],

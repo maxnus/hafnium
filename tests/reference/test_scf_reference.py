@@ -7,24 +7,16 @@ from typing import Any
 import numpy as np
 import pytest
 
-from hafnium.basis import BasisLibrary, BasisSet
-from hafnium.integrals import RustEngine
+from hafnium.basis import BasisSet
 from hafnium.molecule import Molecule
-from hafnium.scf import (
-    DensityFittedCoulombExchange,
-    ExactCoulombExchange,
-    Hamiltonian,
-    ScfResult,
-    atomic_density_guess,
-    solve_scf,
-)
+from hafnium.scf import Hamiltonian, ScfResult, atomic_density_guess, solve_scf
 from hafnium.structured import BlockStructure, Ring
 from hafnium.symmetry import SymmetrySpec
+from tests.hamiltonians import ENGINE, hamiltonian_for
 from tests.molecules import ammonia_tilted, water, water_cation
+from tests.shell_tables import LIBRARY
 from tests.tolerances import ENERGY_TOL, MO_ENERGY_TOL
 
-LIBRARY = BasisLibrary(offline=True)
-ENGINE = RustEngine()
 AUXILIARY = "def2-universal-jkfit"
 
 MOLECULES = {
@@ -51,19 +43,6 @@ SYMMETRY = {
 }
 
 
-def hamiltonian_for(
-    molecule: Molecule, basis: BasisSet, auxiliary: BasisSet | None = None
-) -> Hamiltonian:
-    two_body = (
-        ExactCoulombExchange.from_molecule(ENGINE, basis, molecule)
-        if auxiliary is None
-        else DensityFittedCoulombExchange.from_molecule(
-            ENGINE, basis, auxiliary, molecule
-        )
-    )
-    return Hamiltonian.from_molecule(ENGINE, basis, molecule, two_body)
-
-
 def converge(
     hamiltonian: Hamiltonian, basis: BasisSet, kind: str, guess: str
 ) -> ScfResult:
@@ -79,12 +58,8 @@ def compute(
     name: str, basis_name: str, kind: str, guess: str = "atoms"
 ) -> tuple[Molecule, BasisSet, ScfResult]:
     molecule = MOLECULES[name]
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
-    return (
-        molecule,
-        basis,
-        converge(hamiltonian_for(molecule, basis), basis, kind, guess),
-    )
+    basis, hamiltonian = hamiltonian_for(molecule, basis_name)
+    return molecule, basis, converge(hamiltonian, basis, kind, guess)
 
 
 def check_against(result: ScfResult, expected: dict[str, Any]) -> None:
@@ -117,9 +92,8 @@ def test_density_fitted_hartree_fock_matches_pyscf(kind: str) -> None:
     from tests.reference.pyscf_oracle import scf_reference
 
     molecule = MOLECULES["water" if kind == "rhf" else "water_cation"]
-    basis = BasisSet.for_molecule(molecule, "def2-svp", library=LIBRARY)
+    basis, hamiltonian = hamiltonian_for(molecule, "def2-svp", AUXILIARY)
     auxiliary = BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY)
-    hamiltonian = hamiltonian_for(molecule, basis, auxiliary)
     result = converge(hamiltonian, basis, kind, "atoms")
     check_against(result, scf_reference(molecule, basis, kind, auxiliary=auxiliary))
 
@@ -130,8 +104,7 @@ def test_complex_generalized_state_matches_pyscf_from_the_same_guess() -> None:
     from tests.reference.pyscf_oracle import scf_reference
 
     molecule = MOLECULES["water_cation"]
-    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
-    hamiltonian = hamiltonian_for(molecule, basis)
+    basis, hamiltonian = hamiltonian_for(molecule, "sto-3g")
     real = solve_scf(hamiltonian, SYMMETRY["ghf"])
     rng = np.random.default_rng(5)
     n = 2 * basis.n_functions

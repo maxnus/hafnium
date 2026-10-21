@@ -14,6 +14,7 @@ from hafnium.scf import (
 )
 from hafnium.structured import BlockMatrix, BlockStructure, Ring
 from tests.molecules import water
+from tests.random_matrices import random_hermitian
 from tests.tolerances import FITTED_INTEGRAL_TOL, STRUCTURE_TOL
 
 LIBRARY = BasisLibrary(offline=True)
@@ -23,11 +24,6 @@ BASIS = BasisSet.for_molecule(MOLECULE, "sto-3g", library=LIBRARY)
 AUXILIARY = BasisSet.for_molecule(MOLECULE, "def2-universal-jkfit", library=LIBRARY)
 EXACT = ExactCoulombExchange.from_molecule(ENGINE, BASIS, MOLECULE)
 FITTED = DensityFittedCoulombExchange.from_molecule(ENGINE, BASIS, AUXILIARY, MOLECULE)
-
-
-def random_hermitian(rng: np.random.Generator, size: int) -> np.ndarray:
-    x = rng.standard_normal((size, size)) + 1j * rng.standard_normal((size, size))
-    return (x + x.conj().T) / 2
 
 
 def looped_coulomb_exchange(

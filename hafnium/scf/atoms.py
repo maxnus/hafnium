@@ -12,7 +12,8 @@ corrects both.
 from __future__ import annotations
 
 from hafnium.backend import Array, array_namespace
-from hafnium.basis import BasisSet
+from hafnium.basis import BasisSet, Shell
+from hafnium.errors import InputError
 from hafnium.integrals import IntegralEngine
 from hafnium.molecule import Atom, Molecule, atomic_number
 from hafnium.scf.coulomb_exchange import ExactCoulombExchange
@@ -24,7 +25,11 @@ from hafnium.symmetry import SymmetrySpec
 
 
 def atomic_density(
-    engine: IntegralEngine, basis: BasisSet, atom: int, *, options: ScfOptions | None
+    engine: IntegralEngine,
+    basis: BasisSet,
+    atom: int,
+    *,
+    options: ScfOptions | None = None,
 ) -> Array:
     """Per-spin density ``[ao_A, ao_A]`` of the neutral spherical atom ``atom``.
 
@@ -32,15 +37,31 @@ def atomic_density(
     averaged over both spins and over the degenerate orbitals of its open
     shell, in the shells of ``basis`` centred on it.
     """
+    symbol = basis.atom_symbols[atom]
+    return _spherical_atom(engine, basis.name, symbol, _shells_of(basis, atom), options)
+
+
+def _shells_of(basis: BasisSet, atom: int) -> tuple[Shell, ...]:
     shells = tuple(
         shell
         for shell, centre in zip(basis.shells, basis.shell_atoms, strict=True)
         if centre == atom
     )
-    symbol = basis.atom_symbols[atom]
+    if not shells:
+        raise InputError(f"atom {atom} has no basis functions")
+    return shells
+
+
+def _spherical_atom(
+    engine: IntegralEngine,
+    name: str,
+    symbol: str,
+    shells: tuple[Shell, ...],
+    options: ScfOptions | None,
+) -> Array:
     n_electrons = atomic_number(symbol)
     spherical = Molecule((Atom(symbol, (0.0, 0.0, 0.0)),), spin=n_electrons % 2)
-    atomic_basis = BasisSet(basis.name, (symbol,), shells, (0,) * len(shells))
+    atomic_basis = BasisSet(name, (symbol,), shells, (0,) * len(shells))
     two_body = ExactCoulombExchange.from_molecule(engine, atomic_basis, spherical)
     hamiltonian = Hamiltonian.from_molecule(engine, atomic_basis, spherical, two_body)
     result = solve_scf(
@@ -61,30 +82,28 @@ def atomic_density_guess(
 ) -> BlockMatrix:
     """Superposition of atomic densities in ``structure``.
 
-    Each element is converged once; the per-spin atomic densities are
-    placed on the diagonal of the molecular density, which is then embedded
-    into ``structure``.
+    Each distinct element and shell set is converged once; the per-spin
+    atomic densities are placed on the diagonal of the molecular density in
+    the order of the atoms, which is then embedded into ``structure``.
     """
-    offsets = basis.shell_offsets()
-    starts = [
-        offsets[index]
-        for index, centre in enumerate(basis.shell_atoms)
-        if index == 0 or centre != basis.shell_atoms[index - 1]
-    ]
-    ends = [*starts[1:], basis.n_functions]
-    densities: dict[str, Array] = {}
-    columns: list[Array] = []
-    xp = None
+    densities: dict[tuple[str, tuple[Shell, ...]], Array] = {}
+    blocks: list[Array] = []
     for atom, symbol in enumerate(basis.atom_symbols):
-        if symbol not in densities:
-            densities[symbol] = atomic_density(engine, basis, atom, options=options)
-        block = densities[symbol]
-        xp = array_namespace(block)
-        before = xp.zeros((starts[atom], block.shape[1]), dtype=xp.float64)
-        after = xp.zeros(
-            (basis.n_functions - ends[atom], block.shape[1]), dtype=xp.float64
-        )
+        key = (symbol, _shells_of(basis, atom))
+        if key not in densities:
+            densities[key] = _spherical_atom(
+                engine, basis.name, symbol, key[1], options
+            )
+        blocks.append(densities[key])
+    xp = array_namespace(*blocks)
+    n = basis.n_functions
+    columns: list[Array] = []
+    start = 0
+    for block in blocks:
+        width = int(block.shape[1])
+        before = xp.zeros((start, width), dtype=xp.float64)
+        after = xp.zeros((n - start - width, width), dtype=xp.float64)
         columns.append(xp.concat([before, block, after], axis=0))
-    assert xp is not None
+        start += width
     total = xp.concat(columns, axis=1)
     return BlockMatrix(BlockStructure.spatial(), (total,)).embed(structure)

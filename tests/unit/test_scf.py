@@ -3,15 +3,13 @@
 import numpy as np
 import pytest
 
-from hafnium.basis import BasisLibrary, BasisSet
+from hafnium.basis import BasisSet, Shell
 from hafnium.errors import ConvergenceError, InputError, StructureError
-from hafnium.integrals import RustEngine
 from hafnium.molecule import Molecule
 from hafnium.scf import (
     AufbauOccupation,
     AveragedOccupation,
     Diis,
-    ExactCoulombExchange,
     Hamiltonian,
     ScfOptions,
     ScfResult,
@@ -31,16 +29,18 @@ from hafnium.structured import (
     is_kramers_symmetric,
 )
 from hafnium.symmetry import SymmetrySpec
+from tests.hamiltonians import ENGINE, hamiltonian_for
 from tests.molecules import hydrogen, water, water_cation
+from tests.random_matrices import random_antisymmetric
+from tests.shell_tables import LIBRARY
 from tests.tolerances import (
+    CONVERGED_DENSITY_TOL,
     DENSITY_FITTING_ENERGY_TOL,
     ENERGY_TOL,
     LITERATURE_TOL,
     STRUCTURE_TOL,
 )
 
-LIBRARY = BasisLibrary(offline=True)
-ENGINE = RustEngine()
 CLASSES = [
     "RHF",
     "complex RHF",
@@ -56,15 +56,9 @@ OPEN_SHELL_CLASSES = ["UHF", "complex UHF", "GHF", "complex GHF"]
 SYMMETRY_BREAKING_GAIN = 1e-2
 
 
-def hamiltonian_for(molecule: Molecule, basis_name: str) -> Hamiltonian:
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
-    two_body = ExactCoulombExchange.from_molecule(ENGINE, basis, molecule)
-    return Hamiltonian.from_molecule(ENGINE, basis, molecule, two_body)
-
-
 @pytest.fixture(scope="module")
 def water_hamiltonian() -> Hamiltonian:
-    return hamiltonian_for(water(), "sto-3g")
+    return hamiltonian_for(water(), "sto-3g")[1]
 
 
 @pytest.fixture(scope="module")
@@ -104,8 +98,7 @@ def test_hydrogen_atom_in_every_open_shell_class() -> None:
     # One s function: the energy is the expectation value of the core
     # Hamiltonian in the normalized STO-3G 1s function, -0.4666 Hartree.
     atom = Molecule.from_atoms([("H", (0.0, 0.0, 0.0))], spin=1)
-    basis = BasisSet.for_molecule(atom, "sto-3g", library=LIBRARY)
-    hamiltonian = hamiltonian_for(atom, "sto-3g")
+    basis, hamiltonian = hamiltonian_for(atom, "sto-3g")
     for name in OPEN_SHELL_CLASSES:
         result = solve_scf(hamiltonian, SymmetrySpec.from_name(name))
         assert result.energy == pytest.approx(-0.4666, abs=LITERATURE_TOL)
@@ -129,7 +122,9 @@ def test_every_class_recovers_the_closed_shell_energy(
     if spec.field.value == "paired" and result.structure.is_spinor:
         assert is_kramers_symmetric(result.density.blocks[0])
     np.testing.assert_allclose(
-        result.density.to_dense(), restricted_water.density.to_dense(), atol=1e-6
+        result.density.to_dense(),
+        restricted_water.density.to_dense(),
+        atol=CONVERGED_DENSITY_TOL,
     )
 
 
@@ -159,7 +154,7 @@ def test_embedded_solution_is_stationary_in_every_class(
 
 
 def test_symmetry_breaking_in_stretched_hydrogen() -> None:
-    hamiltonian = hamiltonian_for(hydrogen(4.0), "sto-3g")
+    _, hamiltonian = hamiltonian_for(hydrogen(4.0), "sto-3g")
     restricted = solve_scf(hamiltonian, SymmetrySpec.from_name("RHF"))
     # Alpha on one atom, beta on the other.
     broken = BlockMatrix(
@@ -189,7 +184,7 @@ def test_complex_classes_return_from_a_complex_perturbation(
     rng = np.random.default_rng(11)
     density = restricted_water.density.embed(structure)
     perturbed = density.map_blocks(
-        lambda block: block + 0.05j * antisymmetric(rng, block.shape[0])
+        lambda block: block + 0.05j * random_antisymmetric(rng, block.shape[0])
     )
     result = solve_scf(water_hamiltonian, SymmetrySpec.from_name(name), guess=perturbed)
     assert result.n_iterations > 2
@@ -197,15 +192,9 @@ def test_complex_classes_return_from_a_complex_perturbation(
     check_state(result, water_hamiltonian)
 
 
-def antisymmetric(rng: np.random.Generator, size: int) -> np.ndarray:
-    x = rng.standard_normal((size, size))
-    return x - x.T
-
-
 def test_open_shell_classes_agree_on_the_water_cation() -> None:
     molecule = water_cation()
-    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
-    hamiltonian = hamiltonian_for(molecule, "sto-3g")
+    basis, hamiltonian = hamiltonian_for(molecule, "sto-3g")
     unrestricted = solve_scf(hamiltonian, SymmetrySpec.from_name("UHF"))
     check_state(unrestricted, hamiltonian)
     assert unrestricted.mo_occupations.blocks[0].sum() == 5
@@ -234,7 +223,7 @@ def test_density_fitting_reproduces_the_exact_energy_closely() -> None:
 
 
 def test_diis_shortens_the_iteration() -> None:
-    hamiltonian = hamiltonian_for(water(), "def2-svp")
+    _, hamiltonian = hamiltonian_for(water(), "def2-svp")
     spec = SymmetrySpec()
     accelerated = solve_scf(hamiltonian, spec)
     plain = solve_scf(hamiltonian, spec, options=ScfOptions(diis_size=1))
@@ -286,7 +275,7 @@ def test_core_guess_is_spin_averaged(water_hamiltonian: Hamiltonian) -> None:
     np.testing.assert_allclose(guess.blocks[0], guess.blocks[1])
     overlap = water_hamiltonian.metric(structure)
     assert float(guess.trace_product(overlap)) == pytest.approx(10.0, abs=STRUCTURE_TOL)
-    cation = hamiltonian_for(water_cation(), "sto-3g")
+    _, cation = hamiltonian_for(water_cation(), "sto-3g")
     guess = core_hamiltonian_guess(cation, structure)
     np.testing.assert_allclose(guess.blocks[0], guess.blocks[1])
     assert float(guess.trace_product(overlap)) == pytest.approx(9.0, abs=STRUCTURE_TOL)
@@ -295,7 +284,7 @@ def test_core_guess_is_spin_averaged(water_hamiltonian: Hamiltonian) -> None:
 def test_atomic_densities_are_spherical_and_superpose_by_atom() -> None:
     carbon = Molecule.from_atoms([("C", (0.0, 0.0, 0.0))])
     basis = BasisSet.for_molecule(carbon, "sto-3g", library=LIBRARY)
-    density = atomic_density(ENGINE, basis, 0, options=None)
+    density = atomic_density(ENGINE, basis, 0)
     # STO-3G carbon: 1s, 2s, then 2p x y z. Two 2p electrons spread over
     # three orbitals give 1/3 per spin and no preferred direction.
     np.testing.assert_allclose(density[2:, 2:], np.eye(3) / 3, atol=STRUCTURE_TOL)
@@ -312,9 +301,30 @@ def test_atomic_densities_are_spherical_and_superpose_by_atom() -> None:
     # Oxygen owns the first five functions, each hydrogen one; no cross terms.
     np.testing.assert_allclose(block[:5, 5:n], 0.0)
     np.testing.assert_allclose(block[5, 6], 0.0)
-    hamiltonian = hamiltonian_for(molecule, "sto-3g")
+    _, hamiltonian = hamiltonian_for(molecule, "sto-3g")
     overlap = hamiltonian.metric(structure)
     assert float(guess.trace_product(overlap)) == pytest.approx(10.0, abs=STRUCTURE_TOL)
+
+
+def test_atomic_guess_follows_the_shells_of_each_atom() -> None:
+    # Two hydrogens with different shells: the densities are keyed by the
+    # shells, not by the element, and placed in each atom's own functions.
+    s_shell = Shell(0, (1.0,), ((1.0,),))
+    p_shell = Shell(1, (0.8,), ((1.0,),))
+    basis = BasisSet("mixed", ("H", "H"), (s_shell, s_shell, p_shell), (0, 1, 1))
+    guess = atomic_density_guess(ENGINE, basis, BlockStructure.restricted())
+    block = guess.blocks[0]
+    assert block.shape == (5, 5)
+    np.testing.assert_allclose(block[0, 1:], 0.0)
+    assert block[0, 0] == pytest.approx(0.5, abs=STRUCTURE_TOL)
+    assert block[1, 1] == pytest.approx(0.5, abs=STRUCTURE_TOL)
+    np.testing.assert_allclose(block[2:, 2:], 0.0, atol=STRUCTURE_TOL)
+    with pytest.raises(InputError, match="no basis functions"):
+        atomic_density_guess(
+            ENGINE,
+            BasisSet("bare", ("H", "He"), (s_shell,), (0,)),
+            BlockStructure.restricted(),
+        )
 
 
 def test_averaged_occupation_shares_degenerate_orbitals() -> None:
@@ -386,4 +396,11 @@ def test_diis_solves_a_linear_model_exactly() -> None:
     dependent = dependent.push(focks[1], errors[1])
     np.testing.assert_allclose(
         dependent.extrapolate().blocks[0], [[2.0, 0.0], [0.0, 1.0]], atol=STRUCTURE_TOL
+    )
+    # Exactly zero errors (a one-function block): every stored matrix is
+    # self-consistent and their average is returned, not NaN.
+    zero = BlockMatrix(structure, (np.zeros((2, 2)),))
+    settled = Diis(2).push(focks[0], zero).push(focks[1], zero)
+    np.testing.assert_allclose(
+        settled.extrapolate().blocks[0], [[2.0, 0.0], [0.0, 1.0]], atol=STRUCTURE_TOL
     )

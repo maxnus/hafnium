@@ -131,7 +131,7 @@ def _fill(energies: Array, count: float, tolerance: float | None) -> Array:
             end += 1
         share = min(remaining, float(end - start)) / (end - start)
         occupations.extend([share] * (end - start))
-        remaining -= share * (end - start)
+        remaining = max(remaining - share * (end - start), 0.0)
         start = end
     if not math.isclose(remaining, 0.0, abs_tol=1e-12):
         raise InputError(f"cannot place {count} electrons in {n} orbitals")

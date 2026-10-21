@@ -34,3 +34,6 @@ DENSITY_FITTING_ENERGY_TOL = 1e-4
 # Orbital energies of converged states against PySCF; first order in the
 # residual orbital error, unlike the variational total energy.
 MO_ENERGY_TOL = 1e-7
+# Densities of the same state converged in different classes: first order in
+# the residual orbital error at the default gradient tolerance.
+CONVERGED_DENSITY_TOL = 1e-6
