@@ -35,11 +35,14 @@ type.
   reuses them for every integral over that pair.
 - **Coulomb-type integrals** come from the Hermite Coulomb integrals
   `R_{tuv}` built from the Boys function `F_n(T)` by the usual recursion.
-  Range separation with the erf-attenuated kernel multiplies the Boys
-  argument and the prefactor by `ω² / (ω² + α)`, where `α` is the exponent
-  of the charge distribution seen by the kernel (`p` for nuclear
+  Range separation with the erf-attenuated kernel replaces the exponent
+  `α` of the charge distribution seen by the kernel (`p` for nuclear
   attraction, the reduced exponent `pq / (p + q)` for two-electron
-  integrals); the erfc kernel is the difference from the full kernel.
+  integrals) by `α ω² / (α + ω²)` wherever it appears: in the Boys
+  argument, in the `(−2α)^n` factors of the Hermite recursion and in the
+  `√α` prefactor, so the order-`n` auxiliary integral is scaled by
+  `(ω² / (α + ω²))^(n + 1/2)`. The erfc kernel is the difference from the
+  full kernel.
 - **Pair Fourier transforms** are analytic in the Hermite basis: the
   transform of the Hermite Gaussian `Λ_{tuv}` with kernel `exp(−i G·r)` is
   `(π/p)^{3/2} exp(−G²/4p) exp(−i G·P) (−i G_x)^t (−i G_y)^u (−i G_z)^v`,
@@ -58,21 +61,24 @@ type.
 - **Boys function.** A tabulated Taylor expansion for small arguments and
   the asymptotic form for large ones, with downward recursion for lower
   orders, validated against an arbitrary-precision reference to a relative
-  accuracy of 1e-15.
+  accuracy of 1e-14 over the orders and arguments the kernels use.
 - **Screening.** Schwarz bounds for three- and four-centre integrals;
   distance-based bounds for lattice images (ADR-0007).
 - **Rys quadrature is not implemented.** It may be added later for
   four-centre integrals only, behind the same kernel interface, if
   profiling of the exact-integral path demands it.
-- **libcint stays the oracle.** Every native kernel is compared with libcint
-  at `INTEGRAL_TOL` before it replaces the adapter for that integral type.
+- **libcint stays the oracle.** Every native kernel with a libcint
+  counterpart is compared with it at `INTEGRAL_TOL` before it replaces the
+  adapter for that integral type. The pair Fourier transform, which libcint
+  does not provide, is validated against numerical quadrature and by its
+  value at `G = 0`, which must equal the overlap integral of the pair.
 
 ## Consequences
 
 - One set of intermediates serves every integral type the library needs,
   and the Boys function is the only special function in the compiled
-  layer. Three-centre integrals in the Hermite form are the most efficient
-  known evaluation for density fitting (Ahlrichs 2006), and the Fourier
+  layer. Three-centre integrals in the Hermite form are among the most
+  efficient evaluations for density fitting (Ahlrichs 2006), and the Fourier
   transforms and range-separated kernels of the periodic milestones cost no
   new machinery.
 - Four-centre integrals at high angular momentum are slower than with Rys
