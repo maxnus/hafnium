@@ -122,7 +122,7 @@ class BasisSet:
 
 
 def m_values(angular_momentum: int) -> tuple[int, ...]:
-    """The ``m`` of each function of a shell, in storage order (ADR-0009).
+    """Return the ``m`` of each function of a shell in storage order (ADR-0009).
 
     ``m = -l, ..., +l`` except for p shells, which are ordered ``x, y, z``,
     that is ``m = +1, -1, 0``, as in libcint, PySCF and Molden.

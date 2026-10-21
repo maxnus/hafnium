@@ -35,6 +35,7 @@ nav:
       - adr/0006-basis-function-conventions.md
       - adr/0007-periodic-systems-as-k-point-sectors.md
       - adr/0008-mcmurchie-davidson-integrals.md
+      - adr/0009-p-shell-order-verified.md
   - API reference: api.md
 
 markdown_extensions:

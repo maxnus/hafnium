@@ -94,6 +94,7 @@ def test_one_electron_integrals_match_stored_data(name: str, basis_name: str) ->
     _, _, matrices = compute(name, basis_name)
     assert stored["provenance"]["program"] == "pyscf"
     for key, matrix in matrices.items():
+        expected: list[list[float]] = stored[key]
         np.testing.assert_allclose(
-            matrix, np.asarray(stored[key]), atol=INTEGRAL_TOL, err_msg=key
+            matrix, np.asarray(expected), atol=INTEGRAL_TOL, err_msg=key
         )

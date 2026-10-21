@@ -71,10 +71,11 @@ def test_basis_set_for_water(name: str, n_functions: int, max_l: int) -> None:
     assert offsets[-1] + basis.shells[-1].n_functions == n_functions
     labels = basis.function_labels()
     assert len(labels) == n_functions
+    # p shells are ordered x, y, z (ADR-0009).
     assert [label.m for label in labels if label.angular_momentum == 1][:3] == [
+        1,
         -1,
         0,
-        1,
     ]
     assert labels[0].symbol == "O"
     assert labels[-1].symbol == "H"

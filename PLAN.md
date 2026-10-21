@@ -682,7 +682,15 @@ Fourier transform (native from the start, since libcint has none), then
 four-centre integrals, each validated against libcint before it replaces
 the adapter. Exit: the Rust engine matches libcint to 1e-12 on a test
 suite of molecules and basis sets up to f functions, and the Fourier
-transforms match numerical quadrature.
+transforms match numerical quadrature. Status: Boys function, Hermite
+intermediates, the spherical transformation and the one-electron kernels
+(overlap, kinetic, nuclear attraction with range separation, all with ket
+translations) done 2026-10-21 and matching libcint to 1e-12 up to g
+functions (ADR-0009 records the verified p-shell order); the
+`IntegralEngine` protocol and `RustEngine` exist. Next: two- and
+three-centre Coulomb integrals, the pair Fourier transform, four-centre
+integrals, and the decision whether a libcint adapter is still worth
+building once the DF kernels are native (see §12).
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.
@@ -766,6 +774,11 @@ for periodic results.
 ## 12. Open decisions needing your input
 
 1. libxc binding: `pylibxc` versus an own binding through the Rust crate.
+4. Whether to build the `LibcintEngine` at all. Its purpose was to unblock
+   M3 before native integrals exist; with the one-electron kernels native
+   and the DF kernels next, the recommendation is to drop it and keep
+   libcint as the test oracle through PySCF, which avoids compiling
+   libcint inside the Rust build on every platform.
 2. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M9).
 3. Space-group detection: spglib (recommended; the standard library for
