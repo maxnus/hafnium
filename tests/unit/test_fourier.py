@@ -31,10 +31,9 @@ def spd_tables() -> tuple[ShellTable, ShellTable]:
     )
     basis = BasisSet("spd", ("He", "He"), shells * 2, (0, 0, 0, 1, 1, 1))
     first = BasisSet("spd", ("He",), shells, (0, 0, 0))
-    positions = molecule.positions_array()
     return (
-        ShellTable.from_basis(basis, positions),
-        ShellTable.from_basis(first, positions[:1]),
+        ShellTable.from_basis(basis, molecule),
+        ShellTable.from_basis(first, Molecule(molecule.atoms[:1])),
     )
 
 
@@ -78,7 +77,7 @@ def test_s_transform_matches_the_closed_form() -> None:
     exponent, center = 0.8, np.array([0.1, -0.4, 0.7])
     molecule = Molecule.from_atoms([("He", tuple(center.tolist()))], unit="bohr")
     basis = BasisSet("s", ("He",), (Shell(0, (exponent,), ((1.0,),)),), (0,))
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     values = ENGINE.fourier_transform(table, G_VECTORS)[:, 0]
     g_squared = np.einsum("gi,gi->g", G_VECTORS, G_VECTORS)
     expected = (

@@ -66,7 +66,7 @@ def test_high_angular_momentum_transforms_match_pyscf() -> None:
 
     molecule, basis = high_angular_momentum_case()
     expected = fourier_transform_reference(molecule, basis, G_VECTORS)
-    actual = compute(ShellTable.from_basis(basis, molecule.positions_array()))
+    actual = compute(ShellTable.from_basis(basis, molecule))
     for key in ("single", "pair"):
         np.testing.assert_allclose(actual[key], expected[key], atol=INTEGRAL_TOL)
 

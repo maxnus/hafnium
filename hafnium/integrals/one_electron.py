@@ -15,7 +15,7 @@ def _no_translation() -> Array:
 
 
 def _table(basis: BasisSet, molecule: Molecule) -> ShellTable:
-    return ShellTable.from_basis(basis, molecule.positions_array())
+    return ShellTable.from_basis(basis, molecule)
 
 
 def overlap(engine: IntegralEngine, basis: BasisSet, molecule: Molecule) -> Array:

@@ -116,14 +116,14 @@ def generalized_eigenvalues(a: np.ndarray, s: np.ndarray) -> np.ndarray:
 
 def test_images_translate_the_ket() -> None:
     molecule, basis = hydrogen_molecule()
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     translations = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]])
     images = ENGINE.overlap(table, table, translations)
     assert images.shape == (2, 2, 2)
     moved = Molecule.from_atoms(
         [("H", (0.0, 0.0, 3.0)), ("H", (0.0, 0.0, 4.4))], unit="bohr"
     )
-    moved_table = ShellTable.from_basis(basis, moved.positions_array())
+    moved_table = ShellTable.from_basis(basis, moved)
     direct = ENGINE.overlap(table, moved_table, translations[:1])
     np.testing.assert_allclose(images[1], direct[0], atol=INTEGRAL_TOL)
     np.testing.assert_allclose(
@@ -162,15 +162,15 @@ def test_shell_table_validates_its_input() -> None:
             np.array([1.0]),
         )
     molecule, basis = hydrogen_molecule()
-    with pytest.raises(InputError, match="positions"):
-        ShellTable.from_basis(basis, np.zeros((3, 3)))
+    with pytest.raises(InputError, match="built for the atoms"):
+        ShellTable.from_basis(basis, water())
     with pytest.raises(ValueError, match="positive"):
         nuclear_attraction(ENGINE, basis, molecule, omega=-1.0)
 
 
 def test_binding_rejects_malformed_input() -> None:
     molecule, basis = hydrogen_molecule()
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     with pytest.raises(ValueError, match=r"shape \[n, 3\]"):
         ENGINE.overlap(table, table, np.zeros((1, 2)))
     with pytest.raises(ValueError, match="finite"):

@@ -69,7 +69,9 @@ uses [Semantic Versioning](https://semver.org/).
   dimensions with one regularization of the `G = 0` term (ADR-0012), the
   lattice loops in Rust and the cutoffs chosen in Python; tests against
   Madelung constants, direct summation, PySCF's `energy_nuc` and
-  independence of the range-separation parameter.
+  independence of the range-separation parameter. `ShellTable.from_basis`
+  takes the system and rejects a basis built for other atoms. Decided: no
+  libcint adapter (ADR-0014).
 - SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
   the result, level shifting and density damping options, and canonical
   orthogonalization that removes linearly dependent basis combinations.

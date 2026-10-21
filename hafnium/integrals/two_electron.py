@@ -37,7 +37,7 @@ def eri(
     Shell quartets whose Schwarz bound is below ``threshold`` are left at
     zero.
     """
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     return engine.coulomb_four_center(
         (table, table),
         (table, table),

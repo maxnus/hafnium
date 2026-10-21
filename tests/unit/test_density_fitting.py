@@ -28,12 +28,9 @@ ZERO_PAIR = np.zeros((1, 2, 3))
 def tables(
     molecule: Molecule, orbital: str, auxiliary: str
 ) -> tuple[ShellTable, ShellTable]:
-    positions = molecule.positions_array()
     basis = BasisSet.for_atoms(molecule, orbital, library=LIBRARY)
     aux = BasisSet.for_atoms(molecule, auxiliary, library=LIBRARY)
-    return ShellTable.from_basis(basis, positions), ShellTable.from_basis(
-        aux, positions
-    )
+    return ShellTable.from_basis(basis, molecule), ShellTable.from_basis(aux, molecule)
 
 
 def test_two_center_s_integral_matches_the_closed_form() -> None:
@@ -47,7 +44,7 @@ def test_two_center_s_integral_matches_the_closed_form() -> None:
         (Shell(0, (a,), ((1.0,),)), Shell(0, (b,), ((1.0,),))),
         (0, 1),
     )
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     metric = ENGINE.coulomb_two_center(table, table, ZERO)[0]
     alpha = a * b / (a + b)
     boys = float(
@@ -109,8 +106,8 @@ def test_three_center_with_s_auxiliary_is_an_attenuated_attraction() -> None:
     q = 0.6
     aux_basis = BasisSet("s", ("O",), (Shell(0, (q,), ((1.0,),)),), (0,))
     probe = Molecule.from_atoms([("O", molecule.positions[0])], unit="bohr")
-    orbital = ShellTable.from_basis(basis, molecule.positions_array())
-    aux = ShellTable.from_basis(aux_basis, probe.positions_array())
+    orbital = ShellTable.from_basis(basis, molecule)
+    aux = ShellTable.from_basis(aux_basis, probe)
     three = ENGINE.coulomb_three_center(aux, orbital, orbital, ZERO_PAIR)[0, 0]
     attraction = ENGINE.nuclear_attraction(
         orbital,

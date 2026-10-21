@@ -166,7 +166,7 @@ hafnium/                   Python package
                          k-point sets, space groups
   structured/            BlockStructure, BlockMatrix, BlockTensor
   backend/               array namespace, device/dtype policy, linalg shims
-  integrals/             IntegralEngine protocol, rust + libcint adapters, df,
+  integrals/             IntegralEngine protocol, RustEngine, df,
                          periodic/ (image lists, Bloch phases, Ewald, kernels)
   grid/                  DFT grids (Python orchestration of Rust kernels)
   xc/                    functional registry, libxc binding
@@ -434,9 +434,14 @@ path.
   part is evaluated in reciprocal space from the analytic Fourier
   transform of Gaussian pair densities (against the nuclear structure
   factor for the nuclear attraction, against the auxiliary functions for
-  the DF tensor), with the G = 0 term removed by a uniform background and
-  the exchange divergence handled by the probe-charge Ewald (Madelung)
-  correction. Only the two-electron terms are fitted; the one-electron
+  the DF tensor), with the G = 0 term removed by a uniform background.
+  The exchange divergence needs a correction whose choice is the first
+  item of M5: ADR-0007 named the probe-charge Ewald (Madelung) correction,
+  which is PySCF's default and was adopted without weighing it against
+  the truncated Coulomb kernel (Spencer and Alavi) and the Wigner–Seitz
+  truncation (Sundararaman and Arias), which converge faster with the k
+  mesh and are the construction that also gives the reduced-dimension
+  kernels. Only the two-electron terms are fitted; the one-electron
   Hamiltonian carries no fitting error. The reciprocal-space kernel is 4π/G² in three
   dimensions and the analytic kernel of the reduced dimension for slabs and
   chains, which is why no vacuum padding is needed. The nuclear repulsion
@@ -537,8 +542,8 @@ algebra shims, thread configuration, DLPack exchange.
 **integrals.** `IntegralEngine` protocol (one-electron, four-centre,
 two- and three-centre, range-separated kernels, pair Fourier transforms,
 derivatives, screening data), each over shell pairs at explicit translation
-vectors so that molecules and cells share it, `RustEngine`,
-`LibcintEngine`, `DensityFitting` (auxiliary basis, metric, Cholesky or
+vectors so that molecules and cells share it, `RustEngine` (the only
+engine, ADR-0014), `DensityFitting` (auxiliary basis, metric, Cholesky or
 eigen decomposition of the metric, `B[aux, ao, ao]`), `CoulombExchangeBuilder`
 implementations (DF, in-core exact, later AO-direct). `periodic/`: image
 lists and real-space cutoffs, Bloch phases, Ewald sums per dimension,
@@ -676,9 +681,8 @@ Exchange revisions (the cache already records them).
 **M2 Integrals.** `IntegralEngine` protocol designed for molecules and
 cells alike: shell pairs at explicit translation vectors, range-separated
 Coulomb kernels, and the Fourier transform of basis-function pairs.
-`LibcintEngine` for the real-space integrals, DF metric and 3-index
-tensor, Schwarz screening. Native Rust kernels in the McMurchie–Davidson
-scheme (ADR-0008), in this order: Boys function, one-electron integrals,
+Native Rust kernels in the McMurchie–Davidson scheme (ADR-0008), with
+libcint through PySCF as the oracle only (ADR-0014), in this order: Boys function, one-electron integrals,
 two- and three-centre Coulomb integrals with range separation, the pair
 Fourier transform (native from the start, since libcint has none), then
 four-centre integrals, each validated against libcint before it replaces
@@ -697,8 +701,8 @@ shell-pair bounds and permutational symmetry done 2026-10-21, matching
 libcint to 1e-12 up to g functions. Fourier transforms of functions and
 pairs done 2026-10-21, matching numerical quadrature and PySCF's analytical
 transforms. The kernel list of M2 is complete; derivative integrals follow
-with the gradients of M11, and the decision whether a libcint adapter is
-still worth building is open (see §12). General contractions are evaluated
+with the gradients of M11. No libcint adapter is built (ADR-0014,
+2026-10-21); the native engine is the only one. General contractions are evaluated
 once per shell since 2026-10-21 (ADR-0011), after benchmarks against PySCF
 showed the split representation costing fifteen times libcint's CPU time
 on cc-pVDZ; on segmented bases the four-centre kernel matches libcint's
@@ -734,11 +738,15 @@ pairing, and the Ewald nuclear repulsion in one to three dimensions
 range-separation parameter. The k axis on the structured matrices and the
 lattice-summed one-electron integrals follow.
 
-**M5 Periodic Hartree–Fock.** Range-separated Gaussian density fitting
+**M5 Periodic Hartree–Fock.** First item: an ADR choosing the treatment
+of the exchange divergence (probe-charge Ewald, truncated Coulomb or
+Wigner–Seitz truncation, see §5.9), decided with the range-separation
+independence test in hand, since the choice fixes the long-range kernel
+of the density fitting. Then range-separated Gaussian density fitting
 with momentum transfer, nuclear attraction by the same split, k-point J
-and K, the Madelung exchange correction, occupations across k, all eight
-classes from the M3 driver; three dimensions first, then the two- and
-one-dimensional reciprocal-space kernels. Exit: the band-folding and
+and K with that correction, occupations across k, all eight classes from
+the M3 driver; three dimensions first, then the two- and one-dimensional
+reciprocal-space kernels. Exit: the band-folding and
 half-zone tests of §8 pass to `ENERGY_TOL`, the range-separation and
 large-box tests pass to their stated tolerances, and KRHF/KUHF/KGHF agree
 with PySCF's `pbc` module within the recorded fitting residual.
@@ -799,11 +807,6 @@ for periodic results.
 ## 12. Open decisions needing your input
 
 1. libxc binding: `pylibxc` versus an own binding through the Rust crate.
-4. Whether to build the `LibcintEngine` at all. Its purpose was to unblock
-   M3 before native integrals exist; with the one-electron, density-fitting
-   and four-centre kernels native, the recommendation is to drop it and
-   keep libcint as the test oracle through PySCF, which avoids compiling
-   libcint inside the Rust build on every platform.
 2. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M9).
 3. Space-group detection: spglib (recommended; the standard library for
@@ -811,7 +814,10 @@ for periodic results.
    dependency, versus an own implementation. Molecular point groups stay
    in-house either way, since spglib does not treat finite systems.
 
-Decided so far: Apache-2.0 license (2026-10-21, ADR-0001); Rust for the
+Decided so far: no libcint adapter, the native engine being complete
+for M2 and libcint the test oracle only (2026-10-21, ADR-0014); `Molecule`
+and `Cell` as siblings under `AtomicSystem` (2026-10-21, ADR-0013);
+Apache-2.0 license (2026-10-21, ADR-0001); Rust for the
 compiled layer (2026-10-21, ADR-0002); the package name `hafnium`
 (2026-10-21, ADR-0003), with the PyPI name still to be obtained, see
 ADR-0003 and the risk table; Python 3.11+, NumPy 2, uv, ruff and pyright
@@ -829,7 +835,7 @@ reserve for four-centre integrals (2026-10-21, ADR-0008).
 
 | Risk | Mitigation |
 |---|---|
-| The native integral engine is the largest single effort | libcint adapter first; native engine replaces it incrementally behind one interface |
+| The native integral engine is the largest single effort | Done for M2: every kernel native and validated against libcint as the oracle (ADR-0014); derivative and periodic kernels follow the same pattern |
 | Periodic Coulomb terms (divergences, exchange correction, reduced-dimension kernels) are a second large effort | Range-separated DF with the consistency tests of §8 (range-separation independence, band folding, large box); three dimensions first, slabs and chains after |
 | Structured generality grows into a research project | Version-1 scope in §5.8; generality lives in metadata and tests, not in extra code paths |
 | Generic spin-orbital CC is slower than spin-adapted RCCSD | Accept for version 1; add a fast path only when measured |

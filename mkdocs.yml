@@ -40,6 +40,7 @@ nav:
       - adr/0011-general-contractions-in-the-kernels.md
       - adr/0012-ewald-sums-in-reduced-dimensions.md
       - adr/0013-molecule-and-cell-as-siblings.md
+      - adr/0014-no-libcint-adapter.md
   - API reference: api.md
 
 markdown_extensions:

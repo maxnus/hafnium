@@ -70,10 +70,9 @@ def test_mixed_tables_match_libcint(pattern: str) -> None:
     molecule = MOLECULES["water"]
     first = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
     second = BasisSet.for_atoms(molecule, "def2-svp", library=LIBRARY)
-    positions = molecule.positions_array()
     tables = {
-        "a": ShellTable.from_basis(first, positions),
-        "b": ShellTable.from_basis(second, positions),
+        "a": ShellTable.from_basis(first, molecule),
+        "b": ShellTable.from_basis(second, molecule),
     }
     bra = (tables[pattern[0]], tables[pattern[1]])
     ket = (tables[pattern[2]], tables[pattern[3]])

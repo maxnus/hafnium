@@ -62,9 +62,8 @@ class DensityFitting:
 
         With ``omega`` both use the long-range kernel ``erf(ω r) / r``.
         """
-        positions = molecule.positions_array()
-        orbital = ShellTable.from_basis(basis, positions)
-        fitting = ShellTable.from_basis(auxiliary, positions)
+        orbital = ShellTable.from_basis(basis, molecule)
+        fitting = ShellTable.from_basis(auxiliary, molecule)
         zero = host_array([[0.0, 0.0, 0.0]])
         metric = engine.coulomb_two_center(fitting, fitting, zero, omega=omega)[0]
         three_center = engine.coulomb_three_center(
