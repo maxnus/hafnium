@@ -55,7 +55,10 @@ pub fn kinetic(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) ->
 /// # Errors
 ///
 /// Returns [`Error::LengthMismatch`] if there is not one position per
-/// charge, and [`Error::InvalidArgument`] if `omega` is not positive.
+/// charge, and [`Error::InvalidArgument`] if `omega` is not positive or a
+/// translation, charge or position is not finite (a non-finite distance
+/// would otherwise reach the Boys function, which requires a finite
+/// argument).
 pub fn nuclear_attraction(
     bra: &ShellTable,
     ket: &ShellTable,
@@ -73,6 +76,12 @@ pub fn nuclear_attraction(
     if omega.is_some_and(|w| w.is_nan() || w <= 0.0) {
         return Err(Error::InvalidArgument(
             "the range-separation parameter omega is positive".to_string(),
+        ));
+    }
+    if !all_finite(translations) || !all_finite(positions) || !charges.iter().all(|z| z.is_finite())
+    {
+        return Err(Error::InvalidArgument(
+            "translations, charges and positions are finite".to_string(),
         ));
     }
     Ok(assemble(bra, ket, translations, 0, |pairs, a, b, block| {
@@ -101,6 +110,12 @@ pub fn nuclear_attraction(
             }
         }
     }))
+}
+
+fn all_finite(vectors: &[[f64; 3]]) -> bool {
+    vectors
+        .iter()
+        .all(|vector| vector.iter().all(|x| x.is_finite()))
 }
 
 /// A pair of primitives with their Hermite expansion along each axis.
@@ -328,6 +343,25 @@ mod tests {
         assert!(
             nuclear_attraction(&shell, &shell, &[[0.0; 3]], &[1.0], &[[0.0; 3]], Some(0.0))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_non_finite_positions_instead_of_panicking() {
+        let shell = s_shell(1.0, [0.0; 3]);
+        let nan = [f64::NAN, 0.0, 0.0];
+        assert!(nuclear_attraction(&shell, &shell, &[[0.0; 3]], &[1.0], &[nan], None).is_err());
+        assert!(nuclear_attraction(&shell, &shell, &[nan], &[1.0], &[[0.0; 3]], None).is_err());
+        assert!(
+            nuclear_attraction(
+                &shell,
+                &shell,
+                &[[0.0; 3]],
+                &[f64::INFINITY],
+                &[[0.0; 3]],
+                None
+            )
+            .is_err()
         );
     }
 }

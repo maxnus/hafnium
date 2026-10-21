@@ -38,14 +38,18 @@ class ShellTable:
 
     def __post_init__(self) -> None:
         object.__setattr__(
-            self, "angular_momenta", host_array(self.angular_momenta, "int64")
+            self, "angular_momenta", _integers(self.angular_momenta, "angular momenta")
         )
         object.__setattr__(self, "centers", host_array(self.centers))
         object.__setattr__(
-            self, "primitive_offsets", host_array(self.primitive_offsets, "int64")
+            self,
+            "primitive_offsets",
+            _integers(self.primitive_offsets, "primitive offsets"),
         )
         object.__setattr__(self, "exponents", host_array(self.exponents))
         object.__setattr__(self, "coefficients", host_array(self.coefficients))
+        if self.angular_momenta.ndim != 1:
+            raise InputError("angular momenta form a one-dimensional array")
         n_shells = self.angular_momenta.shape[0]
         if self.centers.shape != (n_shells, 3):
             raise InputError("a shell table needs one centre per shell")
@@ -87,6 +91,16 @@ class ShellTable:
     def n_shells(self) -> int:
         """Number of entries (contractions)."""
         return int(self.angular_momenta.shape[0])
+
+
+def _integers(values: Array, name: str) -> Array:
+    """Host ``int64`` array of ``values``, rejecting anything non-integral."""
+    integers = host_array(values, "int64")
+    if integers.shape != host_array(values).shape or not bool(
+        (integers == host_array(values)).all()
+    ):
+        raise InputError(f"{name} are integers")
+    return integers
 
     @property
     def n_functions(self) -> int:

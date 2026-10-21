@@ -85,6 +85,15 @@ impl ShellTable {
         if exponents.iter().any(|&a| a.is_nan() || a <= 0.0) {
             return invalid("exponents are positive");
         }
+        if !coefficients.iter().all(|c| c.is_finite()) {
+            return invalid("coefficients are finite");
+        }
+        if !centers
+            .iter()
+            .all(|center| center.iter().all(|x| x.is_finite()))
+        {
+            return invalid("centres are finite");
+        }
         if angular_momenta.iter().any(|&l| l > MAX_ANGULAR_MOMENTUM) {
             return invalid("angular momentum exceeds the supported maximum");
         }
@@ -170,6 +179,22 @@ mod tests {
         let bad = ShellTable::new(vec![0], vec![[0.0; 3]], vec![0, 1], vec![-1.0], vec![1.0]);
         assert!(matches!(bad, Err(Error::InvalidShellTable(_))));
         let bad = ShellTable::new(vec![17], vec![[0.0; 3]], vec![0, 1], vec![1.0], vec![1.0]);
+        assert!(matches!(bad, Err(Error::InvalidShellTable(_))));
+        let bad = ShellTable::new(
+            vec![0],
+            vec![[f64::NAN, 0.0, 0.0]],
+            vec![0, 1],
+            vec![1.0],
+            vec![1.0],
+        );
+        assert!(matches!(bad, Err(Error::InvalidShellTable(_))));
+        let bad = ShellTable::new(
+            vec![0],
+            vec![[0.0; 3]],
+            vec![0, 1],
+            vec![1.0],
+            vec![f64::INFINITY],
+        );
         assert!(matches!(bad, Err(Error::InvalidShellTable(_))));
     }
 }

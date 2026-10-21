@@ -186,8 +186,11 @@ fn to_vectors(array: &PyReadonlyArray2<'_, f64>, name: &str) -> PyResult<Vec<[f6
     if array.shape()[1] != 3 {
         return Err(PyValueError::new_err(format!("{name} have shape [n, 3]")));
     }
-    Ok(array
-        .as_slice()?
+    let values = array.as_slice()?;
+    if !values.iter().all(|x| x.is_finite()) {
+        return Err(PyValueError::new_err(format!("{name} are finite")));
+    }
+    Ok(values
         .chunks_exact(3)
         .map(|row| [row[0], row[1], row[2]])
         .collect())

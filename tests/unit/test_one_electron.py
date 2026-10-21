@@ -172,3 +172,25 @@ def test_shell_table_validates_its_input() -> None:
         ShellTable.from_basis(basis, np.zeros((3, 3)))
     with pytest.raises(ValueError, match="positive"):
         nuclear_attraction(ENGINE, basis, molecule, omega=-1.0)
+
+
+def test_binding_rejects_malformed_input() -> None:
+    molecule, basis = hydrogen_molecule()
+    table = ShellTable.from_basis(basis, molecule.positions_array())
+    with pytest.raises(ValueError, match=r"shape \[n, 3\]"):
+        ENGINE.overlap(table, table, np.zeros((1, 2)))
+    with pytest.raises(ValueError, match="finite"):
+        ENGINE.overlap(table, table, np.array([[np.nan, 0.0, 0.0]]))
+    with pytest.raises(ValueError, match="finite"):
+        ENGINE.nuclear_attraction(
+            table, table, np.zeros((1, 3)), np.array([1.0]), np.array([[np.inf, 0, 0]])
+        )
+    too_high = ShellTable(
+        np.array([17]), np.zeros((1, 3)), np.array([0, 1]), np.ones(1), np.ones(1)
+    )
+    with pytest.raises(ValueError, match="maximum"):
+        ENGINE.overlap(too_high, table, np.zeros((1, 3)))
+    with pytest.raises(InputError, match="integers"):
+        ShellTable(
+            np.array([1.5]), np.zeros((1, 3)), np.array([0, 1]), np.ones(1), np.ones(1)
+        )
