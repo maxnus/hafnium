@@ -1,6 +1,7 @@
 # Design plan: a symmetry-aware, differentiable quantum chemistry library
 
-Status: draft for discussion, 2026-10-21.
+Status: living document; revised 2026-10-21 to add periodic systems (§5.9,
+ADR-0007).
 Package name: `hafnium`, decided 2026-10-21 (ADR-0003). Hf, as in
 Hartree–Fock; the element is named after Hafnia, Copenhagen, where it was
 discovered at Bohr's institute.
@@ -21,22 +22,25 @@ Goals, in priority order:
    (real, complex and paired variants of restricted, unrestricted and
    generalized HF) and Kohn–Sham DFT (restricted and unrestricted first,
    noncollinear later), each optionally constrained by a spatial point group.
-2. Density fitting (DF) as the primary route to two-electron terms, with
+2. Periodic systems in one, two and three dimensions with k-point
+   sampling, treated by the same mean-field and correlated code as
+   molecules: translational symmetry is one more symmetry in the data
+   model (§5.9).
+3. Density fitting (DF) as the primary route to two-electron terms, with
    exact four-centre integrals as the secondary route.
-3. Correlated methods: DF-MP2, CCSD and CCSD(T), implemented once in a
+4. Correlated methods: DF-MP2, CCSD and CCSD(T), implemented once in a
    spin-orbital, symmetry-blocked formulation that serves the restricted,
    unrestricted and generalized cases.
-4. A configurable array backend: NumPy (CPU, single- or multi-threaded),
+5. A configurable array backend: NumPy (CPU, single- or multi-threaded),
    CuPy (GPU) and JAX (CPU/GPU plus automatic differentiation, AD).
-5. Basis sets fetched from the Basis Set Exchange (BSE) and cached locally.
-6. Code quality as a first-class requirement: static typing, immutable data,
+6. Basis sets fetched from the Basis Set Exchange (BSE) and cached locally.
+7. Code quality as a first-class requirement: static typing, immutable data,
    written conventions, and CI that enforces them.
 
-Non-goals for version 1: periodic boundary conditions, relativistic
-Hamiltonians, excited-state methods, semi-empirical methods. The architecture
-must not preclude them. Periodic systems add a k-point label to the symmetry
-sectors of §5, and two-component relativistic methods are complex GHF with
-different integrals, so both fit later.
+Non-goals for version 1: relativistic Hamiltonians, excited-state methods,
+semi-empirical methods, pseudopotentials and plane-wave basis sets. The
+architecture must not preclude them; two-component relativistic methods,
+for example, are complex GHF with different integrals and fit later.
 
 ## 2. Guiding principles
 
@@ -119,9 +123,13 @@ compiled crate.
 
 Version 1: one-electron integrals (overlap, kinetic, nuclear attraction,
 multipoles), four-centre electron repulsion integrals with Schwarz screening,
-two- and three-centre integrals for DF, first-derivative integrals of all of
-these, DFT grid generation (radial schemes, Lebedev angular grids, Becke
-partitioning) and basis-function values and gradients on grid batches.
+two- and three-centre integrals for DF, range-separated (erf- and
+erfc-attenuated) variants of every Coulomb-type integral, the Fourier
+transform of basis-function pairs and of auxiliary functions, lattice-sum
+drivers that evaluate any of these over periodic images with distance
+screening, first-derivative integrals of all of these, DFT grid generation
+(radial schemes, Lebedev angular grids, Becke partitioning) and
+basis-function values and gradients on grid batches.
 
 Later: AO-direct J/K builders, ECP integrals, second-derivative integrals,
 GPU kernels for the same functions.
@@ -130,7 +138,7 @@ GPU kernels for the same functions.
 
 ```
  ┌──────────────────────────────────────────────────────────────────────┐
- │ User API (Python)        Molecule, BasisSet, method specs, results   │
+ │ User API (Python)        Molecule, Cell, BasisSet, specs, results    │
  ├──────────────────────────────────────────────────────────────────────┤
  │ Methods (Python)         scf (hf, ks), mp, cc, properties, gradients │
  ├──────────────────────────────────────────────────────────────────────┤
@@ -152,12 +160,14 @@ Proposed repository layout:
 ```
 hafnium/                   Python package
   api/                   user-facing entry points and configuration
-  molecule/              Molecule, atoms, units, point-group detection
+  molecule/              Molecule, atoms, units, Lattice, Cell
   basis/                 BasisSet, shells, normalization, BSE client + cache
-  symmetry/              groups, irreps, SALCs, spin/time-reversal descriptors
+  symmetry/              groups, irreps, SALCs, spin/time-reversal descriptors,
+                         k-point sets, space groups
   structured/            Structure, BlockMatrix, BlockTensor
   backend/               array namespace, device/dtype policy, linalg shims
-  integrals/             IntegralEngine protocol, rust + libcint adapters, df
+  integrals/             IntegralEngine protocol, rust + libcint adapters, df,
+                         periodic/ (lattice sums, Ewald, reciprocal-space kernels)
   grid/                  DFT grids (Python orchestration of Rust kernels)
   xc/                    functional registry, libxc binding
   scf/                   SCF driver, hf, ks, guesses, convergence, stability
@@ -188,7 +198,9 @@ The symmetry choices a user may want to control independently are:
 - field: real orbitals, complex orbitals, or complex orbitals with
   time-reversal (Kramers) pairing;
 - spatial symmetry: none, an Abelian point group, later the full group;
-- later: translations (k-points), particle number (HFB).
+- translations: Bloch k-points of a periodic system (§5.9), and for
+  crystals the space group on top of the point group;
+- later: particle number (HFB).
 
 Implementing every combination by hand is a combinatorial explosion, which
 is why PySCF has `RHF`, `UHF`, `GHF`, `ROHF`, `RKS`, `UKS`, `GKS`, each
@@ -245,7 +257,7 @@ covers this, but it is out of scope for version 1 (§5.8).
 Names are proposals; `CONVENTIONS.md` fixes them.
 
 `BlockStructure` describes an algebra: an ordered list of `Block` records, each
-with a sector label (spin sector, irrep, later k-point), a dimension, a
+with a sector label (spin sector, irrep, k-point), a dimension, a
 ring (`REAL`, `COMPLEX`, `QUATERNION`), a weight, and an optional partner
 rule (`COPY` or `CONJUGATE`) referencing another block. A `BlockStructure` also
 knows the mapping from AO basis functions to sector basis functions (the
@@ -304,7 +316,8 @@ later addition.
 
 MO-basis integrals and amplitudes are `BlockTensor`s: block-sparse tensors
 whose blocks are labelled by tuples of sectors obeying a conservation rule
-(Abelian fusion: product of irreps is totally symmetric, S_z is conserved).
+(Abelian fusion: product of irreps is totally symmetric, S_z is conserved,
+crystal momentum is conserved modulo a reciprocal lattice vector).
 Contraction is an `einsum`-like operation over matching blocks. This is
 the approach of symmetric tensor libraries (TensorKit, Cyclops, Psi4's DPD).
 
@@ -349,9 +362,74 @@ to it decreases the energy.
 
 Rings R and C, plus H via the complex embedding for paired GHF. Abelian
 point groups (D_2h and its subgroups), with detection of the full point
-group for reporting and orientation. Non-Abelian blocking, quaternion
-storage, and k-point sectors are later extensions that the data model
-already accommodates.
+group for reporting and orientation. k-point sectors for periodic systems
+(§5.9), with time-reversal pairing from the start and space-group
+reduction in the symmetry milestone. Non-Abelian blocking and quaternion
+storage are later extensions that the data model already accommodates.
+
+### 5.9 Periodic systems: k-points as sectors
+
+Periodic boundary conditions in one, two or three dimensions are part of
+version 1. A `Cell` is a `Molecule` with a `Lattice` of d ∈ {1, 2, 3}
+translation vectors; the open directions of a chain or a slab carry no
+vacuum padding (ADR-0007). Translational symmetry is handled like every
+other symmetry: as data in the block structure, not as a separate code
+path.
+
+- **Bloch sectors.** The basis functions of a cell are the Bloch sums
+  φ_μ^k(r) = Σ_T e^{ik·T} φ_μ(r − T) over lattice translations T. Every
+  one-body operator is block-diagonal in k, so a k-point is a sector label
+  of a `Block` next to the spin sector and the irrep. All k blocks of a
+  sector have the same shape and are stored as one batched array with a
+  leading k axis, which keeps `matmul`, `eigh` and `einsum` batched on
+  GPUs and traceable under JAX; the k-point set with its weights is static
+  metadata of the `BlockStructure`, and per-k weights extend the block
+  weights. A system without a lattice is a molecule, so the molecular path
+  is the special case of one k-point and no lattice sum.
+- **Time reversal pairs k with −k.** Complex conjugation maps a Bloch sum
+  at k to the one at −k, so the antiunitary operators a Fukutome class
+  preserves (K, Θ) act on k-space as k → −k combined with their molecular
+  action. The partner rules of §5.2 therefore apply along the k axis: in
+  the real classes the block at −k is the complex conjugate of the block
+  at k, in the paired classes it is the Kramers map ΘXΘ⁻¹ already used for
+  quaternionic blocks, and in the complex classes every k is stored. The
+  real and paired classes store a half Brillouin zone; at time-reversal
+  invariant momenta (k ≡ −k, for example Γ, or every point of an unshifted
+  2×2×2 mesh) the block is itself real or quaternionic. The eight classes
+  carry over unchanged: real RHF with k-points is TICS with F(−k) = F(k)*,
+  complex RHF (CCW) breaks that pairing and describes current-carrying
+  states, paired GHF (TSCW) keeps Kramers pairs across ±k, and so on.
+  `embed` materializes the −k partners, `project` averages them.
+- **Translational symmetry breaking.** Density and spin waves with a
+  wavevector Q ≠ 0, the literal meaning of the Fukutome names, are
+  described in a supercell commensurate with Q (band folding). Explicit
+  coupling between k and k + Q is not planned.
+- **Space groups.** Point operations R of the crystal map k to Rk, so the
+  stored set shrinks to the irreducible wedge of the Brillouin zone with
+  weights, and the blocks at the other k follow by the unitary rotation of
+  the AO basis: a third partner rule (`ROTATE`) added in the symmetry
+  milestone, with space-group detection delegated to spglib (§12).
+- **Two-electron terms.** Crystal momentum is conserved: (μk₁ νk₂|λk₃ σk₄)
+  vanishes unless k₁ − k₂ + k₃ − k₄ is a reciprocal lattice vector. The DF
+  tensor is labelled by the momentum transfer q = k₂ − k₁; the Coulomb
+  matrix needs only q = 0, exchange couples every pair (k, k + q). For the
+  correlated methods this is an Abelian fusion rule like the irrep
+  product, so `BlockTensor` handles it with the same machinery.
+- **Coulomb sums.** The electron–nuclear, electron–electron and
+  nuclear–nuclear lattice sums diverge separately and converge together
+  for a neutral cell. Both the nuclear attraction and the DF tensor use
+  range-separated Gaussian density fitting: the short-range part is a
+  real-space lattice sum of erfc-attenuated integrals, the long-range part
+  is evaluated in reciprocal space from the analytic Fourier transform of
+  Gaussian pair densities, with the G = 0 term removed by a uniform
+  background and the exchange divergence handled by the probe-charge Ewald
+  (Madelung) correction. The reciprocal-space kernel is 4π/G² in three
+  dimensions and the analytic kernel of the reduced dimension for slabs and
+  chains, which is why no vacuum padding is needed. The nuclear repulsion
+  is an Ewald sum. Results must be independent of the range-separation
+  parameter, which is a strong internal consistency test (§8).
+- **Energies, charge and spin are per unit cell**; a charged cell is
+  neutralized by the uniform background.
 
 ## 6. Array backend and automatic differentiation
 
@@ -382,7 +460,8 @@ to retrofit:
 
 - Pure functions and immutable data: already principle 2.
 - Static shapes: block shapes are static metadata of `BlockStructure`, so
-  tracing works. Occupation counts per sector are static too.
+  tracing works. Occupation counts per sector and the k-point set are
+  static too.
 - Pytrees: `BlockMatrix` and `BlockTensor` are registered pytrees.
 - Iterative solvers: the SCF loop is written as a step function applied by
   a driver, so it can run as a Python loop under NumPy and as
@@ -412,7 +491,10 @@ Each component lists its key types and the decisions it owns.
 **molecule.** `Molecule` (frozen): atoms with symbols, nuclear charges and
 coordinates in Bohr; total charge; spin given as n_α − n_β; detected point
 group and a standard orientation. Constructors accept Ångström input and
-convert once. Owns: units at the boundary, point-group detection.
+convert once. `Lattice`: one to three translation vectors, reciprocal
+vectors, fractional coordinates, translations within a cutoff. `Cell`: a
+`Molecule` with a `Lattice`, with charge and spin per cell, supercell
+construction, and an Ewald nuclear repulsion. Owns: units at the boundary.
 
 **basis.** `Shell` (angular momentum, exponents, contraction
 coefficients, spherical or Cartesian), `BasisSet` (shells per atom, AO
@@ -423,24 +505,34 @@ tests. Internal format: BSE's JSON schema. Owns: AO ordering and spherical
 harmonic phase conventions, normalization.
 
 **symmetry.** Point groups and irrep tables (Abelian in version 1), SALC
-construction, `SpinStructure`, `FieldStructure`, `SymmetrySpec`, the
-mapping to `BlockStructure` and to Fukutome names.
+construction, `SpinSymmetry`, `Field`, `SymmetrySpec`, the mapping to
+`BlockStructure` and to Fukutome names. k-point sets: Monkhorst–Pack
+meshes and explicit lists, time-reversal pairing and weights, momentum
+conservation tables. Point-group detection of molecules and, through
+spglib, space groups of crystals with the irreducible wedge.
 
 **structured.** `BlockStructure`, `BlockMatrix`, `BlockTensor`, embed/project
-maps, structured `einsum`. Backend-agnostic.
+maps, structured `einsum`, the batched k axis with its partner rules.
+Backend-agnostic.
 
 **backend.** Array namespace selection, device and dtype policy, linear
 algebra shims, thread configuration, DLPack exchange.
 
 **integrals.** `IntegralEngine` protocol (one-electron, four-centre,
-two- and three-centre, derivatives, screening data), `RustEngine`,
+two- and three-centre, range-separated kernels, pair Fourier transforms,
+derivatives, screening data), each over shell pairs at explicit translation
+vectors so that molecules and cells share it, `RustEngine`,
 `LibcintEngine`, `DensityFitting` (auxiliary basis, metric, Cholesky or
 eigen decomposition of the metric, `B[aux, ao, ao]`), `CoulombExchangeBuilder`
-implementations (DF, in-core exact, later AO-direct).
+implementations (DF, in-core exact, later AO-direct). `periodic/`: lattice
+sums with distance screening, Ewald sums per dimension, reciprocal-space
+Coulomb kernels per dimension, range-separated DF with momentum transfer,
+the Madelung exchange correction.
 
 **grid.** Radial schemes (Treutler–Ahlrichs, Mura–Knowles), Lebedev
 angular grids, Becke partitioning, pruning, batching; basis values and
-gradients on batches from Rust.
+gradients on batches from Rust. For cells, the same atom-centred grids
+with lattice images and Bloch-phased basis values.
 
 **xc.** Functional registry by name, libxc binding (`pylibxc` or an own
 thin binding; decide in an ADR), evaluation for collinear densities with
@@ -449,8 +541,9 @@ LDA, GGA, meta-GGA, hybrid and range-separated hybrids; noncollinear later.
 **scf.** One `SelfConsistentField` driver with pluggable parts: initial
 guess (core Hamiltonian, superposition of atomic densities, generalized
 Wolfsberg–Helmholz, from a previous result), `Hamiltonian` (one-body plus
-two-body builders, plus XC for KS), occupation policy (aufbau per sector,
-fixed per-irrep occupations, fractional occupation and smearing later),
+two-body builders, plus XC for KS), occupation policy (aufbau per sector
+and across k-points, fixed per-irrep occupations, fractional occupation
+and smearing later),
 convergence acceleration (DIIS, EDIIS/ADIIS, level shift, damping; a
 second-order solver later), stability analysis and following. Result
 objects carry energy components, orbitals, orbital energies, occupations,
@@ -461,7 +554,8 @@ generated contraction code; later Λ equations, EOM-CC, properties.
 
 **properties.** Energy decomposition, dipoles and multipoles, population
 analysis, analytic nuclear gradients (derivative integrals plus the AD
-path as a cross-check), geometry optimization via an external optimizer.
+path as a cross-check), geometry optimization via an external optimizer,
+band structures along k-point paths from a converged density.
 
 **io.** xyz, Molden, cube files, HDF5 checkpoints of result objects.
 
@@ -489,6 +583,19 @@ module. No printing from library code.
   - Hermiticity and idempotency of densities, weighted trace equals N;
   - AD gradients equal analytic gradients equal finite differences;
   - results identical across backends to a stated tolerance.
+- Periodic consistency tests, required for every periodic feature:
+  - a Γ-point cell with a large box reproduces the molecular result;
+  - a supercell at Γ reproduces the primitive cell with the matching
+    k-point mesh (band folding), per cell;
+  - storing the full Brillouin zone and storing the half zone with
+    time-reversal partners give identical results;
+  - results are independent of the range-separation parameter of the
+    Coulomb split and of the real-space cutoffs, to a stated tolerance;
+  - the three-dimensional kernels and the reduced-dimension kernels agree
+    for a slab or chain in a large box, in the limit of large vacuum;
+  - reference comparisons against PySCF's `pbc` module (KRHF, KUHF, KGHF,
+    KRKS, KMP2, KCCSD) with the same auxiliary basis and the Ewald exchange
+    correction, with the fitting-scheme residual recorded alongside.
 - A reference-value database (JSON with provenance: code, version,
   settings) under `tests/reference/data/` for regression testing without
   PySCF installed.
@@ -537,50 +644,77 @@ backend module with the NumPy backend, `BlockStructure` and `BlockMatrix` with
 the full operation set and embed/project maps, `SymmetrySpec` for all
 Fukutome classes without point groups. Exit: `BlockMatrix` property tests
 pass for all eight structures. Status: done 2026-10-21 (PRs #2 and #3);
-point-group detection moves to M4. Deferred from the review of #3: expose
+point-group detection moves to M6. Deferred from the review of #3: expose
 basis set versions on `BasisSet` and warn when a molecule mixes Basis Set
 Exchange revisions (the cache already records them).
 
-**M2 Integrals.** `IntegralEngine` protocol, `LibcintEngine`, DF metric
-and 3-index tensor, Schwarz screening. Native Rust one-electron integrals,
-then ERIs, then DF integrals, each validated against libcint. Exit: Rust
+**M2 Integrals.** `IntegralEngine` protocol designed for molecules and
+cells alike: shell pairs at explicit translation vectors, range-separated
+Coulomb kernels, and the Fourier transform of basis-function pairs.
+`LibcintEngine` for the real-space integrals, DF metric and 3-index
+tensor, Schwarz screening. Native Rust one-electron integrals, then ERIs,
+then DF integrals, each validated against libcint; the pair Fourier
+transform is native from the start, since libcint has none. Exit: the Rust
 engine matches libcint to 1e-12 on a test suite of molecules and basis
-sets up to f functions.
+sets up to f functions, and the Fourier transforms match numerical
+quadrature.
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.
 Exit: energies match PySCF for RHF/UHF/GHF and complex variants; paired
 classes satisfy embedding consistency tests.
 
-**M4 Point-group symmetry.** Detection and orientation, Abelian irreps,
-SALCs, blocked SCF, per-irrep occupations. Exit: symmetry-constrained
-results equal unconstrained results for symmetric molecules; irreps of
-orbitals reported correctly against PySCF.
+**M4 Periodic foundations.** `Lattice` and `Cell`, k-point meshes with
+time-reversal pairing and weights, the k axis on `BlockStructure` and
+`BlockMatrix` (batched blocks, half-zone storage with conjugate and
+Kramers partners along k), lattice-summed overlap and kinetic integrals,
+Ewald nuclear repulsion in one to three dimensions. Exit: the large-box
+test reproduces molecular overlap, kinetic and nuclear repulsion;
+`BlockMatrix` property tests pass for all eight classes with k-points; the
+band-folding test holds for the kinetic band structure.
 
-**M5 DFT.** Grids and basis-on-grid in Rust, libxc binding, RKS and UKS
-with LDA/GGA/meta-GGA/hybrid/range-separated functionals. Exit: matches
-PySCF to grid-limited precision on a functional matrix.
+**M5 Periodic Hartree–Fock.** Range-separated Gaussian density fitting
+with momentum transfer, nuclear attraction by the same split, k-point J
+and K, the Madelung exchange correction, occupations across k, all eight
+classes from the M3 driver; three dimensions first, then the two- and
+one-dimensional reciprocal-space kernels. Exit: the periodic consistency
+tests of §8 pass to `ENERGY_TOL`, and KRHF/KUHF/KGHF agree with PySCF's
+`pbc` module within the recorded fitting residual.
 
-**M6 Correlated methods.** DF MO transformation, DF-MP2, `BlockTensor`
-with structured einsum, equation generator, CCSD, (T). Exit: matches PySCF
-UCCSD/GCCSD and RCCSD energies.
+**M6 Spatial symmetry.** Molecular point groups: detection and
+orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.
+Crystal space groups through spglib: the irreducible wedge with weights
+and rotated partner blocks. Exit: symmetry-constrained results equal
+unconstrained results for symmetric molecules and crystals; irreps of
+orbitals agree with PySCF; wedge-reduced results equal full-zone results.
 
-**M7 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
+**M7 DFT.** Grids and basis-on-grid in Rust, libxc binding, RKS and UKS
+with LDA/GGA/meta-GGA/hybrid/range-separated functionals, then periodic
+KS with lattice-image grids. Exit: matches PySCF to grid-limited precision
+on a functional matrix, molecular and periodic.
+
+**M8 Correlated methods.** DF MO transformation, DF-MP2, `BlockTensor`
+with structured einsum over irreps and crystal momentum, equation
+generator, CCSD, (T); k-point MP2 and CCSD from the same code. Exit:
+matches PySCF UCCSD/GCCSD/RCCSD and `pbc` KMP2/KCCSD energies.
+
+**M9 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
 `custom_vjp` from derivative integrals, libxc `custom_jvp`, implicit
 differentiation of the SCF, AD nuclear gradients. Exit: AD gradients match
 analytic gradients and finite differences.
 
-**M8 GPU.** CuPy backend validation, DF-HF and DFT on GPU, GPU
+**M10 GPU.** CuPy backend validation, DF-HF and DFT on GPU, GPU
 basis-on-grid kernel, thread and memory policies. Exit: GPU results equal
 CPU results; benchmark suite reports speedups.
 
-**M9 Properties and tools.** Analytic gradients, stability analysis and
+**M11 Properties and tools.** Analytic gradients, stability analysis and
 symmetry-breaking workflows following the JCTC 2011 paper (dissociation
 curves across Fukutome classes as a worked example and regression test),
-Molden/cube output, checkpoints.
+band structures along k-point paths, Molden/cube output, checkpoints.
 
 Later: AO-direct J/K, non-Abelian point groups, noncollinear DFT,
-quaternion storage, EOM-CC, ECPs, periodic systems.
+quaternion storage, EOM-CC, ECPs and pseudopotentials, FFT-based density
+fitting, explicit Q-vector coupling between k-points.
 
 ## 11. Relationship to PySCF
 
@@ -592,20 +726,33 @@ design template. Where this plan differs deliberately:
 | Mutable `Mole` and method objects; `kernel()` mutates state | Frozen specs and results; functions return new objects |
 | One class per symmetry case (RHF, UHF, GHF, ROHF, ...) | One SCF over structured matrices; symmetry is data |
 | NumPy only; GPU via a separate fork (gpu4pyscf); AD via a separate project (PySCFAD) | Backend-agnostic from the start |
+| Separate `pbc` package with its own `KRHF`, `KUHF`, `KGHF`, ... classes | k-points are sectors of the same structured matrices; one SCF |
+| Low-dimensional cells padded with vacuum in a 3×3 lattice | Only the periodic vectors are stored; reduced-dimension kernels |
 | Units and conventions implicit in call signatures | Stated in `CONVENTIONS.md` and docstrings |
 | Loose typing | Strict typing |
 
-PySCF is never a runtime dependency.
+PySCF is never a runtime dependency; its `pbc` module is the reference
+for periodic results.
 
 ## 12. Open decisions needing your input
 
 1. Integral algorithm for the native engine (Rys quadrature or
    McMurchie–Davidson; Rys is better for high angular momentum ERIs,
    McMurchie–Davidson is simpler and good for one-electron and DF terms;
-   both can coexist).
+   both can coexist). Periodic systems tilt this towards
+   McMurchie–Davidson: its Hermite intermediates give the Fourier
+   transform of a pair density analytically (a polynomial times a
+   Gaussian in G) and range separation only changes the Boys-function
+   argument, whereas Rys quadrature has no equally direct route to either.
+   Recommendation: McMurchie–Davidson for everything in M2, Rys for
+   four-centre ERIs later only if profiling demands it.
 2. libxc binding: `pylibxc` versus an own binding through the Rust crate.
 3. Whether JAX is a development target from M1 (recommended: honor its
-   constraints from M1, ship the backend in M7).
+   constraints from M1, ship the backend in M9).
+4. Space-group detection: spglib (recommended; the standard library for
+   crystal symmetry, C with Python bindings, BSD-3-Clause) as an optional
+   dependency, versus an own implementation. Molecular point groups stay
+   in-house either way, since spglib does not treat finite systems.
 
 Decided so far: Apache-2.0 license (2026-10-21, ADR-0001); Rust for the
 compiled layer (2026-10-21, ADR-0002); the package name `hafnium`
@@ -613,13 +760,17 @@ compiled layer (2026-10-21, ADR-0002); the package name `hafnium`
 ADR-0003 and the risk table; Python 3.11+, NumPy 2, uv, ruff and pyright
 strict as the toolchain baseline (2026-10-21, ADR-0004); spherical
 functions ordered m = −l..+l with BSE normalization conventions and CODATA
-2018 units (2026-10-21, ADR-0006).
+2018 units (2026-10-21, ADR-0006); periodic systems as k-point sectors,
+with `Cell` as a `Molecule` plus a `Lattice` of only the periodic vectors,
+Bloch and k-point conventions, and range-separated density fitting for
+the periodic Coulomb terms (2026-10-21, ADR-0007).
 
 ## 13. Risks
 
 | Risk | Mitigation |
 |---|---|
 | The native integral engine is the largest single effort | libcint adapter first; native engine replaces it incrementally behind one interface |
+| Periodic Coulomb terms (divergences, exchange correction, reduced-dimension kernels) are a second large effort | Range-separated DF with the consistency tests of §8 (range-separation independence, band folding, large box); three dimensions first, slabs and chains after |
 | Structured generality grows into a research project | Version-1 scope in §5.8; generality lives in metadata and tests, not in extra code paths |
 | Generic spin-orbital CC is slower than spin-adapted RCCSD | Accept for version 1; add a fast path only when measured |
 | JAX constraints conflict with iterative algorithms | Pure step functions and implicit differentiation from the start |
@@ -634,6 +785,13 @@ functions ordered m = −l..+l with BSE normalization conventions and CODATA
 - T. M. Henderson, C. A. Jiménez-Hoyos, G. E. Scuseria, arXiv:1710.00932,
   Table I: the Fukutome classification with orbital-coefficient structures.
 - H. Fukutome, Int. J. Quantum Chem. 20, 955 (1981): original classification.
+- H. J. Monkhorst, J. D. Pack, Phys. Rev. B 13, 5188 (1976): k-point meshes.
+- Q. Sun, T. C. Berkelbach, J. D. McClain, G. K.-L. Chan, J. Chem. Phys.
+  147, 164119 (2017): Gaussian and mixed density fitting for periodic
+  systems, the exchange divergence and low-dimensional kernels in PySCF.
+- H.-Z. Ye, T. C. Berkelbach, J. Chem. Phys. 154, 131104 (2021):
+  range-separated periodic Gaussian density fitting.
+- A. Togo, K. Shinohara, I. Tanaka, arXiv:1808.01590: spglib.
 - libcint: https://github.com/sunqm/libcint (BSD-2-Clause).
 - Basis Set Exchange: https://www.basissetexchange.org and the
   `basis_set_exchange` package.

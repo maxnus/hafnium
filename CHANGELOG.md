@@ -9,6 +9,10 @@ uses [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Design plan, coding conventions and the first architecture decision records.
+- Periodic boundary conditions in one to three dimensions with k-point
+  sampling added to the design: k-points as sectors of the structured
+  matrices, time-reversal pairing of ±k, Bloch and lattice conventions
+  (ADR-0007), and a revised roadmap.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.

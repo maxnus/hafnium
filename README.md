@@ -2,8 +2,9 @@
 
 Hafnium is a quantum chemistry library in the planning stage: Hartree–Fock
 in all Fukutome symmetry classes, Kohn–Sham DFT, density fitting, MP2 and
-coupled cluster, with a Python front end, a Rust compiled layer, and a
-configurable NumPy, CuPy or JAX array backend.
+coupled cluster, for molecules and for periodic systems in one to three
+dimensions with k-point sampling, with a Python front end, a Rust compiled
+layer, and a configurable NumPy, CuPy or JAX array backend.
 
 Nothing beyond the repository skeleton is implemented yet. The repository
 holds the design and the bootstrap:
