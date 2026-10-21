@@ -8,6 +8,7 @@ interface (ADR-0007). :mod:`hafnium.integrals.one_electron` wraps the
 engine for molecules.
 """
 
+from hafnium.integrals.density_fitting import DensityFitting
 from hafnium.integrals.engine import IntegralEngine
 from hafnium.integrals.native import RustEngine
 from hafnium.integrals.one_electron import (
@@ -19,6 +20,7 @@ from hafnium.integrals.one_electron import (
 from hafnium.integrals.shell_table import ShellTable
 
 __all__ = [
+    "DensityFitting",
     "IntegralEngine",
     "RustEngine",
     "ShellTable",

@@ -16,3 +16,5 @@ BOYS_REL_TOL = 1e-14
 LITERATURE_TOL = 5e-5
 # Spectra of rotated and translated copies of a molecule.
 SPECTRUM_TOL = 1e-10
+# Fitted four-centre integrals against the explicit metric solve.
+DENSITY_FITTING_TOL = 1e-10

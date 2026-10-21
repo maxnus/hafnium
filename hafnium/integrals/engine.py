@@ -43,3 +43,33 @@ class IntegralEngine(Protocol):
         kernel).
         """
         ...
+
+    def coulomb_two_center(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        omega: float | None = None,
+    ) -> Array:
+        """Two-centre Coulomb integrals ``(P|Q)`` as ``[image, aux, aux]``.
+
+        With ``omega`` the kernel is ``erf(ω r) / r`` instead of ``1 / r``.
+        """
+        ...
+
+    def coulomb_three_center(
+        self,
+        auxiliary: ShellTable,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        omega: float | None = None,
+    ) -> Array:
+        """Three-centre Coulomb integrals ``(P|uv)`` as ``[image, aux, ao, ao]``.
+
+        ``translations`` has shape ``[image, 2, 3]``: the first vector
+        translates the auxiliary function, the second the ket function.
+        """
+        ...

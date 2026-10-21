@@ -60,3 +60,29 @@ def nuclear_attraction(
 
     ``omega`` selects the long-range kernel ``erf(ωr)/r`` instead of ``1/r``.
     """
+
+def coulomb_two_center(
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    omega: float | None = None,
+) -> NDArray[np.float64]:
+    """Return two-centre Coulomb integrals ``[image, bra, ket]``."""
+
+def coulomb_three_center(
+    auxiliary: ShellTable,
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    omega: float | None = None,
+) -> NDArray[np.float64]:
+    """Return three-centre Coulomb integrals ``[image, aux, bra, ket]``.
+
+    ``translations`` has shape ``[image, 2, 3]``: auxiliary and ket vectors.
+    """
+
+def configure_threads(n_threads: int) -> None:
+    """Set the size of the kernel thread pool once per process.
+
+    Raises ``ValueError`` if the pool was already configured.
+    """

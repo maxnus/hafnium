@@ -687,10 +687,12 @@ intermediates, the spherical transformation and the one-electron kernels
 (overlap, kinetic, nuclear attraction with range separation, all with ket
 translations) done 2026-10-21 and matching libcint to 1e-12 up to g
 functions (ADR-0009 records the verified p-shell order); the
-`IntegralEngine` protocol and `RustEngine` exist. Next: two- and
-three-centre Coulomb integrals, the pair Fourier transform, four-centre
-integrals, and the decision whether a libcint adapter is still worth
-building once the DF kernels are native (see §12).
+`IntegralEngine` protocol and `RustEngine` exist. Two- and three-centre
+Coulomb integrals with range separation and `DensityFitting` (metric,
+three-centre tensor, fitted `B`) done 2026-10-21, matching libcint and
+PySCF's fitted repulsion. Next: the pair Fourier transform, four-centre
+integrals and Schwarz screening, and the decision whether a libcint
+adapter is still worth building (see §12).
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.

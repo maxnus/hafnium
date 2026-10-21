@@ -1,9 +1,10 @@
-"""Record one-electron reference integrals from PySCF (run by hand).
+"""Record reference integrals from PySCF (run by hand).
 
     uv run python -m tests.reference.generate_one_electron
 
-Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json`` with
-the libcint values and their provenance.
+Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json`` and
+``density_fitting_<molecule>_<basis>.json`` with the libcint values and
+their provenance.
 """
 
 from __future__ import annotations
@@ -13,7 +14,15 @@ import json
 from pathlib import Path
 
 from hafnium.basis import BasisSet
-from tests.reference.pyscf_oracle import one_electron_reference, pyscf
+from tests.reference.pyscf_oracle import (
+    density_fitting_reference,
+    one_electron_reference,
+    pyscf,
+)
+from tests.reference.test_density_fitting_reference import AUXILIARY
+from tests.reference.test_density_fitting_reference import (
+    STORED_CASES as DENSITY_FITTING_CASES,
+)
 from tests.reference.test_one_electron_reference import (
     LIBRARY,
     MOLECULES,
@@ -42,6 +51,26 @@ def main() -> None:
             **{key: matrix.tolist() for key, matrix in matrices.items()},
         }
         path = directory / f"one_electron_{name}_{basis_name}.json"
+        path.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+    for name, basis_name in DENSITY_FITTING_CASES:
+        molecule = MOLECULES[name]
+        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY)
+        matrices = density_fitting_reference(molecule, basis, auxiliary)
+        record = {
+            "provenance": {
+                "program": "pyscf",
+                "version": pyscf.__version__,
+                "settings": "int2c2e and int3c2e (df.incore.aux_e2); cart=False; Bohr",
+                "date": datetime.date.today().isoformat(),
+                "molecule": name,
+                "basis": basis_name,
+                "auxiliary_basis": AUXILIARY,
+                "positions_bohr": [list(p) for p in molecule.positions],
+            },
+            **{key: matrix.tolist() for key, matrix in matrices.items()},
+        }
+        path = directory / f"density_fitting_{name}_{basis_name}.json"
         path.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
 
 

@@ -92,6 +92,11 @@ class ShellTable:
         """Number of entries (contractions)."""
         return int(self.angular_momenta.shape[0])
 
+    @property
+    def n_functions(self) -> int:
+        """Number of spherical basis functions."""
+        return int(sum(2 * int(l) + 1 for l in self.angular_momenta))
+
 
 def _integers(values: Array, name: str) -> Array:
     """Host ``int64`` array of ``values``, rejecting anything non-integral."""
@@ -101,8 +106,3 @@ def _integers(values: Array, name: str) -> Array:
     ):
         raise InputError(f"{name} are integers")
     return integers
-
-    @property
-    def n_functions(self) -> int:
-        """Number of spherical basis functions."""
-        return int(sum(2 * int(l) + 1 for l in self.angular_momenta))

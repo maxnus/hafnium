@@ -61,6 +61,37 @@ pub fn spherical_transformation(l: usize) -> Vec<f64> {
     matrix
 }
 
+/// Transform one index of a row-major array with layout
+/// `[left, n_cart, right]` to spherical functions:
+/// `out[l][m][r] = Σ_c transform[m][c] data[l][c][r]`, where `transform`
+/// is row-major `[n_sph, n_cart]`.
+#[must_use]
+pub fn transform_index(
+    data: &[f64],
+    left: usize,
+    n_cart: usize,
+    right: usize,
+    transform: &[f64],
+) -> Vec<f64> {
+    let n_sph = transform.len() / n_cart;
+    let mut out = vec![0.0; left * n_sph * right];
+    for l in 0..left {
+        for (m, row) in transform.chunks(n_cart).enumerate() {
+            let target = &mut out[(l * n_sph + m) * right..(l * n_sph + m + 1) * right];
+            for (c, &weight) in row.iter().enumerate() {
+                if weight == 0.0 {
+                    continue;
+                }
+                let source = &data[(l * n_cart + c) * right..(l * n_cart + c + 1) * right];
+                for (t, s) in target.iter_mut().zip(source) {
+                    *t += weight * s;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The `m` value of each row of the transformation.
 fn rows(l: usize) -> Vec<i64> {
     if l == 1 {
@@ -187,6 +218,14 @@ mod tests {
                 assert!((matrix[i * 3 + j] - expected).abs() < 1e-15);
             }
         }
+    }
+
+    #[test]
+    fn transform_index_applies_to_the_middle_axis() {
+        // data [2, 2, 1] with the transform [[1, 2], [0, 3]]: out[l][m] = Σ_c T[m][c] d[l][c].
+        let data = [1.0, 10.0, 2.0, 20.0];
+        let out = transform_index(&data, 2, 2, 1, &[1.0, 2.0, 0.0, 3.0]);
+        assert_eq!(out, vec![21.0, 30.0, 42.0, 60.0]);
     }
 
     #[test]

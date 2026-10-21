@@ -6,8 +6,8 @@
 
 use hafnium_core::integrals;
 use numpy::{
-    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2,
-    PyUntypedArrayMethods,
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArrayMethods, PyReadonlyArray1,
+    PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -168,6 +168,67 @@ fn nuclear_attraction<'py>(
     to_image_matrices(py, values, translations.len(), bra, ket)
 }
 
+/// Two-centre Coulomb integrals for each translation of the ket,
+/// `[image, bra, ket]`; `omega` selects the `erf(ωr)/r` kernel.
+#[pyfunction]
+#[pyo3(signature = (bra, ket, translations, omega=None))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn coulomb_two_center<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+    omega: Option<f64>,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let values = integrals::coulomb_two_center(&bra.inner, &ket.inner, &translations, omega)
+        .map_err(|error| value_error(&error))?;
+    to_image_matrices(py, values, translations.len(), bra, ket)
+}
+
+/// Three-centre Coulomb integrals `(P | μ ν)` for each pair of translations
+/// (auxiliary, ket), `[image, aux, bra, ket]`.
+#[pyfunction]
+#[pyo3(signature = (auxiliary, bra, ket, translations, omega=None))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn coulomb_three_center<'py>(
+    py: Python<'py>,
+    auxiliary: &PyShellTable,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray3<'py, f64>,
+    omega: Option<f64>,
+) -> PyResult<Bound<'py, PyArray4<f64>>> {
+    let translations = to_vector_pairs(&translations)?;
+    let values = integrals::coulomb_three_center(
+        &auxiliary.inner,
+        &bra.inner,
+        &ket.inner,
+        &translations,
+        omega,
+    )
+    .map_err(|error| value_error(&error))?;
+    let shape = [
+        translations.len(),
+        auxiliary.inner.n_functions(),
+        bra.inner.n_functions(),
+        ket.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
+/// Set the size of the kernel thread pool once per process.
+#[pyfunction]
+fn configure_threads(n_threads: usize) -> PyResult<()> {
+    integrals::configure_threads(n_threads).map_err(|error| value_error(&error))
+}
+
 fn value_error(error: &hafnium_core::Error) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
@@ -196,6 +257,21 @@ fn to_vectors(array: &PyReadonlyArray2<'_, f64>, name: &str) -> PyResult<Vec<[f6
         .collect())
 }
 
+/// Rows of an `[n, 2, 3]` array as pairs of vectors.
+fn to_vector_pairs(array: &PyReadonlyArray3<'_, f64>) -> PyResult<Vec<[[f64; 3]; 2]>> {
+    if array.shape()[1..] != [2, 3] {
+        return Err(PyValueError::new_err("translations have shape [n, 2, 3]"));
+    }
+    let values = array.as_slice()?;
+    if !values.iter().all(|x| x.is_finite()) {
+        return Err(PyValueError::new_err("translations are finite"));
+    }
+    Ok(values
+        .chunks_exact(6)
+        .map(|row| [[row[0], row[1], row[2]], [row[3], row[4], row[5]]])
+        .collect())
+}
+
 fn to_image_matrices<'py>(
     py: Python<'py>,
     values: Vec<f64>,
@@ -217,5 +293,8 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(overlap, module)?)?;
     module.add_function(wrap_pyfunction!(kinetic, module)?)?;
     module.add_function(wrap_pyfunction!(nuclear_attraction, module)?)?;
+    module.add_function(wrap_pyfunction!(coulomb_two_center, module)?)?;
+    module.add_function(wrap_pyfunction!(coulomb_three_center, module)?)?;
+    module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())
 }

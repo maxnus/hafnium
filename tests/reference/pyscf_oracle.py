@@ -86,3 +86,39 @@ def attenuated_attraction_reference(
     for index, charge in enumerate(molecule.nuclear_charges):
         total -= charge * three_centre[:, :, index]
     return total * scale
+
+
+def density_fitting_reference(
+    molecule: Molecule, basis: BasisSet, auxiliary: BasisSet, omega: float | None = None
+) -> dict[str, np.ndarray]:
+    """Metric ``(P|Q)`` and three-centre ``(P|uv)`` integrals from libcint.
+
+    With ``omega`` the range-separated kernel is set on both molecules;
+    libcint honours it for two-electron integrals.
+    """
+    mol = pyscf_molecule(molecule, basis)
+    aux = pyscf_molecule(molecule, auxiliary)
+    if omega is None:
+        metric = np.asarray(aux.intor("int2c2e"))
+        three = np.asarray(df.incore.aux_e2(mol, aux, intor="int3c2e", aosym="s1"))
+    else:
+        with mol.with_range_coulomb(omega), aux.with_range_coulomb(omega):
+            metric = np.asarray(aux.intor("int2c2e"))
+            three = np.asarray(df.incore.aux_e2(mol, aux, intor="int3c2e", aosym="s1"))
+    return {
+        "metric": metric,
+        "three_center": np.ascontiguousarray(np.moveaxis(three, 2, 0)),
+    }
+
+
+def fitted_repulsion_reference(
+    molecule: Molecule, basis: BasisSet, auxiliary: BasisSet
+) -> np.ndarray:
+    """Fitted ``(uv|wx)`` from PySCF's Cholesky-decomposed metric."""
+    mol = pyscf_molecule(molecule, basis)
+    aux = pyscf_molecule(molecule, auxiliary)
+    lib: Any = pyscf.lib
+    cderi = np.asarray(df.incore.cholesky_eri(mol, auxmol=aux))
+    n_ao = mol.nao
+    full = np.stack([lib.unpack_tril(row) for row in cderi])
+    return np.einsum("Puv,Pwx->uvwx", full, full).reshape(n_ao, n_ao, n_ao, n_ao)
