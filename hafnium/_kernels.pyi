@@ -88,7 +88,7 @@ def coulomb_four_center(
     omega: float | None = None,
     threshold: float = 0.0,
 ) -> NDArray[np.float64]:
-    """Return four-centre Coulomb integrals ``[image, a, b, c, d]``.
+    """Return four-centre Coulomb integrals ``(uv|wx)`` as ``[image, ao, ao, ao, ao]``.
 
     ``translations`` has shape ``[image, 3, 3]``: the vectors applied to the
     second bra function and to the two ket functions. Shell quartets whose

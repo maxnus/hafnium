@@ -223,8 +223,8 @@ fn coulomb_three_center<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
-/// Four-centre Coulomb integrals `(ab|cd)` for each triple of translations
-/// (second bra, first ket, second ket), `[image, a, b, c, d]`; shell
+/// Four-centre Coulomb integrals `(uv|wx)` for each triple of translations
+/// (second bra, first ket, second ket), `[image, ao, ao, ao, ao]`; shell
 /// quartets with a Schwarz bound below `threshold` are left at zero.
 #[pyfunction]
 #[pyo3(signature = (bra, ket, translations, omega=None, threshold=0.0))]

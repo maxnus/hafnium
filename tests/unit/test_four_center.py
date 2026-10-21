@@ -6,8 +6,14 @@ import pytest
 from hafnium.basis import BasisLibrary, BasisSet
 from hafnium.integrals import DensityFitting, RustEngine, ShellTable, eri
 from hafnium.molecule import Molecule
+from tests.molecules import water
 from tests.shell_tables import reversed_table
-from tests.tolerances import FITTED_INTEGRAL_TOL, INTEGRAL_TOL, LITERATURE_TOL
+from tests.tolerances import (
+    ATTENUATION_LIMIT_TOL,
+    FITTED_INTEGRAL_TOL,
+    INTEGRAL_TOL,
+    LITERATURE_TOL,
+)
 
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
@@ -25,16 +31,6 @@ PERMUTATIONS = [
     (2, 3, 1, 0),
     (3, 2, 1, 0),
 ]
-
-
-def water() -> Molecule:
-    return Molecule.from_atoms(
-        [
-            ("O", (0.0, 0.0, 0.1173)),
-            ("H", (0.0, 0.7572, -0.4692)),
-            ("H", (0.0, -0.7572, -0.4692)),
-        ]
-    )
 
 
 def basis_for(molecule: Molecule, name: str) -> BasisSet:
@@ -179,7 +175,7 @@ def test_attenuated_eri_is_bounded_by_the_full_kernel() -> None:
     diagonal_long = np.einsum("uuuu->u", long_range)
     assert np.all(diagonal_long < diagonal_full)
     assert np.all(diagonal_long > 0.0)
-    np.testing.assert_allclose(nearly, full, atol=1e-8)
+    np.testing.assert_allclose(nearly, full, atol=ATTENUATION_LIMIT_TOL)
 
 
 def test_density_fitting_approximates_the_exact_integrals() -> None:

@@ -10,23 +10,19 @@ from hafnium import _kernels
 from hafnium.basis import BasisLibrary, BasisSet, Shell
 from hafnium.integrals import DensityFitting, RustEngine, ShellTable
 from hafnium.molecule import Molecule
+from tests.molecules import water
 from tests.shell_tables import reversed_table
-from tests.tolerances import DENSITY_FITTING_TOL, INTEGRAL_TOL, SPECTRUM_TOL
+from tests.tolerances import (
+    ATTENUATION_LIMIT_TOL,
+    DENSITY_FITTING_TOL,
+    INTEGRAL_TOL,
+    SPECTRUM_TOL,
+)
 
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
 ZERO = np.zeros((1, 3))
 ZERO_PAIR = np.zeros((1, 2, 3))
-
-
-def water() -> Molecule:
-    return Molecule.from_atoms(
-        [
-            ("O", (0.0, 0.0, 0.1173)),
-            ("H", (0.0, 0.7572, -0.4692)),
-            ("H", (0.0, -0.7572, -0.4692)),
-        ]
-    )
 
 
 def tables(
@@ -168,7 +164,7 @@ def test_attenuated_integrals_are_bounded_by_the_full_kernel() -> None:
     nearly = ENGINE.coulomb_two_center(aux, aux, ZERO, omega=1e5)[0]
     assert np.all(np.diag(long_range) < np.diag(full))
     assert np.all(np.diag(long_range) > 0.0)
-    np.testing.assert_allclose(nearly, full, atol=1e-8)
+    np.testing.assert_allclose(nearly, full, atol=ATTENUATION_LIMIT_TOL)
     three_full = ENGINE.coulomb_three_center(aux, orbital, orbital, ZERO_PAIR)[0]
     three_long = ENGINE.coulomb_three_center(
         aux, orbital, orbital, ZERO_PAIR, omega=0.5

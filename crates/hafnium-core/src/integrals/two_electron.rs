@@ -188,13 +188,7 @@ pub fn coulomb_four_center(
     for triple in translations {
         check_finite(triple)?;
     }
-    let shape = [
-        bra[0].n_functions(),
-        bra[1].n_functions(),
-        ket[0].n_functions(),
-        ket[1].n_functions(),
-    ];
-    let size: usize = shape.iter().product();
+    let size: usize = output_shape(bra, ket).iter().product();
     let max_l = bra
         .iter()
         .chain(ket.iter())
@@ -203,27 +197,45 @@ pub fn coulomb_four_center(
         .unwrap_or(0);
     let tables = Tables::new(max_l);
     let mut out = vec![0.0; translations.len() * size];
-    for (image, &[t_b, t_c, t_d]) in translations.iter().enumerate() {
-        let swaps = [
-            bra[0] == bra[1] && same_translation(t_b, ZERO),
-            ket[0] == ket[1] && same_translation(t_c, t_d),
-            bra[0] == ket[0]
-                && bra[1] == ket[1]
-                && same_translation(t_c, ZERO)
-                && same_translation(t_d, t_b),
-        ];
-        let target = &mut out[image * size..(image + 1) * size];
+    for (it, &translation) in translations.iter().enumerate() {
         let image = FourCenterImage {
             bra,
             ket,
-            translations: [t_b, t_c, t_d],
+            translations: translation,
             omega,
             threshold,
-            swaps,
+            swaps: admitted_swaps(bra, ket, translation),
         };
-        image.fill(&tables, target);
+        image.fill(&tables, &mut out[it * size..(it + 1) * size]);
     }
     Ok(out)
+}
+
+/// Shape `[n_a, n_b, n_c, n_d]` of one image of the four-centre integrals.
+fn output_shape(bra: [&ShellTable; 2], ket: [&ShellTable; 2]) -> [usize; 4] {
+    [
+        bra[0].n_functions(),
+        bra[1].n_functions(),
+        ket[0].n_functions(),
+        ket[1].n_functions(),
+    ]
+}
+
+/// The swaps an image admits: of the bra pair, of the ket pair, and of
+/// the two pairs (see [`coulomb_four_center`]).
+fn admitted_swaps(
+    bra: [&ShellTable; 2],
+    ket: [&ShellTable; 2],
+    [t_b, t_c, t_d]: [[f64; 3]; 3],
+) -> [bool; 3] {
+    [
+        bra[0] == bra[1] && same_translation(t_b, ZERO),
+        ket[0] == ket[1] && same_translation(t_c, t_d),
+        bra[0] == ket[0]
+            && bra[1] == ket[1]
+            && same_translation(t_c, ZERO)
+            && same_translation(t_d, t_b),
+    ]
 }
 
 /// Schwarz bounds `Q_ab = max_{a ∈ A, b ∈ B} sqrt((a b(r − T) | a b(r − T)))`
@@ -265,6 +277,8 @@ struct FourCenterImage<'a> {
     translations: [[f64; 3]; 3],
     omega: Option<f64>,
     threshold: f64,
+    /// Derived by [`admitted_swaps`] in [`coulomb_four_center`]; tests set
+    /// it directly to force the generic path.
     swaps: [bool; 3],
 }
 
@@ -286,12 +300,7 @@ impl FourCenterImage<'_> {
             ket_storage = shell_pairs(self.ket, [t_c, t_d], self.swaps[1], self.omega, tables);
             &ket_storage
         };
-        let shape = [
-            self.bra[0].n_functions(),
-            self.bra[1].n_functions(),
-            self.ket[0].n_functions(),
-            self.ket[1].n_functions(),
-        ];
+        let shape = output_shape(self.bra, self.ket);
         let ket_size: usize = ket_pairs.iter().map(ShellPair::n_functions).sum();
         let mut start = 0;
         while start < bra_pairs.len() {
@@ -737,16 +746,45 @@ mod tests {
     }
 
     /// An s and a p shell of two primitives each on two centres, with
-    /// arbitrary coefficients.
-    fn sp_table() -> ShellTable {
+    /// arbitrary coefficients, translated as a whole by `shift`.
+    fn sp_table_at(shift: [f64; 3]) -> ShellTable {
+        let centers = [[0.0; 3], [1.2, -0.3, 0.4]];
+        let moved = |center: [f64; 3]| -> [f64; 3] {
+            std::array::from_fn(|axis| center[axis] + shift[axis])
+        };
         ShellTable::new(
             vec![0, 1, 0, 1],
-            vec![[0.0; 3], [0.0; 3], [1.2, -0.3, 0.4], [1.2, -0.3, 0.4]],
+            vec![
+                moved(centers[0]),
+                moved(centers[0]),
+                moved(centers[1]),
+                moved(centers[1]),
+            ],
             vec![0, 2, 4, 6, 8],
             vec![1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
             vec![0.7, 0.5, 0.6, 0.4, 0.8, 0.3, 0.5, 0.5],
         )
         .expect("valid")
+    }
+
+    fn sp_table() -> ShellTable {
+        sp_table_at(ZERO)
+    }
+
+    /// The four-centre integrals of one image without any symmetry shortcut.
+    fn generic_image(table: &ShellTable, translations: [[f64; 3]; 3]) -> Vec<f64> {
+        let n = table.n_functions();
+        let mut out = vec![0.0; n * n * n * n];
+        FourCenterImage {
+            bra: [table, table],
+            ket: [table, table],
+            translations,
+            omega: None,
+            threshold: 0.0,
+            swaps: [false; 3],
+        }
+        .fill(&Tables::new(table.max_angular_momentum()), &mut out);
+        out
     }
 
     fn molecular(table: &ShellTable, threshold: f64) -> Vec<f64> {
@@ -819,14 +857,7 @@ mod tests {
         // A ket with a different centre list is a different table, so the
         // generic path runs; moving it back by a translation gives the same
         // integrals.
-        let shifted = ShellTable::new(
-            vec![0, 1, 0, 1],
-            vec![[1.0; 3], [1.0; 3], [2.2, 0.7, 1.4], [2.2, 0.7, 1.4]],
-            vec![0, 2, 4, 6, 8],
-            vec![1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
-            vec![0.7, 0.5, 0.6, 0.4, 0.8, 0.3, 0.5, 0.5],
-        )
-        .expect("valid");
+        let shifted = sp_table_at([1.0; 3]);
         let generic = coulomb_three_center(&aux, &table, &shifted, &[[ZERO, [-1.0; 3]]], None)
             .expect("valid");
         for (s, g) in symmetric.iter().zip(&generic) {
@@ -881,17 +912,7 @@ mod tests {
         let table = sp_table();
         let n = table.n_functions();
         let symmetric = molecular(&table, 0.0);
-        let tables = Tables::new(1);
-        let mut generic = vec![0.0; n * n * n * n];
-        FourCenterImage {
-            bra: [&table, &table],
-            ket: [&table, &table],
-            translations: [ZERO; 3],
-            omega: None,
-            threshold: 0.0,
-            swaps: [false; 3],
-        }
-        .fill(&tables, &mut generic);
+        let generic = generic_image(&table, [ZERO; 3]);
         for (s, g) in symmetric.iter().zip(&generic) {
             assert!((s - g).abs() < 1e-13);
         }
@@ -910,11 +931,83 @@ mod tests {
                 threshold: 0.0,
                 swaps,
             }
-            .fill(&tables, &mut partial);
+            .fill(&Tables::new(1), &mut partial);
             for (s, g) in symmetric.iter().zip(&partial) {
                 assert!((s - g).abs() < 1e-13);
             }
         }
+    }
+
+    #[test]
+    fn translated_images_admit_the_documented_swaps() {
+        let table = sp_table();
+        let other = sp_table_at([0.3; 3]);
+        let shift = [0.4, -0.2, 0.3];
+        let same = [&table, &table];
+        // Bra and ket swaps with a translated ket pair; the pair swap with
+        // the second function of each pair translated alike.
+        assert_eq!(
+            admitted_swaps(same, same, [ZERO, shift, shift]),
+            [true, true, false]
+        );
+        assert_eq!(
+            admitted_swaps(same, same, [shift, ZERO, shift]),
+            [false, false, true]
+        );
+        assert_eq!(admitted_swaps(same, same, [ZERO; 3]), [true; 3]);
+        // Unequal ket translations, a translated first ket function, and
+        // distinct tables each spoil the corresponding swap.
+        assert_eq!(
+            admitted_swaps(same, same, [ZERO, shift, ZERO]),
+            [true, false, false]
+        );
+        assert_eq!(
+            admitted_swaps(same, same, [ZERO, ZERO, shift]),
+            [true, false, false]
+        );
+        assert_eq!(
+            admitted_swaps(same, same, [shift, ZERO, ZERO]),
+            [false, true, false]
+        );
+        assert_eq!(
+            admitted_swaps([&table, &other], same, [ZERO; 3]),
+            [false, true, false]
+        );
+        assert_eq!(
+            admitted_swaps(same, [&table, &other], [ZERO; 3]),
+            [true, false, false]
+        );
+        assert_eq!(
+            admitted_swaps([&table, &other], [&table, &other], [ZERO; 3]),
+            [false, false, true]
+        );
+        // The swaps of translated images reproduce the generic integrals.
+        for translations in [[ZERO, shift, shift], [shift, ZERO, shift]] {
+            let symmetric =
+                coulomb_four_center(same, same, &[translations], None, 0.0).expect("valid");
+            let generic = generic_image(&table, translations);
+            for (s, g) in symmetric.iter().zip(&generic) {
+                assert!((s - g).abs() < 1e-13);
+            }
+        }
+    }
+
+    #[test]
+    fn schwarz_bounds_translate_the_ket() {
+        let table = sp_table();
+        let shift = [0.5, 0.1, -0.3];
+        let translated = schwarz_bounds(&table, &table, &[shift], None).expect("valid");
+        let direct = schwarz_bounds(&table, &sp_table_at(shift), &[ZERO], None).expect("valid");
+        let at_origin = schwarz_bounds(&table, &table, &[ZERO], None).expect("valid");
+        for (t, d) in translated.iter().zip(&direct) {
+            assert!((t - d).abs() < 1e-14);
+        }
+        assert!(
+            translated
+                .iter()
+                .zip(&at_origin)
+                .any(|(t, o)| (t - o).abs() > 1e-3)
+        );
     }
 
     #[test]
