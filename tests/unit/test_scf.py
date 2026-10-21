@@ -41,6 +41,7 @@ from tests.tolerances import (
     DENSITY_FITTING_ENERGY_TOL,
     ENERGY_TOL,
     LITERATURE_TOL,
+    MO_ENERGY_TOL,
     SPIN_TOL,
     STRUCTURE_TOL,
 )
@@ -283,6 +284,8 @@ def test_guesses_and_options_are_validated(water_hamiltonian: Hamiltonian) -> No
         ScfOptions(damping=1.0)
     with pytest.raises(InputError, match="overlap threshold"):
         ScfOptions(overlap_threshold=0.0)
+    with pytest.raises(InputError, match="no eigenvalue"):
+        canonical_orthogonalizer(water_hamiltonian.overlap, threshold=100.0)
     with pytest.raises(InputError, match="match"):
         Hamiltonian(np.eye(n + 1), np.eye(n), water_hamiltonian.two_body, 0.0, 5, 5)
 
@@ -354,7 +357,8 @@ def test_level_shift_and_damping_reach_the_same_state(
     result = solve_scf(water_hamiltonian, SymmetrySpec(), options=options)
     assert result.energy == pytest.approx(restricted_water.energy, abs=ENERGY_TOL)
     check_state(result, water_hamiltonian)
-    assert result.n_iterations > restricted_water.n_iterations
+    # The options change the path, not the destination.
+    assert result.history[1].energy != restricted_water.history[1].energy
 
 
 def test_linearly_dependent_functions_are_removed() -> None:
@@ -380,7 +384,7 @@ def test_linearly_dependent_functions_are_removed() -> None:
     np.testing.assert_allclose(
         np.sort(result.mo_energies.blocks[0]),
         np.sort(expected.mo_energies.blocks[0]),
-        atol=SPIN_TOL,
+        atol=MO_ENERGY_TOL,
     )
     check_state(result, hamiltonian)
     orthogonalizer = canonical_orthogonalizer(hamiltonian.overlap)

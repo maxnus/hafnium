@@ -160,11 +160,7 @@ def solve_scf(
         symmetry.validate_electrons(hamiltonian.n_alpha, hamiltonian.n_beta)
         occupation = AufbauOccupation(hamiltonian.n_alpha, hamiltonian.n_beta)
     setup = _Setup.build(hamiltonian, structure, occupation, options)
-    if guess is None:
-        guess = core_hamiltonian_guess(
-            hamiltonian, structure, overlap_threshold=options.overlap_threshold
-        )
-    density = setup.checked(guess)
+    density = _averaged_core_density(setup) if guess is None else setup.checked(guess)
     diis = Diis(options.diis_size)
     history: list[ScfIteration] = []
     for index in range(options.max_iterations):
@@ -201,10 +197,19 @@ def core_hamiltonian_guess(
     orbitals the core Hamiltonian happens to order lowest.
     """
     half = hamiltonian.n_electrons / 2
-    occupation = AveragedOccupation(half, half)
     options = ScfOptions(overlap_threshold=overlap_threshold)
-    setup = _Setup.build(hamiltonian, structure, occupation, options)
-    mo_energies, mo_coefficients = setup.solve(hamiltonian.one_body(structure))
+    setup = _Setup.build(
+        hamiltonian, structure, AveragedOccupation(half, half), options
+    )
+    return _averaged_core_density(setup)
+
+
+def _averaged_core_density(setup: _Setup) -> BlockMatrix:
+    """Build the core-Hamiltonian guess in the retained basis of ``setup``."""
+    hamiltonian = setup.hamiltonian
+    half = hamiltonian.n_electrons / 2
+    occupation = AveragedOccupation(half, half)
+    mo_energies, mo_coefficients = setup.solve(hamiltonian.one_body(setup.structure))
     return density_matrix(mo_coefficients, occupation.occupy(mo_energies))
 
 
@@ -234,12 +239,16 @@ def canonical_orthogonalizer(
     xp = array_namespace(overlap)
     eigenvalues, eigenvectors = eigh(overlap)
     keep = eigenvalues > threshold
-    dropped = int(overlap.shape[0]) - int(xp.sum(keep))
+    n = int(overlap.shape[0])
+    dropped = n - int(xp.sum(keep))
+    if dropped == n:
+        raise InputError(
+            f"no eigenvalue of the overlap exceeds the threshold {threshold:g}; "
+            "the overlap is not positive definite or the threshold is too large"
+        )
     if dropped:
         logger.info(
-            "canonical orthogonalization removed %d of %d basis functions",
-            dropped,
-            int(overlap.shape[0]),
+            "canonical orthogonalization removed %d of %d basis functions", dropped, n
         )
     retained = eigenvectors[:, keep]
     return retained / xp.sqrt(eigenvalues[keep])
@@ -300,7 +309,13 @@ class _Setup:
         return mo_energies, self.orthogonalizer @ reduced_coefficients
 
     def next_density(self, fock: BlockMatrix, previous: BlockMatrix) -> BlockMatrix:
-        """Diagonalize ``fock``, level-shifted and damped as the options say."""
+        """Diagonalize ``fock``, level-shifted and damped as the options say.
+
+        The shift is applied through ``S − S D S`` of the previous density,
+        which is the virtual projector once the iteration has settled; while
+        damping keeps the density non-idempotent the shift is approximate,
+        which does not move the fixed point.
+        """
         shift, damping = self.options.level_shift, self.options.damping
         if shift:
             virtual = self.overlap - self.overlap @ previous @ self.overlap

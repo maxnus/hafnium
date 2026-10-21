@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from hafnium.backend import Array, Namespace, array_namespace
 from hafnium.errors import InputError
 from hafnium.structured import BlockMatrix
+from hafnium.structured.dense import block_diag
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,28 +50,21 @@ def spin_expectation(density: BlockMatrix, overlap: Array) -> SpinExpectation:
     n = int(overlap.shape[0])
     if dense.shape != (2 * n, 2 * n):
         raise InputError("the density and the overlap act on different bases")
-    q_aa, q_ab = dense[:n, :n] @ overlap, dense[:n, n:] @ overlap
-    q_ba, q_bb = dense[n:, :n] @ overlap, dense[n:, n:] @ overlap
-    trace_aa, trace_bb = xp.linalg.trace(q_aa), xp.linalg.trace(q_bb)
+    q = dense @ block_diag(overlap, overlap)
+    trace_aa, trace_bb = xp.linalg.trace(q[:n, :n]), xp.linalg.trace(q[n:, n:])
     n_electrons = _real(xp, trace_aa + trace_bb)
-    s_plus = xp.linalg.trace(q_ba)
+    s_plus = xp.linalg.trace(q[n:, :n])
     vector = (
         _real(xp, s_plus),
         float(xp.imag(s_plus)),
         _real(xp, trace_aa - trace_bb) / 2,
     )
-    q_total = q_aa + q_bb
-    trace_square = _real(
-        xp,
-        xp.linalg.trace(q_aa @ q_aa)
-        + xp.linalg.trace(q_bb @ q_bb)
-        + 2 * xp.linalg.trace(q_ab @ q_ba),
-    )
+    q_total = q[:n, :n] + q[n:, n:]
     square = (
         0.75 * n_electrons
         + sum(component**2 for component in vector)
         - _real(xp, xp.linalg.trace(q_total @ q_total)) / 2
-        + trace_square / 4
+        + _real(xp, xp.linalg.trace(q @ q)) / 4
     )
     return SpinExpectation(vector, square)
 
