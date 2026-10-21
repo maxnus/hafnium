@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from hafnium import _kernels, kernel_version
-from tests.tolerances import KERNEL_TOL
+from tests.tolerances import KERNEL_REL_TOL
 
 
 def test_kernel_version_is_a_version_string() -> None:
@@ -17,7 +17,7 @@ def test_dot_matches_numpy() -> None:
     rng = np.random.default_rng(0)
     a = rng.standard_normal(1000)
     b = rng.standard_normal(1000)
-    assert _kernels.dot(a, b) == pytest.approx(float(a @ b), abs=KERNEL_TOL)
+    assert _kernels.dot(a, b) == pytest.approx(float(a @ b), rel=KERNEL_REL_TOL)
 
 
 def test_dot_rejects_length_mismatch() -> None:

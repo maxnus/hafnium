@@ -3,4 +3,6 @@
 ENERGY_TOL = 1e-10
 INTEGRAL_TOL = 1e-12
 GRID_TOL = 1e-6
-KERNEL_TOL = 1e-14
+# Kernel results versus NumPy: the two sum in different orders (sequential
+# loop versus BLAS), so they agree only to about n * machine epsilon.
+KERNEL_REL_TOL = 1e-12
