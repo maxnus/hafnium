@@ -536,7 +536,10 @@ wait for the GitHub remote.
 backend module with the NumPy backend, `BlockStructure` and `BlockMatrix` with
 the full operation set and embed/project maps, `SymmetrySpec` for all
 Fukutome classes without point groups. Exit: `BlockMatrix` property tests
-pass for all eight structures.
+pass for all eight structures. Status: done 2026-10-21 (PRs #2 and #3);
+point-group detection moves to M4. Deferred from the review of #3: expose
+basis set versions on `BasisSet` and warn when a molecule mixes Basis Set
+Exchange revisions (the cache already records them).
 
 **M2 Integrals.** `IntegralEngine` protocol, `LibcintEngine`, DF metric
 and 3-index tensor, Schwarz screening. Native Rust one-electron integrals,
