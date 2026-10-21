@@ -32,6 +32,7 @@ nav:
       - adr/0003-package-name-hafnium.md
       - adr/0004-python-toolchain-baseline.md
       - adr/0005-immutable-data-with-dataclasses.md
+      - adr/0006-basis-function-conventions.md
   - API reference: api.md
 
 markdown_extensions:

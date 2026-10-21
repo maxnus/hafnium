@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
   "numpy>=2.0",
   "array-api-compat>=1.9",
+  "platformdirs>=4",
 ]
 
 [project.optional-dependencies]
@@ -82,8 +83,9 @@ select = [
   "PLR0913",   # too many arguments
   "PLR0915",   # too many statements
 ]
-allowed-confusables = ["−", "–", "σ", "×"]
+allowed-confusables = ["−", "–", "×", "α", "β", "ε", "λ", "μ", "ν", "ρ", "σ"]
 ignore = [
+  "E741",      # `l` is angular momentum, and i j k l are index letters (CONVENTIONS.md §2.4)
   "D105",      # magic method docstrings
   "D107",      # __init__ docstrings (documented on the class)
 ]
@@ -132,4 +134,5 @@ markers = [
   "reference: compares against PySCF, libcint or stored reference values",
   "gpu: requires a GPU backend",
   "slow: takes more than a few seconds",
+  "network: contacts the Basis Set Exchange",
 ]

@@ -600,18 +600,17 @@ PySCF is never a runtime dependency.
    McMurchie–Davidson; Rys is better for high angular momentum ERIs,
    McMurchie–Davidson is simpler and good for one-electron and DF terms;
    both can coexist).
-2. Spherical harmonic ordering and phase (proposal in `CONVENTIONS.md`:
-   m = −l..+l, real solid harmonics; Cartesian functions supported only for
-   input conversion).
-3. libxc binding: `pylibxc` versus an own binding through the Rust crate.
-4. Whether JAX is a development target from M1 (recommended: honor its
+2. libxc binding: `pylibxc` versus an own binding through the Rust crate.
+3. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M7).
 
 Decided so far: Apache-2.0 license (2026-10-21, ADR-0001); Rust for the
 compiled layer (2026-10-21, ADR-0002); the package name `hafnium`
 (2026-10-21, ADR-0003), with the PyPI name still to be obtained, see
 ADR-0003 and the risk table; Python 3.11+, NumPy 2, uv, ruff and pyright
-strict as the toolchain baseline (2026-10-21, ADR-0004).
+strict as the toolchain baseline (2026-10-21, ADR-0004); spherical
+functions ordered m = −l..+l with BSE normalization conventions and CODATA
+2018 units (2026-10-21, ADR-0006).
 
 ## 13. Risks
 

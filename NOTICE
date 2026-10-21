@@ -4,4 +4,9 @@ Copyright 2026 The Hafnium Authors
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 Third-party components bundled in distributed artifacts, with their
-licenses, are listed here as they are added. None are bundled yet.
+licenses, are listed here as they are added.
+
+- Basis set data in hafnium/basis/data/ from the Basis Set Exchange
+  (https://www.basissetexchange.org), Copyright (c) 2020 The Molecular
+  Sciences Software Institute, Virginia Tech; BSD-3-Clause. Please cite
+  Pritchard et al., J. Chem. Inf. Model. 59, 4814 (2019) when using it.
