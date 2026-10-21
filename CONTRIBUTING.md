@@ -38,6 +38,10 @@ uv run mkdocs build --strict
   `refactor:`, `test:`, `perf:`, `build:`), imperative mood, and a body
   that explains why.
 - Every bug fix adds a test that fails before the fix.
+- Pull requests opened by Claude Code are reviewed with its `code-review`
+  skill before they are handed over, and again after substantial
+  pushes; findings are fixed or listed in the description for the human
+  reviewer (see `CLAUDE.md`).
 
 ## Developer Certificate of Origin
 
