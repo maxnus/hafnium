@@ -59,7 +59,8 @@ fn spherical_transformation(py: Python<'_>, l: usize) -> PyResult<Bound<'_, PyAr
         .reshape([2 * l + 1, integrals::n_cartesian(l)])
 }
 
-/// Contracted shells in structure-of-arrays form (see `hafnium.integrals`).
+/// Contracted shells in structure-of-arrays form, one entry per shell with
+/// all its contractions (see `hafnium.integrals`).
 #[pyclass(frozen, name = "ShellTable")]
 struct PyShellTable {
     inner: integrals::ShellTable,
@@ -78,6 +79,7 @@ impl PyShellTable {
         primitive_offsets: PyReadonlyArray1<'_, i64>,
         exponents: PyReadonlyArray1<'_, f64>,
         coefficients: PyReadonlyArray1<'_, f64>,
+        n_contractions: PyReadonlyArray1<'_, i64>,
     ) -> PyResult<Self> {
         let inner = integrals::ShellTable::new(
             to_indices(angular_momenta.as_slice()?, "angular momenta")?,
@@ -85,6 +87,7 @@ impl PyShellTable {
             to_indices(primitive_offsets.as_slice()?, "primitive offsets")?,
             exponents.as_slice()?.to_vec(),
             coefficients.as_slice()?.to_vec(),
+            to_indices(n_contractions.as_slice()?, "contraction counts")?,
         )
         .map_err(|error| value_error(&error))?;
         Ok(Self { inner })

@@ -21,7 +21,7 @@ def spherical_transformation(l: int) -> NDArray[np.float64]:
     """Return the Cartesian-to-solid-harmonic matrix ``[2l + 1, n_cartesian]``."""
 
 class ShellTable:
-    """Contracted shells in structure-of-arrays form, one entry per contraction."""
+    """Contracted shells in structure-of-arrays form, one entry per shell."""
 
     def __init__(
         self,
@@ -30,6 +30,7 @@ class ShellTable:
         primitive_offsets: NDArray[np.int64],
         exponents: NDArray[np.float64],
         coefficients: NDArray[np.float64],
+        n_contractions: NDArray[np.int64],
     ) -> None: ...
     @property
     def n_shells(self) -> int:

@@ -19,7 +19,7 @@ use super::cartesian::{
     cartesian_components, n_cartesian, spherical_transformation, transform_index,
 };
 use super::coulomb::HermiteWorkspace;
-use super::pairs::{PrimitivePair, primitive_pairs, single_shell_pairs};
+use super::pairs::{PrimitivePair, PrimitivePairs, primitive_pairs, single_shell_pairs};
 use super::{ShellRef, ShellTable};
 use crate::Error;
 
@@ -49,16 +49,16 @@ pub fn coulomb_two_center(
         n_ket,
         translations,
         |translation, a, slab| {
-            let la = a.angular_momentum;
+            let (la, ka) = (a.angular_momentum, a.n_contractions);
             let bra_pairs = single_shell_pairs(&a, a.center);
             let mut workspace = HermiteWorkspace::default();
             for (ic, &ket_offset) in ket_offsets.iter().enumerate() {
                 let c = ket.shell(ic);
-                let lc = c.angular_momentum;
+                let (lc, kc) = (c.angular_momentum, c.n_contractions);
                 let c_center: [f64; 3] =
                     std::array::from_fn(|axis| c.center[axis] + translation[axis]);
                 let ket_pairs = single_shell_pairs(&c, c_center);
-                let mut block = vec![0.0; n_cartesian(la) * n_cartesian(lc)];
+                let mut block = vec![0.0; ka * n_cartesian(la) * kc * n_cartesian(lc)];
                 coulomb_block(
                     &bra_pairs,
                     [la, 0],
@@ -69,9 +69,10 @@ pub fn coulomb_two_center(
                     &mut workspace,
                     &mut block,
                 );
-                let spherical = tables.to_spherical(&block, [Some(la), None, Some(lc), None]);
-                for (ma, row) in spherical.chunks(2 * lc + 1).enumerate() {
-                    slab[ma * n_ket + ket_offset..ma * n_ket + ket_offset + row.len()]
+                let spherical =
+                    tables.to_spherical(&block, [Some(la), None, Some(lc), None], [ka, 1, kc, 1]);
+                for (fa, row) in spherical.chunks(c.n_functions()).enumerate() {
+                    slab[fa * n_ket + ket_offset..fa * n_ket + ket_offset + row.len()]
                         .copy_from_slice(row);
                 }
             }
@@ -116,7 +117,7 @@ pub fn coulomb_three_center(
         translations,
         |[aux_translation, ket_translation], p_shell, slab| {
             let symmetric = bra == ket && same_translation(*ket_translation, ZERO);
-            let lp = p_shell.angular_momentum;
+            let (lp, kp) = (p_shell.angular_momentum, p_shell.n_contractions);
             let p_center: [f64; 3] =
                 std::array::from_fn(|axis| p_shell.center[axis] + aux_translation[axis]);
             let aux_pairs = single_shell_pairs(&p_shell, p_center);
@@ -129,8 +130,13 @@ pub fn coulomb_three_center(
                     let b_center: [f64; 3] =
                         std::array::from_fn(|axis| b.center[axis] + ket_translation[axis]);
                     let (la, lb) = (a.angular_momentum, b.angular_momentum);
+                    let (ka, kb) = (a.n_contractions, b.n_contractions);
                     let pairs = primitive_pairs(&a, &b, b_center, 0);
-                    let mut block = vec![0.0; n_cartesian(la) * n_cartesian(lb) * n_cartesian(lp)];
+                    let mut block =
+                        vec![
+                            0.0;
+                            ka * n_cartesian(la) * kb * n_cartesian(lb) * kp * n_cartesian(lp)
+                        ];
                     coulomb_block(
                         &pairs,
                         [la, lb],
@@ -141,10 +147,13 @@ pub fn coulomb_three_center(
                         &mut workspace,
                         &mut block,
                     );
-                    // spherical[ma][mb][mp] → slab[mp][μ][ν] (and slab[mp][ν][μ])
-                    let spherical =
-                        tables.to_spherical(&block, [Some(la), Some(lb), Some(lp), None]);
-                    let (nsb, nsp) = (2 * lb + 1, 2 * lp + 1);
+                    // spherical[fa][fb][fp] → slab[fp][μ][ν] (and slab[fp][ν][μ])
+                    let spherical = tables.to_spherical(
+                        &block,
+                        [Some(la), Some(lb), Some(lp), None],
+                        [ka, kb, kp, 1],
+                    );
+                    let (nsb, nsp) = (b.n_functions(), p_shell.n_functions());
                     for (index, value) in spherical.iter().enumerate() {
                         let mp = index % nsp;
                         let mb = (index / nsp) % nsb;
@@ -287,6 +296,30 @@ struct FourCenterImage<'a> {
 /// and their placement in the output; bounds the extra memory.
 const CHUNK_BUDGET: usize = 1 << 23;
 
+/// The evaluated blocks of one bra pair, concatenated: `entries` holds the
+/// ket pair index and the start of each block in `values`.
+#[derive(Default)]
+struct PairBlocks {
+    values: Vec<f64>,
+    entries: Vec<(usize, usize)>,
+}
+
+impl PairBlocks {
+    /// The ket pair index and values of each block.
+    fn iter(&self) -> impl Iterator<Item = (usize, &[f64])> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(k, &(ket_index, start))| {
+                let end = self
+                    .entries
+                    .get(k + 1)
+                    .map_or(self.values.len(), |entry| entry.1);
+                (ket_index, &self.values[start..end])
+            })
+    }
+}
+
 impl FourCenterImage<'_> {
     /// Evaluate the unique shell quartets above the threshold in parallel
     /// over bra pairs and place them, with their symmetric images, in `out`.
@@ -306,7 +339,7 @@ impl FourCenterImage<'_> {
         let mut start = 0;
         while start < bra_pairs.len() {
             let end = chunk_end(&bra_pairs, start, ket_size);
-            let blocks: Vec<Vec<(usize, Vec<f64>)>> = (start..end)
+            let blocks: Vec<PairBlocks> = (start..end)
                 .into_par_iter()
                 .map(|index| {
                     let bra_pair = &bra_pairs[index];
@@ -316,30 +349,26 @@ impl FourCenterImage<'_> {
                         ket_pairs
                     };
                     let mut workspace = HermiteWorkspace::default();
-                    partners
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, ket_pair)| bra_pair.bound * ket_pair.bound >= self.threshold)
-                        .map(|(ket_index, ket_pair)| {
-                            let block =
-                                quartet(bra_pair, ket_pair, self.omega, tables, &mut workspace);
-                            (ket_index, block)
-                        })
-                        .collect()
+                    let mut blocks = PairBlocks::default();
+                    for (ket_index, ket_pair) in partners.iter().enumerate() {
+                        if bra_pair.bound * ket_pair.bound < self.threshold {
+                            continue;
+                        }
+                        blocks.entries.push((ket_index, blocks.values.len()));
+                        let block = quartet(bra_pair, ket_pair, self.omega, tables, &mut workspace);
+                        blocks.values.extend_from_slice(&block);
+                    }
+                    blocks
                 })
                 .collect();
-            for (bra_pair, blocks) in bra_pairs[start..end].iter().zip(&blocks) {
-                for (ket_index, block) in blocks {
-                    scatter(
-                        out,
-                        shape,
-                        bra_pair,
-                        &ket_pairs[*ket_index],
-                        block,
-                        self.swaps,
-                    );
-                }
-            }
+            scatter_parallel(
+                out,
+                shape,
+                &bra_pairs[start..end],
+                ket_pairs,
+                &blocks,
+                self.swaps,
+            );
             start = end;
         }
     }
@@ -368,8 +397,7 @@ fn quartet(
     tables: &Tables,
     workspace: &mut HermiteWorkspace,
 ) -> Vec<f64> {
-    let n_cart = |ls: [usize; 2]| n_cartesian(ls[0]) * n_cartesian(ls[1]);
-    let mut block = vec![0.0; n_cart(bra.ls) * n_cart(ket.ls)];
+    let mut block = vec![0.0; bra.n_cartesian() * ket.n_cartesian()];
     coulomb_block(
         &bra.primitives,
         bra.ls,
@@ -388,15 +416,68 @@ fn quartet(
             Some(ket.ls[0]),
             Some(ket.ls[1]),
         ],
+        [
+            bra.contractions[0],
+            bra.contractions[1],
+            ket.contractions[0],
+            ket.contractions[1],
+        ],
     )
 }
 
-/// Write a quartet block into `out` (shape `[n_a, n_b, n_c, n_d]`) at its
-/// own position and at every position the admitted swaps map it to. A swap
+/// Place the blocks of a chunk of bra pairs in `out` (shape
+/// `[n_a, n_b, n_c, n_d]`), in parallel over ranges of the first index.
+///
+/// Every element of `out` is written by exactly one block and swap, so the
+/// tasks never collide; each task scans all blocks and writes the elements
+/// whose first index falls in its range.
+fn scatter_parallel(
+    out: &mut [f64],
+    shape: [usize; 4],
+    bra_pairs: &[ShellPair],
+    ket_pairs: &[ShellPair],
+    blocks: &[PairBlocks],
+    swaps: [bool; 3],
+) {
+    let row = shape[1] * shape[2] * shape[3];
+    debug_assert_eq!(out.len(), shape[0] * row, "one image of the output");
+    if row == 0 || shape[0] == 0 {
+        return;
+    }
+    // Rows hold equal numbers of elements, so one task per thread balances.
+    let rows_per_task = shape[0].div_ceil(rayon::current_num_threads()).max(1);
+    out.par_chunks_mut(rows_per_task * row)
+        .enumerate()
+        .for_each(|(task, chunk)| {
+            let first = task * rows_per_task;
+            let range = first..first + chunk.len() / row;
+            for (bra_pair, pair_blocks) in bra_pairs.iter().zip(blocks) {
+                if !bra_pair.touches(&range) {
+                    // Without the pair swap only the bra shells can supply the
+                    // first index.
+                    if !swaps[2] {
+                        continue;
+                    }
+                }
+                for (ket_index, block) in pair_blocks.iter() {
+                    let ket_pair = &ket_pairs[ket_index];
+                    if !bra_pair.touches(&range) && !ket_pair.touches(&range) {
+                        continue;
+                    }
+                    scatter(chunk, &range, shape, bra_pair, ket_pair, block, swaps);
+                }
+            }
+        });
+}
+
+/// Write the elements of a quartet block whose first index lies in
+/// `range` into `chunk`, the rows `range` of the output, at their own
+/// position and at every position the admitted swaps map them to. A swap
 /// that maps the block onto itself is skipped, so each element is written
 /// exactly once.
 fn scatter(
-    out: &mut [f64],
+    chunk: &mut [f64],
+    range: &std::ops::Range<usize>,
     shape: [usize; 4],
     bra: &ShellPair,
     ket: &ShellPair,
@@ -404,10 +485,10 @@ fn scatter(
     swaps: [bool; 3],
 ) {
     let dims = [
-        2 * bra.ls[0] + 1,
-        2 * bra.ls[1] + 1,
-        2 * ket.ls[0] + 1,
-        2 * ket.ls[1] + 1,
+        bra.n_functions_of(0),
+        bra.n_functions_of(1),
+        ket.n_functions_of(0),
+        ket.n_functions_of(1),
     ];
     let offsets = [
         bra.offsets[0],
@@ -421,33 +502,49 @@ fn scatter(
         swaps[2] && bra.shells != ket.shells,
     ];
     let index = |[u, v, w, x]: [usize; 4]| ((u * shape[1] + v) * shape[2] + w) * shape[3] + x;
-    for (flat, &value) in block.iter().enumerate() {
-        let md = flat % dims[3];
-        let mc = (flat / dims[3]) % dims[2];
-        let mb = (flat / (dims[3] * dims[2])) % dims[1];
-        let ma = flat / (dims[3] * dims[2] * dims[1]);
-        let base = [
-            offsets[0] + ma,
-            offsets[1] + mb,
-            offsets[2] + mc,
-            offsets[3] + md,
-        ];
-        for code in 0..8u8 {
-            let (swap_bra, swap_ket, swap_pairs) = (code & 1 != 0, code & 2 != 0, code & 4 != 0);
-            if (swap_bra && !swaps[0]) || (swap_ket && !swaps[1]) || (swap_pairs && !swaps[2]) {
-                continue;
+    for code in 0..8u8 {
+        let (swap_bra, swap_ket, swap_pairs) = (code & 1 != 0, code & 2 != 0, code & 4 != 0);
+        if (swap_bra && !swaps[0]) || (swap_ket && !swaps[1]) || (swap_pairs && !swaps[2]) {
+            continue;
+        }
+        // The shell that supplies the first index after the swaps.
+        let source = match (swap_pairs, swap_bra, swap_ket) {
+            (false, false, _) => 0,
+            (false, true, _) => 1,
+            (true, _, false) => 2,
+            (true, _, true) => 3,
+        };
+        if offsets[source] >= range.end || offsets[source] + dims[source] <= range.start {
+            continue;
+        }
+        // Only the functions of the source shell inside `range` are visited.
+        let mut bounds: [std::ops::Range<usize>; 4] = std::array::from_fn(|i| 0..dims[i]);
+        bounds[source] = range.start.saturating_sub(offsets[source])
+            ..(range.end - offsets[source]).min(dims[source]);
+        for ma in bounds[0].clone() {
+            for mb in bounds[1].clone() {
+                for mc in bounds[2].clone() {
+                    for md in bounds[3].clone() {
+                        let flat = ((ma * dims[1] + mb) * dims[2] + mc) * dims[3] + md;
+                        let [mut u, mut v, mut w, mut x] = [
+                            offsets[0] + ma,
+                            offsets[1] + mb,
+                            offsets[2] + mc,
+                            offsets[3] + md,
+                        ];
+                        if swap_bra {
+                            (u, v) = (v, u);
+                        }
+                        if swap_ket {
+                            (w, x) = (x, w);
+                        }
+                        if swap_pairs {
+                            (u, v, w, x) = (w, x, u, v);
+                        }
+                        chunk[index([u - range.start, v, w, x])] = block[flat];
+                    }
+                }
             }
-            let [mut u, mut v, mut w, mut x] = base;
-            if swap_bra {
-                (u, v) = (v, u);
-            }
-            if swap_ket {
-                (w, x) = (x, w);
-            }
-            if swap_pairs {
-                (u, v, w, x) = (w, x, u, v);
-            }
-            out[index([u, v, w, x])] = value;
         }
     }
 }
@@ -457,16 +554,40 @@ struct ShellPair {
     /// Shell indices in the two tables.
     shells: [usize; 2],
     ls: [usize; 2],
+    /// Number of contractions of each shell.
+    contractions: [usize; 2],
     /// First function of each shell in its table.
     offsets: [usize; 2],
-    primitives: Vec<PrimitivePair>,
+    primitives: PrimitivePairs,
     /// `max sqrt((ab|ab))` over the functions of the pair.
     bound: f64,
 }
 
 impl ShellPair {
+    /// Spherical functions of shell `which` of the pair.
+    fn n_functions_of(&self, which: usize) -> usize {
+        self.contractions[which] * (2 * self.ls[which] + 1)
+    }
+
+    /// Whether a function of either shell lies in `range`.
+    fn touches(&self, range: &std::ops::Range<usize>) -> bool {
+        (0..2).any(|which| {
+            let start = self.offsets[which];
+            start < range.end && start + self.n_functions_of(which) > range.start
+        })
+    }
+
+    /// Spherical function pairs.
     fn n_functions(&self) -> usize {
-        (2 * self.ls[0] + 1) * (2 * self.ls[1] + 1)
+        self.n_functions_of(0) * self.n_functions_of(1)
+    }
+
+    /// Cartesian component pairs over all contractions.
+    fn n_cartesian(&self) -> usize {
+        self.contractions[0]
+            * n_cartesian(self.ls[0])
+            * self.contractions[1]
+            * n_cartesian(self.ls[1])
     }
 }
 
@@ -506,6 +627,7 @@ fn shell_pairs(
                     ShellPair {
                         shells: [ia, ib],
                         ls,
+                        contractions: primitives.contractions,
                         offsets: [offsets[0][ia], offsets[1][ib]],
                         primitives,
                         bound,
@@ -519,20 +641,24 @@ fn shell_pairs(
 
 /// `max_{ab} sqrt((ab|ab))` over the spherical functions of a pair.
 fn schwarz_bound(
-    primitives: &[PrimitivePair],
+    primitives: &PrimitivePairs,
     ls: [usize; 2],
     omega: Option<f64>,
     tables: &Tables,
     workspace: &mut HermiteWorkspace,
 ) -> f64 {
-    let n_cart = n_cartesian(ls[0]) * n_cartesian(ls[1]);
+    let n_cart = primitives.n_contracted() * n_cartesian(ls[0]) * n_cartesian(ls[1]);
     let mut block = vec![0.0; n_cart * n_cart];
     coulomb_block(
         primitives, ls, primitives, ls, omega, tables, workspace, &mut block,
     );
-    let spherical =
-        tables.to_spherical(&block, [Some(ls[0]), Some(ls[1]), Some(ls[0]), Some(ls[1])]);
-    let n_sph = (2 * ls[0] + 1) * (2 * ls[1] + 1);
+    let [k_a, k_b] = primitives.contractions;
+    let spherical = tables.to_spherical(
+        &block,
+        [Some(ls[0]), Some(ls[1]), Some(ls[0]), Some(ls[1])],
+        [k_a, k_b, k_a, k_b],
+    );
+    let n_sph = primitives.n_contracted() * (2 * ls[0] + 1) * (2 * ls[1] + 1);
     (0..n_sph)
         .map(|i| spherical[i * n_sph + i])
         .fold(0.0_f64, f64::max)
@@ -558,7 +684,7 @@ fn assemble_parallel<T: Sync>(
             .into_par_iter()
             .map(|index| {
                 let shell = leading.shell(index);
-                let mut slab = vec![0.0; (2 * shell.angular_momentum + 1) * row_size];
+                let mut slab = vec![0.0; shell.n_functions() * row_size];
                 fill(image, shell, &mut slab);
                 slab
             })
@@ -586,116 +712,212 @@ impl Tables {
     }
 
     /// Transform a row-major Cartesian block with index layout
-    /// `[a, b, c, d]` to spherical functions. An index of `None` is a unit
-    /// partner (see [`single_shell_pairs`]): one component, left untouched.
-    /// The values may be real or complex.
-    pub(crate) fn to_spherical<T>(&self, block: &[T], ls: [Option<usize>; 4]) -> Vec<T>
+    /// `[k_a, a, k_b, b, k_c, c, k_d, d]` to spherical functions, where
+    /// `ks` are the contraction counts and `ls` the angular momenta. An
+    /// index of `None` is a unit partner (see [`single_shell_pairs`]): one
+    /// component, left untouched. The values may be real or complex.
+    pub(crate) fn to_spherical<T>(
+        &self,
+        block: &[T],
+        ls: [Option<usize>; 4],
+        ks: [usize; 4],
+    ) -> Vec<T>
     where
         T: Copy + Default + AddAssign + Mul<f64, Output = T>,
     {
         let mut data = block.to_vec();
-        let mut shape: [usize; 4] = std::array::from_fn(|i| ls[i].map_or(1, n_cartesian));
+        let mut shape = [1; 8];
+        for index in 0..4 {
+            shape[2 * index] = ks[index];
+            shape[2 * index + 1] = ls[index].map_or(1, n_cartesian);
+        }
         for (index, l) in ls.iter().enumerate() {
             let Some(l) = l else {
                 continue;
             };
-            let left: usize = shape[..index].iter().product();
-            let right: usize = shape[index + 1..].iter().product();
-            data = transform_index(&data, left, shape[index], right, &self.transforms[*l]);
-            shape[index] = 2 * l + 1;
+            let axis = 2 * index + 1;
+            let left: usize = shape[..axis].iter().product();
+            let right: usize = shape[axis + 1..].iter().product();
+            data = transform_index(&data, left, shape[axis], right, &self.transforms[*l]);
+            shape[axis] = 2 * l + 1;
         }
         data
     }
 }
 
-/// Accumulate `(ab|cd)` over all primitive pairs into `out`, laid out as
-/// `[cart_a, cart_b, cart_c, cart_d]`; `ls = [l_a, l_b]` and `[l_c, l_d]`
-/// name the Cartesian component sets.
+/// Accumulate `(ab|cd)` over all primitive pairs into `out`, laid out
+/// `[k_a, cart_a, k_b, cart_b, k_c, cart_c, k_d, cart_d]` over the
+/// contractions and Cartesian components; `ls = [l_a, l_b]` and
+/// `[l_c, l_d]` name the component sets.
 #[allow(
     clippy::too_many_arguments,
     reason = "inner kernel; every argument is a distinct table"
 )]
 pub(crate) fn coulomb_block(
-    bra: &[PrimitivePair],
+    bra: &PrimitivePairs,
     ls_bra: [usize; 2],
-    ket: &[PrimitivePair],
+    ket: &PrimitivePairs,
     ls_ket: [usize; 2],
     omega: Option<f64>,
     tables: &Tables,
     workspace: &mut HermiteWorkspace,
     out: &mut [f64],
 ) {
-    let (comp_a, comp_b) = (&tables.components[ls_bra[0]], &tables.components[ls_bra[1]]);
-    let (comp_c, comp_d) = (&tables.components[ls_ket[0]], &tables.components[ls_ket[1]]);
-    let order_bra = ls_bra[0] + ls_bra[1];
-    let order_ket = ls_ket[0] + ls_ket[1];
-    let order = order_bra + order_ket;
-    let n_t = order_bra + 1;
-    let n_cd = comp_c.len() * comp_d.len();
+    let components: [&[[usize; 3]]; 4] = [
+        &tables.components[ls_bra[0]],
+        &tables.components[ls_bra[1]],
+        &tables.components[ls_ket[0]],
+        &tables.components[ls_ket[1]],
+    ];
+    let dims: [usize; 4] = std::array::from_fn(|i| components[i].len());
+    let orders = [ls_bra[0] + ls_bra[1], ls_ket[0] + ls_ket[1]];
+    let n_t = orders[0] + 1;
     let mut intermediate = std::mem::take(&mut workspace.intermediate);
     intermediate.clear();
-    intermediate.resize(n_cd * n_t * n_t * n_t, 0.0);
-    for pair_bra in bra {
-        for pair_ket in ket {
-            let (p, q) = (pair_bra.p, pair_ket.p);
-            let alpha = p * q / (p + q);
-            let attenuated = omega.map_or(alpha, |w| alpha * w * w / (alpha + w * w));
-            let prefactor = pair_bra.coefficient * pair_ket.coefficient * 2.0 * PI.powf(2.5)
-                / (p * q * (p + q).sqrt())
-                * (attenuated / alpha).sqrt();
-            let pq: [f64; 3] =
-                std::array::from_fn(|axis| pair_bra.center[axis] - pair_ket.center[axis]);
-            let r = workspace.compute(order, attenuated, pq);
-            // X[cd][tuv] = Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ} R_{t+τ, u+ν, v+φ}
-            for (icd, (cc, cd)) in comp_c
-                .iter()
-                .flat_map(|cc| comp_d.iter().map(move |cd| (cc, cd)))
-                .enumerate()
-            {
-                let slot = &mut intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
-                // Only t + u + v ≤ l_a + l_b is consumed by the bra contraction.
-                for t in 0..n_t {
-                    for u in 0..n_t - t {
-                        for v in 0..n_t - t - u {
-                            let mut sum = 0.0;
-                            for tau in 0..=cc[0] + cd[0] {
-                                for nu in 0..=cc[1] + cd[1] {
-                                    for phi in 0..=cc[2] + cd[2] {
-                                        let sign =
-                                            if (tau + nu + phi) % 2 == 0 { 1.0 } else { -1.0 };
-                                        sum += sign
-                                            * pair_ket.product(cc, cd, [tau, nu, phi])
-                                            * r.get(t + tau, u + nu, v + phi);
-                                    }
-                                }
+    intermediate.resize(dims[2] * dims[3] * n_t * n_t * n_t, 0.0);
+    let mut values = std::mem::take(&mut workspace.values);
+    values.clear();
+    values.resize(dims[0] * dims[1] * dims[2] * dims[3], 0.0);
+    for (index_bra, pair_bra) in bra.pairs.iter().enumerate() {
+        for (index_ket, pair_ket) in ket.pairs.iter().enumerate() {
+            let prefactor = primitive_quartet(
+                (pair_bra, pair_ket),
+                components,
+                orders,
+                omega,
+                workspace,
+                &mut intermediate,
+                &mut values,
+            );
+            accumulate_quartet(
+                (bra, index_bra),
+                (ket, index_ket),
+                prefactor,
+                &values,
+                dims,
+                out,
+            );
+        }
+    }
+    workspace.intermediate = intermediate;
+    workspace.values = values;
+}
+
+/// `values[ab][cd] = Σ_{tuv} E^{ab}_{tuv} Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ}
+/// R_{t+τ, u+ν, v+φ}` for one primitive quartet, returning the prefactor
+/// `2π^{5/2} / (pq √(p+q))` with the attenuation scaling.
+fn primitive_quartet(
+    pairs: (&PrimitivePair, &PrimitivePair),
+    components: [&[[usize; 3]]; 4],
+    orders: [usize; 2],
+    omega: Option<f64>,
+    workspace: &mut HermiteWorkspace,
+    intermediate: &mut [f64],
+    values: &mut [f64],
+) -> f64 {
+    let (pair_bra, pair_ket) = pairs;
+    let [comp_a, comp_b, comp_c, comp_d] = components;
+    let n_t = orders[0] + 1;
+    let n_cd = comp_c.len() * comp_d.len();
+    let (p, q) = (pair_bra.p, pair_ket.p);
+    let alpha = p * q / (p + q);
+    let attenuated = omega.map_or(alpha, |w| alpha * w * w / (alpha + w * w));
+    let prefactor = 2.0 * PI.powf(2.5) / (p * q * (p + q).sqrt()) * (attenuated / alpha).sqrt();
+    let pq: [f64; 3] = std::array::from_fn(|axis| pair_bra.center[axis] - pair_ket.center[axis]);
+    let r = workspace.compute(orders[0] + orders[1], attenuated, pq);
+    // X[cd][tuv] = Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ} R_{t+τ, u+ν, v+φ}
+    for (icd, (cc, cd)) in comp_c
+        .iter()
+        .flat_map(|cc| comp_d.iter().map(move |cd| (cc, cd)))
+        .enumerate()
+    {
+        let slot = &mut intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
+        // Only t + u + v ≤ l_a + l_b is consumed by the bra contraction.
+        for t in 0..n_t {
+            for u in 0..n_t - t {
+                for v in 0..n_t - t - u {
+                    let mut sum = 0.0;
+                    for tau in 0..=cc[0] + cd[0] {
+                        for nu in 0..=cc[1] + cd[1] {
+                            for phi in 0..=cc[2] + cd[2] {
+                                let sign = if (tau + nu + phi) % 2 == 0 { 1.0 } else { -1.0 };
+                                sum += sign
+                                    * pair_ket.product(cc, cd, [tau, nu, phi])
+                                    * r.get(t + tau, u + nu, v + phi);
                             }
-                            slot[(t * n_t + u) * n_t + v] = sum;
                         }
                     }
-                }
-            }
-            for (iab, (ca, cb)) in comp_a
-                .iter()
-                .flat_map(|ca| comp_b.iter().map(move |cb| (ca, cb)))
-                .enumerate()
-            {
-                for icd in 0..n_cd {
-                    let slot = &intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
-                    let mut value = 0.0;
-                    for t in 0..=ca[0] + cb[0] {
-                        for u in 0..=ca[1] + cb[1] {
-                            for v in 0..=ca[2] + cb[2] {
-                                value += pair_bra.product(ca, cb, [t, u, v])
-                                    * slot[(t * n_t + u) * n_t + v];
-                            }
-                        }
-                    }
-                    out[iab * n_cd + icd] += prefactor * value;
+                    slot[(t * n_t + u) * n_t + v] = sum;
                 }
             }
         }
     }
-    workspace.intermediate = intermediate;
+    for (iab, (ca, cb)) in comp_a
+        .iter()
+        .flat_map(|ca| comp_b.iter().map(move |cb| (ca, cb)))
+        .enumerate()
+    {
+        for icd in 0..n_cd {
+            let slot = &intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
+            let mut value = 0.0;
+            for t in 0..=ca[0] + cb[0] {
+                for u in 0..=ca[1] + cb[1] {
+                    for v in 0..=ca[2] + cb[2] {
+                        value +=
+                            pair_bra.product(ca, cb, [t, u, v]) * slot[(t * n_t + u) * n_t + v];
+                    }
+                }
+            }
+            values[iab * n_cd + icd] = value;
+        }
+    }
+    prefactor
+}
+
+/// Add `prefactor * values[ab][cd]` of one primitive quartet to `out`
+/// (laid out `[k_a, a, k_b, b, k_c, c, k_d, d]`) for every combination of
+/// contractions, scaled by their coefficients.
+fn accumulate_quartet(
+    bra: (&PrimitivePairs, usize),
+    ket: (&PrimitivePairs, usize),
+    prefactor: f64,
+    values: &[f64],
+    dims: [usize; 4],
+    out: &mut [f64],
+) {
+    let [n_a, n_b, n_c, n_d] = dims;
+    let [bra_first, bra_second] = bra.0.contractions;
+    let [ket_first, ket_second] = ket.0.contractions;
+    let stride_c = ket_second * n_d;
+    let stride_b = ket_first * n_c * stride_c;
+    let stride_a = bra_second * n_b * stride_b;
+    for k_a in 0..bra_first {
+        for k_b in 0..bra_second {
+            let bra_coefficient = prefactor * bra.0.coefficient(bra.1, k_a, k_b);
+            for k_c in 0..ket_first {
+                for k_d in 0..ket_second {
+                    let coefficient = bra_coefficient * ket.0.coefficient(ket.1, k_c, k_d);
+                    let base = k_a * n_a * stride_a
+                        + k_b * n_b * stride_b
+                        + k_c * n_c * stride_c
+                        + k_d * n_d;
+                    for i_a in 0..n_a {
+                        for i_b in 0..n_b {
+                            let target = base + i_a * stride_a + i_b * stride_b;
+                            let source = (i_a * n_b + i_b) * n_c * n_d;
+                            for i_c in 0..n_c {
+                                let row = &mut out[target + i_c * stride_c..][..n_d];
+                                let column = &values[source + i_c * n_d..][..n_d];
+                                for (o, v) in row.iter_mut().zip(column) {
+                                    *o += coefficient * v;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn check_omega(omega: Option<f64>) -> Result<(), Error> {
@@ -742,7 +964,96 @@ pub(crate) fn check_finite(vectors: &[[f64; 3]], name: &str) -> Result<(), Error
 mod tests {
     use super::*;
     use crate::integrals::nuclear_attraction;
-    use crate::integrals::test_tables::{s_shell, sp_table, sp_table_at};
+    use crate::integrals::test_tables::{
+        general_table, s_shell, sp_table, sp_table_at, split_table,
+    };
+
+    fn assert_same(general: &[f64], split: &[f64]) {
+        assert_eq!(general.len(), split.len());
+        for (g, s) in general.iter().zip(split) {
+            assert!((g - s).abs() < 1e-13, "{g} vs {s}");
+        }
+    }
+
+    #[test]
+    fn general_contractions_match_split_shells() {
+        let (general, split) = (general_table(), split_table());
+        let translation = [0.3, -0.1, 0.2];
+        assert_same(
+            &coulomb_two_center(&general, &general, &[ZERO, translation], Some(0.8))
+                .expect("valid"),
+            &coulomb_two_center(&split, &split, &[ZERO, translation], Some(0.8)).expect("valid"),
+        );
+        let images = [[ZERO, ZERO], [translation, ZERO], [ZERO, translation]];
+        assert_same(
+            &coulomb_three_center(&general, &general, &general, &images, None).expect("valid"),
+            &coulomb_three_center(&split, &split, &split, &images, None).expect("valid"),
+        );
+        // Mixed tables take the generic path on the split side as well.
+        assert_same(
+            &coulomb_three_center(&split, &general, &split, &images, None).expect("valid"),
+            &coulomb_three_center(&split, &split, &split, &images, None).expect("valid"),
+        );
+        let quartet_images = [[ZERO; 3], [translation, ZERO, translation]];
+        for threshold in [0.0, 1e-12] {
+            assert_same(
+                &coulomb_four_center(
+                    [&general, &general],
+                    [&general, &general],
+                    &quartet_images,
+                    None,
+                    threshold,
+                )
+                .expect("valid"),
+                &coulomb_four_center(
+                    [&split, &split],
+                    [&split, &split],
+                    &quartet_images,
+                    None,
+                    threshold,
+                )
+                .expect("valid"),
+            );
+        }
+        assert_same(
+            &coulomb_four_center(
+                [&general, &split],
+                [&split, &general],
+                &quartet_images,
+                Some(0.6),
+                0.0,
+            )
+            .expect("valid"),
+            &coulomb_four_center(
+                [&split, &split],
+                [&split, &split],
+                &quartet_images,
+                Some(0.6),
+                0.0,
+            )
+            .expect("valid"),
+        );
+    }
+
+    #[test]
+    fn schwarz_bound_of_a_general_shell_is_the_largest_of_its_contractions() {
+        let (general, split) = (general_table(), split_table());
+        let bounds = schwarz_bounds(&general, &general, &[ZERO], None).expect("valid");
+        let fine = schwarz_bounds(&split, &split, &[ZERO], None).expect("valid");
+        // Split shells 0..3 are the s contractions, 3..5 the p contractions.
+        let members = [0..3, 3..5];
+        for (i, rows) in members.iter().enumerate() {
+            for (j, columns) in members.iter().enumerate() {
+                let mut expected = 0.0_f64;
+                for r in rows.clone() {
+                    for c in columns.clone() {
+                        expected = expected.max(fine[r * 5 + c]);
+                    }
+                }
+                assert!((bounds[i * 2 + j] - expected).abs() < 1e-13);
+            }
+        }
+    }
 
     /// The four-centre integrals of one image without any symmetry shortcut.
     fn generic_image(table: &ShellTable, translations: [[f64; 3]; 3]) -> Vec<f64> {
@@ -1047,6 +1358,7 @@ mod tests {
             vec![0, 1, 2],
             vec![1.0, 1.0],
             vec![1.0, 1.0],
+            vec![1; 2],
         )
         .expect("valid");
         let exact = molecular(&far, 0.0);

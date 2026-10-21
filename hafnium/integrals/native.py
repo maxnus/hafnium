@@ -14,6 +14,7 @@ def _kernel_table(table: ShellTable) -> _kernels.ShellTable:
         table.primitive_offsets,
         table.exponents,
         table.coefficients,
+        table.contraction_counts,
     )
 
 

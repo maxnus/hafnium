@@ -19,6 +19,8 @@ pub(crate) struct HermiteWorkspace {
     /// Scratch for the kernels that contract the table with expansion
     /// coefficients before contracting with the other side.
     pub(crate) intermediate: Vec<f64>,
+    /// Scratch for the Cartesian values of one primitive quartet.
+    pub(crate) values: Vec<f64>,
 }
 
 /// A read-only view of `R^0_{tuv}` for `t + u + v ≤ order`.
