@@ -9,18 +9,29 @@ from dataclasses import dataclass
 from hafnium.backend import Array, Namespace, default_namespace
 from hafnium.errors import InputError
 from hafnium.molecule.elements import SYMBOLS, atomic_number
-from hafnium.molecule.units import angstrom_to_bohr, bohr_to_angstrom
+from hafnium.molecule.units import ANGSTROM_IN_BOHR
 
 Position = tuple[float, float, float]
 
+_BOHR_PER_UNIT = {"bohr": 1.0, "angstrom": ANGSTROM_IN_BOHR}
 
-def _to_bohr(position: Iterable[float], unit: str) -> Position:
-    x, y, z = (float(value) for value in position)
-    if unit == "bohr":
-        return (x, y, z)
-    if unit == "angstrom":
-        return (angstrom_to_bohr(x), angstrom_to_bohr(y), angstrom_to_bohr(z))
-    raise InputError(f"unknown length unit {unit!r}; use 'angstrom' or 'bohr'")
+
+def bohr_per_unit(unit: str) -> float:
+    """Length of one ``unit`` in Bohr; ``unit`` is ``'angstrom'`` or ``'bohr'``."""
+    try:
+        return _BOHR_PER_UNIT[unit.strip().lower()]
+    except KeyError:
+        raise InputError(
+            f"unknown length unit {unit!r}; use 'angstrom' or 'bohr'"
+        ) from None
+
+
+def _to_bohr(symbol: str, position: Iterable[float], unit: str) -> Position:
+    values = tuple(float(value) for value in position)
+    if len(values) != 3:
+        raise InputError(f"atom {symbol!r} needs three coordinates, got {values}")
+    scale = bohr_per_unit(unit)
+    return (values[0] * scale, values[1] * scale, values[2] * scale)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +43,8 @@ class Atom:
 
     def __post_init__(self) -> None:
         number = atomic_number(self.symbol)
+        if number == 0:
+            raise InputError("ghost atoms ('X') are not supported yet")
         object.__setattr__(self, "symbol", SYMBOLS[number])
         object.__setattr__(self, "position", tuple(float(x) for x in self.position))
         if len(self.position) != 3:
@@ -78,7 +91,9 @@ class Molecule:
             )
         if self.spin > self.n_electrons or (self.n_electrons - self.spin) % 2:
             raise InputError(
-                f"spin {self.spin} is inconsistent with {self.n_electrons} electrons"
+                f"spin {self.spin} is inconsistent with {self.n_electrons} electrons; "
+                "spin is n_alpha - n_beta, the number of unpaired electrons, and the "
+                f"smallest consistent value is {self.n_electrons % 2}"
             )
 
     @classmethod
@@ -92,7 +107,10 @@ class Molecule:
     ) -> Molecule:
         """Build from ``(symbol, (x, y, z))`` pairs, in Ångström by default."""
         return cls(
-            tuple(Atom(symbol, _to_bohr(position, unit)) for symbol, position in atoms),
+            tuple(
+                Atom(symbol, _to_bohr(symbol, position, unit))
+                for symbol, position in atoms
+            ),
             charge=charge,
             spin=spin,
         )
@@ -101,17 +119,23 @@ class Molecule:
     def from_xyz(
         cls, text: str, *, charge: int = 0, spin: int = 0, unit: str = "angstrom"
     ) -> Molecule:
-        """Parse XYZ-format text, with or without the count and comment lines."""
-        lines = [line for line in text.splitlines() if line.strip()]
-        if lines and lines[0].split()[0].isdigit():
-            count = int(lines[0].split()[0])
-            lines = lines[1:]
-            if lines and len(lines[0].split()) != 4:
-                lines = lines[1:]
+        """Parse XYZ-format text, with or without the count and comment lines.
+
+        A file that starts with a line holding a single integer is taken to
+        have the standard header: that count, then one comment line of any
+        content, then the atoms.
+        """
+        raw = text.splitlines()
+        first = raw[0].split() if raw else []
+        if len(first) == 1 and first[0].isdigit():
+            count = int(first[0])
+            lines = [line for line in raw[2:] if line.strip()]
             if len(lines) != count:
                 raise InputError(
                     f"XYZ header announces {count} atoms, found {len(lines)}"
                 )
+        else:
+            lines = [line for line in raw if line.strip()]
         atoms: list[tuple[str, tuple[float, float, float]]] = []
         for line in lines:
             fields = line.split()
@@ -182,17 +206,11 @@ class Molecule:
 
     def to_xyz(self, *, comment: str = "", unit: str = "angstrom") -> str:
         """Format as XYZ text, in Ångström by default."""
-        if unit == "angstrom":
-            convert = bohr_to_angstrom
-        elif unit == "bohr":
-
-            def convert(length: float) -> float:
-                return length
-
-        else:
-            raise InputError(f"unknown length unit {unit!r}; use 'angstrom' or 'bohr'")
+        scale = 1.0 / bohr_per_unit(unit)
+        if "\n" in comment:
+            raise InputError("the XYZ comment is a single line")
         lines = [str(self.n_atoms), comment]
         for atom in self.atoms:
-            x, y, z = (convert(value) for value in atom.position)
+            x, y, z = (value * scale for value in atom.position)
             lines.append(f"{atom.symbol:<2} {x:20.12f} {y:20.12f} {z:20.12f}")
         return "\n".join(lines) + "\n"

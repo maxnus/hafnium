@@ -2,13 +2,14 @@
 
 import json
 import math
+from importlib import resources
 from pathlib import Path
 
 import pytest
 
 from hafnium.basis import BasisLibrary, BasisSet, Shell
-from hafnium.basis.bse import basis_url, normalize_name
-from hafnium.basis.library import bundled_basis_sets, shells_from_element
+from hafnium.basis.bse import basis_url, fetch_basis, normalize_name
+from hafnium.basis.library import bundled_basis_sets, shells_from_element, storage_key
 from hafnium.basis.shell import primitive_overlap
 from hafnium.errors import BasisSetError
 from hafnium.molecule import Molecule
@@ -68,7 +69,7 @@ def test_basis_set_for_water(name: str, n_functions: int, max_l: int) -> None:
     offsets = basis.shell_offsets()
     assert offsets[0] == 0
     assert offsets[-1] + basis.shells[-1].n_functions == n_functions
-    labels = basis.function_labels(WATER)
+    labels = basis.function_labels()
     assert len(labels) == n_functions
     assert [label.m for label in labels if label.angular_momentum == 1][:3] == [
         -1,
@@ -76,6 +77,8 @@ def test_basis_set_for_water(name: str, n_functions: int, max_l: int) -> None:
         1,
     ]
     assert labels[0].symbol == "O"
+    assert labels[-1].symbol == "H"
+    assert basis.n_atoms == 3
 
 
 def test_combined_sp_shells_are_split_and_cartesian_rejected() -> None:
@@ -101,24 +104,29 @@ def test_combined_sp_shells_are_split_and_cartesian_rejected() -> None:
         shells_from_element({"ecp_potentials": [], "electron_shells": []})
 
 
+def bundled_hydrogen() -> dict[str, object]:
+    text = (resources.files("hafnium.basis") / "data" / "sto-3g.json").read_text()
+    return json.loads(text)["elements"]["1"]
+
+
 def test_library_fetches_once_and_then_uses_the_cache(tmp_path: Path) -> None:
     calls: list[str] = []
-    bundled = json.loads(
-        (
-            Path(__file__).parents[2] / "hafnium" / "basis" / "data" / "sto-3g.json"
-        ).read_text()
-    )
 
     def fake_fetch(url: str) -> str:
         calls.append(url)
-        return json.dumps({"elements": {"1": bundled["elements"]["1"]}})
+        return json.dumps(
+            {"name": "fake", "version": "7", "elements": {"1": bundled_hydrogen()}}
+        )
 
     library = BasisLibrary(tmp_path, fetch=fake_fetch)
     first = library.shells("not-bundled", [1])
     second = library.shells("not-bundled", [1])
     assert len(calls) == 1
     assert calls[0] == basis_url("not-bundled", [1])
-    assert (tmp_path / "not-bundled" / "1.json").is_file()
+    entry = json.loads((tmp_path / "not-bundled" / "1.json").read_text())
+    assert entry["version"] == "7"
+    assert entry["name"] == "fake"
+    assert "element" in entry
     assert first == second
     assert sum(s.n_functions for s in first[1]) == 1
     with pytest.raises(BasisSetError, match="does not define element"):
@@ -136,3 +144,64 @@ def test_names_and_urls() -> None:
     assert basis_url("cc-pVDZ", [8, 1, 1]) == (
         "https://www.basissetexchange.org/api/basis/cc-pvdz/format/json/?elements=1,8"
     )
+
+
+def test_url_quoting_and_storage_keys() -> None:
+    assert "6-31g%2A%2A" in basis_url("6-31G**", [6])
+    assert storage_key("6-31G**") == "6-31g__"
+    assert storage_key("../escaped") == ".._escaped"
+    assert "/" not in storage_key("a/b/c")
+    with pytest.raises(BasisSetError, match="invalid basis set name"):
+        storage_key("..")
+
+
+def test_unsafe_names_stay_inside_the_cache_directory(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+
+    def fake_fetch(_url: str) -> str:
+        return json.dumps({"elements": {"1": bundled_hydrogen()}})
+
+    BasisLibrary(cache, fetch=fake_fetch).shells("../escaped", [1])
+    written = [path.relative_to(tmp_path) for path in tmp_path.rglob("1.json")]
+    assert written == [Path("cache") / ".._escaped" / "1.json"]
+
+
+def test_corrupt_cache_entries_are_treated_as_misses(tmp_path: Path) -> None:
+    (tmp_path / "mybasis").mkdir()
+    (tmp_path / "mybasis" / "1.json").write_text("{not json")
+    (tmp_path / "mybasis" / "2.json").write_text(json.dumps({"no": "element"}))
+    calls: list[str] = []
+
+    def fake_fetch(url: str) -> str:
+        calls.append(url)
+        hydrogen = bundled_hydrogen()
+        return json.dumps({"elements": {"1": hydrogen, "2": hydrogen}})
+
+    shells = BasisLibrary(tmp_path, fetch=fake_fetch).shells("mybasis", [1, 2])
+    assert len(calls) == 1
+    assert set(shells) == {1, 2}
+    entry = json.loads((tmp_path / "mybasis" / "1.json").read_text())
+    assert "element" in entry
+
+
+def test_fetch_basis_rejects_non_object_responses() -> None:
+    with pytest.raises(BasisSetError, match="not a basis set object"):
+        fetch_basis("x", [1], fetch=lambda _url: "[]")
+    with pytest.raises(BasisSetError, match="not a basis set object"):
+        fetch_basis("x", [1], fetch=lambda _url: json.dumps({"elements": [1]}))
+    with pytest.raises(BasisSetError, match="malformed"):
+        fetch_basis("x", [1], fetch=lambda _url: "{")
+
+
+def test_elements_without_functions_are_reported(tmp_path: Path) -> None:
+    def fake_fetch(_url: str) -> str:
+        return json.dumps({"elements": {"1": {"electron_shells": []}}})
+
+    hydrogen = Molecule.from_atoms([("H", (0, 0, 0))], spin=1)
+    library = BasisLibrary(tmp_path, fetch=fake_fetch)
+    with pytest.raises(BasisSetError, match="no functions for H"):
+        BasisSet.for_molecule(hydrogen, "empty", library=library)
+    with pytest.raises(BasisSetError, match="at least one shell"):
+        BasisSet("empty", ("H",), (), ())
+    with pytest.raises(BasisSetError, match="do not exist"):
+        BasisSet("x", ("H",), (Shell(0, (1.0,), ((1.0,),)),), (1,))

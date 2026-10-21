@@ -1,7 +1,7 @@
 """Molecular structure: atoms, coordinates, charge and spin."""
 
 from hafnium.molecule.elements import atomic_number, element_symbol
-from hafnium.molecule.molecule import Atom, Molecule
+from hafnium.molecule.molecule import Atom, Molecule, bohr_per_unit
 from hafnium.molecule.units import (
     ANGSTROM_IN_BOHR,
     BOHR_IN_ANGSTROM,
@@ -18,6 +18,7 @@ __all__ = [
     "Molecule",
     "angstrom_to_bohr",
     "atomic_number",
+    "bohr_per_unit",
     "bohr_to_angstrom",
     "element_symbol",
 ]

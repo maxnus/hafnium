@@ -46,4 +46,7 @@ harmonic convention open.
 - General contractions keep one `Shell` with several coefficient rows;
   integral engines may regroup them.
 - Effective core potentials and Cartesian shells raise `BasisSetError`
-  until supported.
+  until supported, and ghost atoms raise `InputError` until counterpoise
+  corrections are implemented.
+- Cache entries record the basis set name, version and revision date they
+  came from, so a later change can detect molecules that mix revisions.

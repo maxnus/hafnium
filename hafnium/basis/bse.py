@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterable
 from importlib.metadata import version as _distribution_version
-from typing import Any
+from typing import Any, cast
 
 from hafnium.errors import BasisSetError
 
@@ -26,6 +27,13 @@ Fetcher = Callable[[str], str]
 """Returns the response body for a URL; injectable for tests and offline use."""
 
 
+def as_object(value: object) -> dict[str, Any] | None:
+    """Return a parsed JSON value as a typed mapping, or ``None`` if it is not one."""
+    if isinstance(value, dict):
+        return cast("dict[str, Any]", value)
+    return None
+
+
 def normalize_name(name: str) -> str:
     """Canonical form of a basis set name as the Basis Set Exchange keys it."""
     return name.strip().lower().replace(" ", "")
@@ -34,7 +42,8 @@ def normalize_name(name: str) -> str:
 def basis_url(name: str, elements: Iterable[int]) -> str:
     """URL of the JSON representation of ``name`` for the given atomic numbers."""
     numbers = ",".join(str(number) for number in sorted(set(elements)))
-    return BSE_BASIS_URL.format(name=normalize_name(name)) + f"?elements={numbers}"
+    quoted = urllib.parse.quote(normalize_name(name), safe="")
+    return BSE_BASIS_URL.format(name=quoted) + f"?elements={numbers}"
 
 
 def fetch_url(url: str, *, timeout: float = 30.0) -> str:
@@ -64,9 +73,9 @@ def fetch_basis(
     """Fetch the JSON data of a basis set for the given atomic numbers."""
     body = fetch(basis_url(name, elements))
     try:
-        data: dict[str, Any] = json.loads(body)
+        data = as_object(json.loads(body))
     except json.JSONDecodeError as error:
         raise BasisSetError("the Basis Set Exchange returned malformed JSON") from error
-    if "elements" not in data:
-        raise BasisSetError("the Basis Set Exchange response has no elements")
+    if data is None or as_object(data.get("elements")) is None:
+        raise BasisSetError("the Basis Set Exchange response is not a basis set object")
     return data

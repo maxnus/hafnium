@@ -30,6 +30,8 @@ class BasisSet:
     ----------
     name
         Basis set name as given by the user.
+    atom_symbols
+        Element symbol of each centre, in atom order.
     shells
         All shells, ordered by atom and then as listed in the basis set.
     shell_atoms
@@ -37,14 +39,20 @@ class BasisSet:
     """
 
     name: str
+    atom_symbols: tuple[str, ...]
     shells: tuple[Shell, ...]
     shell_atoms: tuple[int, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "atom_symbols", tuple(self.atom_symbols))
         object.__setattr__(self, "shells", tuple(self.shells))
         object.__setattr__(self, "shell_atoms", tuple(int(i) for i in self.shell_atoms))
+        if not self.shells:
+            raise BasisSetError("a basis set needs at least one shell")
         if len(self.shells) != len(self.shell_atoms):
             raise BasisSetError("each shell needs a centre")
+        if any(not 0 <= atom < len(self.atom_symbols) for atom in self.shell_atoms):
+            raise BasisSetError("shell centres refer to atoms that do not exist")
         if any(
             b < a for a, b in zip(self.shell_atoms, self.shell_atoms[1:], strict=False)
         ):
@@ -59,11 +67,20 @@ class BasisSet:
         by_element = library.shells(name, molecule.atomic_numbers)
         shells: list[Shell] = []
         centres: list[int] = []
-        for index, number in enumerate(molecule.atomic_numbers):
-            element_shells = by_element[number]
+        for index, atom in enumerate(molecule.atoms):
+            element_shells = by_element[atom.atomic_number]
+            if not element_shells:
+                raise BasisSetError(
+                    f"basis set {name!r} has no functions for {atom.symbol}"
+                )
             shells.extend(element_shells)
             centres.extend([index] * len(element_shells))
-        return cls(name, tuple(shells), tuple(centres))
+        return cls(name, molecule.symbols, tuple(shells), tuple(centres))
+
+    @property
+    def n_atoms(self) -> int:
+        """Number of centres."""
+        return len(self.atom_symbols)
 
     @property
     def n_shells(self) -> int:
@@ -89,19 +106,15 @@ class BasisSet:
             total += shell.n_functions
         return tuple(offsets)
 
-    def function_labels(self, molecule: Molecule) -> tuple[FunctionLabel, ...]:
+    def function_labels(self) -> tuple[FunctionLabel, ...]:
         """One label per basis function, in basis function order."""
-        if molecule.n_atoms <= max(self.shell_atoms):
-            raise BasisSetError(
-                "the molecule has fewer atoms than the basis set refers to"
-            )
         labels: list[FunctionLabel] = []
         for shell_index, (shell, atom) in enumerate(
             zip(self.shells, self.shell_atoms, strict=True)
         ):
             l = shell.angular_momentum
             labels.extend(
-                FunctionLabel(atom, molecule.atoms[atom].symbol, shell_index, l, c, m)
+                FunctionLabel(atom, self.atom_symbols[atom], shell_index, l, c, m)
                 for c in range(shell.n_contractions)
                 for m in range(-l, l + 1)
             )
