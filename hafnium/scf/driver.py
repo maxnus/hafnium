@@ -20,10 +20,14 @@ from hafnium.scf.occupation import (
     AveragedOccupation,
     OccupationPolicy,
 )
+from hafnium.scf.spin import SpinExpectation, spin_expectation
 from hafnium.structured import BlockMatrix, BlockStructure, BlockVector, density_matrix
 from hafnium.symmetry import SymmetrySpec
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_OVERLAP_THRESHOLD = 1e-10
+"""Overlap eigenvalues below this are removed by canonical orthogonalization."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,12 +45,24 @@ class ScfOptions:
         orthonormalized commutator ``[F, D]`` of :func:`orbital_gradient`).
     diis_size
         Fock matrices kept for extrapolation; ``1`` iterates without DIIS.
+    level_shift
+        Energy in Hartree added to the virtual orbitals before each
+        diagonalization, which damps oscillations between nearly degenerate
+        occupied and virtual orbitals at the cost of slower convergence.
+    damping
+        Fraction of the previous density kept when forming the next one.
+    overlap_threshold
+        Eigenvalues of the overlap matrix below this are removed, so a
+        linearly dependent basis loses the dependent combinations.
     """
 
     max_iterations: int = 100
     energy_tolerance: float = 1e-10
     gradient_tolerance: float = 1e-6
     diis_size: int = 8
+    level_shift: float = 0.0
+    damping: float = 0.0
+    overlap_threshold: float = DEFAULT_OVERLAP_THRESHOLD
 
     def __post_init__(self) -> None:
         if self.max_iterations < 1:
@@ -55,6 +71,12 @@ class ScfOptions:
             raise InputError("tolerances must be positive")
         if self.diis_size < 1:
             raise InputError("the DIIS subspace holds at least one matrix")
+        if self.level_shift < 0.0:
+            raise InputError("the level shift is non-negative")
+        if not 0.0 <= self.damping < 1.0:
+            raise InputError("damping is a fraction in [0, 1)")
+        if self.overlap_threshold <= 0.0:
+            raise InputError("the overlap threshold is positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +96,9 @@ class ScfResult:
     The density is built from the occupied canonical orbitals of the final
     Fock matrix, and the Fock matrix and energies are those of that density,
     so the last entry of ``history`` differs from ``energies.total`` by at
-    most the energy tolerance.
+    most the energy tolerance. ``mo_coefficients`` are ``[ao, mo]`` with
+    fewer orbitals than functions when the overlap threshold removed
+    linearly dependent combinations.
     """
 
     energies: EnergyTerms
@@ -83,6 +107,7 @@ class ScfResult:
     mo_occupations: BlockVector
     density: BlockMatrix
     fock: BlockMatrix
+    spin: SpinExpectation
     converged: bool
     history: tuple[ScfIteration, ...]
 
@@ -134,12 +159,12 @@ def solve_scf(
     if occupation is None:
         symmetry.validate_electrons(hamiltonian.n_alpha, hamiltonian.n_beta)
         occupation = AufbauOccupation(hamiltonian.n_alpha, hamiltonian.n_beta)
-    setup = _Setup.build(hamiltonian, structure, occupation)
-    density = (
-        core_hamiltonian_guess(hamiltonian, structure)
-        if guess is None
-        else setup.checked(guess)
-    )
+    setup = _Setup.build(hamiltonian, structure, occupation, options)
+    if guess is None:
+        guess = core_hamiltonian_guess(
+            hamiltonian, structure, overlap_threshold=options.overlap_threshold
+        )
+    density = setup.checked(guess)
     diis = Diis(options.diis_size)
     history: list[ScfIteration] = []
     for index in range(options.max_iterations):
@@ -149,7 +174,7 @@ def solve_scf(
         if _is_converged(row, options):
             return setup.finish(fock, tuple(history), converged=True)
         diis = diis.push(fock, gradient)
-        density = setup.next_density(diis.extrapolate())
+        density = setup.next_density(diis.extrapolate(), density)
     # The history always keeps the most recent Fock matrix.
     result = setup.finish(diis.focks[-1], tuple(history), converged=False)
     raise ConvergenceError(
@@ -161,7 +186,10 @@ def solve_scf(
 
 
 def core_hamiltonian_guess(
-    hamiltonian: Hamiltonian, structure: BlockStructure
+    hamiltonian: Hamiltonian,
+    structure: BlockStructure,
+    *,
+    overlap_threshold: float = DEFAULT_OVERLAP_THRESHOLD,
 ) -> BlockMatrix:
     """Density of the lowest core-Hamiltonian orbitals, spin-averaged.
 
@@ -174,9 +202,9 @@ def core_hamiltonian_guess(
     """
     half = hamiltonian.n_electrons / 2
     occupation = AveragedOccupation(half, half)
-    mo_energies, mo_coefficients = hamiltonian.one_body(structure).eigh(
-        hamiltonian.metric(structure)
-    )
+    options = ScfOptions(overlap_threshold=overlap_threshold)
+    setup = _Setup.build(hamiltonian, structure, occupation, options)
+    mo_energies, mo_coefficients = setup.solve(hamiltonian.one_body(structure))
     return density_matrix(mo_coefficients, occupation.occupy(mo_energies))
 
 
@@ -195,13 +223,26 @@ def orbital_gradient(
     return orthogonalizer.adjoint() @ commutator @ orthogonalizer
 
 
-def symmetric_orthogonalizer(overlap: Array) -> Array:
-    """``S^{-1/2}`` of a positive-definite overlap ``[ao, ao]``."""
+def canonical_orthogonalizer(
+    overlap: Array, threshold: float = DEFAULT_OVERLAP_THRESHOLD
+) -> Array:
+    """``X[ao, mo] = V s^{-1/2}`` over the eigenpairs of ``S`` with ``s > threshold``.
+
+    ``X† S X`` is the identity on the retained space; the number of removed
+    eigenvalues is logged, which reads the count on the host.
+    """
     xp = array_namespace(overlap)
     eigenvalues, eigenvectors = eigh(overlap)
-    return (eigenvectors / xp.sqrt(eigenvalues)) @ xp.linalg.matrix_transpose(
-        eigenvectors
-    )
+    keep = eigenvalues > threshold
+    dropped = int(overlap.shape[0]) - int(xp.sum(keep))
+    if dropped:
+        logger.info(
+            "canonical orthogonalization removed %d of %d basis functions",
+            dropped,
+            int(overlap.shape[0]),
+        )
+    retained = eigenvectors[:, keep]
+    return retained / xp.sqrt(eigenvalues[keep])
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -211,6 +252,7 @@ class _Setup:
     hamiltonian: Hamiltonian
     structure: BlockStructure
     occupation: OccupationPolicy
+    options: ScfOptions
     overlap: BlockMatrix
     orthogonalizer: BlockMatrix
 
@@ -220,13 +262,17 @@ class _Setup:
         hamiltonian: Hamiltonian,
         structure: BlockStructure,
         occupation: OccupationPolicy,
+        options: ScfOptions,
     ) -> _Setup:
-        inverse_root = symmetric_orthogonalizer(hamiltonian.overlap)
-        spatial = BlockMatrix(BlockStructure.spatial(), (inverse_root,))
+        spatial = BlockMatrix(
+            BlockStructure.spatial(),
+            (canonical_orthogonalizer(hamiltonian.overlap, options.overlap_threshold),),
+        )
         return cls(
             hamiltonian,
             structure,
             occupation,
+            options,
             hamiltonian.metric(structure),
             spatial.embed(structure),
         )
@@ -247,17 +293,40 @@ class _Setup:
     def gradient(self, fock: BlockMatrix, density: BlockMatrix) -> BlockMatrix:
         return orbital_gradient(fock, density, self.overlap, self.orthogonalizer)
 
-    def next_density(self, fock: BlockMatrix) -> BlockMatrix:
-        mo_energies, mo_coefficients = fock.eigh(self.overlap)
-        return density_matrix(mo_coefficients, self.occupation.occupy(mo_energies))
+    def solve(self, fock: BlockMatrix) -> tuple[BlockVector, BlockMatrix]:
+        """Canonical orbitals of ``fock`` in the retained basis, ``[ao, mo]``."""
+        reduced = self.orthogonalizer.adjoint() @ fock @ self.orthogonalizer
+        mo_energies, reduced_coefficients = reduced.eigh()
+        return mo_energies, self.orthogonalizer @ reduced_coefficients
+
+    def next_density(self, fock: BlockMatrix, previous: BlockMatrix) -> BlockMatrix:
+        """Diagonalize ``fock``, level-shifted and damped as the options say."""
+        shift, damping = self.options.level_shift, self.options.damping
+        if shift:
+            virtual = self.overlap - self.overlap @ previous @ self.overlap
+            fock = fock + shift * virtual
+        mo_energies, mo_coefficients = self.solve(fock)
+        density = density_matrix(mo_coefficients, self.occupation.occupy(mo_energies))
+        if damping:
+            density = (1.0 - damping) * density + damping * previous
+        return density
 
     def finish(
         self, fock: BlockMatrix, history: tuple[ScfIteration, ...], *, converged: bool
     ) -> ScfResult:
-        mo_energies, mo_coefficients = fock.eigh(self.overlap)
+        mo_energies, mo_coefficients = self.solve(fock)
         mo_occupations = self.occupation.occupy(mo_energies)
         density = density_matrix(mo_coefficients, mo_occupations)
         final_fock, energies = self.hamiltonian.fock(density)
+        spin = spin_expectation(density, self.hamiltonian.overlap)
+        logger.info(
+            "scf %s after %d iterations: energy %.12f, <S^2> %.6f, 2S+1 %.4f",
+            "converged" if converged else "stopped",
+            len(history),
+            energies.total,
+            spin.square,
+            spin.multiplicity,
+        )
         return ScfResult(
             energies,
             mo_coefficients,
@@ -265,6 +334,7 @@ class _Setup:
             mo_occupations,
             density,
             final_fock,
+            spin,
             converged,
             history,
         )

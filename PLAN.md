@@ -706,9 +706,9 @@ classes satisfy embedding consistency tests. Status: the driver over
 the fitted and in-core Coulomb and exchange builders done 2026-10-21
 (ADR-0010); all eight classes reproduce the closed-shell energy and the
 embedded solutions are stationary; RHF, UHF and GHF match PySCF with exact
-and fitted integrals. Still open in M3: spin expectation values, level
-shifting and damping for difficult cases, canonical orthogonalization for
-linearly dependent bases.
+and fitted integrals. Spin expectation values, level shifting, damping and
+canonical orthogonalization done 2026-10-21. M3 is complete; stability
+analysis and symmetry-breaking workflows follow in M11.
 
 **M4 Periodic foundations.** `Lattice` and `Cell`, k-point meshes with
 time-reversal pairing and weights, the k axis on `BlockStructure` and

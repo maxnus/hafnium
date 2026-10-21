@@ -10,22 +10,25 @@ from hafnium.scf import (
     AufbauOccupation,
     AveragedOccupation,
     Diis,
+    ExactCoulombExchange,
     Hamiltonian,
     ScfOptions,
     ScfResult,
     atomic_density,
     atomic_density_guess,
+    canonical_orthogonalizer,
     core_hamiltonian_guess,
     electrons_per_block,
     hartree_fock,
     orbital_gradient,
     solve_scf,
-    symmetric_orthogonalizer,
+    spin_expectation,
 )
 from hafnium.structured import (
     BlockMatrix,
     BlockStructure,
     BlockVector,
+    Ring,
     is_kramers_symmetric,
 )
 from hafnium.symmetry import SymmetrySpec
@@ -38,6 +41,7 @@ from tests.tolerances import (
     DENSITY_FITTING_ENERGY_TOL,
     ENERGY_TOL,
     LITERATURE_TOL,
+    SPIN_TOL,
     STRUCTURE_TOL,
 )
 
@@ -103,6 +107,9 @@ def test_hydrogen_atom_in_every_open_shell_class() -> None:
         result = solve_scf(hamiltonian, SymmetrySpec.from_name(name))
         assert result.energy == pytest.approx(-0.4666, abs=LITERATURE_TOL)
         assert result.energies.coulomb == pytest.approx(-result.energies.exchange)
+        assert result.spin.square == pytest.approx(0.75, abs=SPIN_TOL)
+        assert result.spin.multiplicity == pytest.approx(2.0, abs=SPIN_TOL)
+        assert abs(result.spin.vector[2]) == pytest.approx(0.5, abs=SPIN_TOL)
         check_state(result, hamiltonian)
         from_atoms = hartree_fock(
             ENGINE, basis, atom, symmetry=SymmetrySpec.from_name(name)
@@ -118,6 +125,8 @@ def test_every_class_recovers_the_closed_shell_energy(
     result = solve_scf(water_hamiltonian, spec)
     assert result.structure == spec.structure()
     assert result.energy == pytest.approx(restricted_water.energy, abs=ENERGY_TOL)
+    assert result.spin.square == pytest.approx(0.0, abs=SPIN_TOL)
+    np.testing.assert_allclose(result.spin.vector, 0.0, atol=SPIN_TOL)
     check_state(result, water_hamiltonian)
     if spec.field.value == "paired" and result.structure.is_spinor:
         assert is_kramers_symmetric(result.density.blocks[0])
@@ -139,7 +148,7 @@ def test_embedded_solution_is_stationary_in_every_class(
     overlap = water_hamiltonian.metric(structure)
     orthogonalizer = BlockMatrix(
         BlockStructure.spatial(),
-        (symmetric_orthogonalizer(water_hamiltonian.overlap),),
+        (canonical_orthogonalizer(water_hamiltonian.overlap),),
     ).embed(structure)
     gradient = orbital_gradient(fock, density, overlap, orthogonalizer)
     assert all(
@@ -164,6 +173,9 @@ def test_symmetry_breaking_in_stretched_hydrogen() -> None:
     unrestricted = solve_scf(hamiltonian, SymmetrySpec.from_name("UHF"), guess=broken)
     assert unrestricted.energy < restricted.energy - SYMMETRY_BREAKING_GAIN
     check_state(unrestricted, hamiltonian)
+    # A broken-symmetry singlet is a half-and-half mixture: <S^2> near 1.
+    assert 0.9 < unrestricted.spin.square < 1.0
+    assert unrestricted.spin.vector[2] == pytest.approx(0.0, abs=SPIN_TOL)
     # The unrestricted solution embeds into the generalized class and stays.
     generalized = solve_scf(
         hamiltonian,
@@ -265,8 +277,119 @@ def test_guesses_and_options_are_validated(water_hamiltonian: Hamiltonian) -> No
         ScfOptions(energy_tolerance=0.0)
     with pytest.raises(InputError, match="DIIS"):
         ScfOptions(diis_size=0)
+    with pytest.raises(InputError, match="level shift"):
+        ScfOptions(level_shift=-0.1)
+    with pytest.raises(InputError, match="damping"):
+        ScfOptions(damping=1.0)
+    with pytest.raises(InputError, match="overlap threshold"):
+        ScfOptions(overlap_threshold=0.0)
     with pytest.raises(InputError, match="match"):
         Hamiltonian(np.eye(n + 1), np.eye(n), water_hamiltonian.two_body, 0.0, 5, 5)
+
+
+def test_spin_expectation_matches_the_collinear_formula() -> None:
+    molecule = water_cation()
+    _, hamiltonian = hamiltonian_for(molecule, "sto-3g")
+    result = solve_scf(hamiltonian, SymmetrySpec.from_name("UHF"))
+    alpha, beta = result.density.blocks
+    overlap = hamiltonian.overlap
+    s_z = 0.5
+    expected = s_z * (s_z + 1) + 4 - np.trace(alpha @ overlap @ beta @ overlap)
+    assert result.spin.square == pytest.approx(expected, abs=SPIN_TOL)
+    assert result.spin.vector == pytest.approx((0.0, 0.0, s_z), abs=SPIN_TOL)
+    assert result.spin.square > 0.75
+    with pytest.raises(InputError, match="different bases"):
+        spin_expectation(result.density, overlap[:-1, :-1])
+
+
+def test_generalized_energy_is_invariant_under_spin_rotation() -> None:
+    _, hamiltonian = hamiltonian_for(water_cation(), "sto-3g")
+    collinear = solve_scf(hamiltonian, SymmetrySpec.from_name("GHF"))
+    n = hamiltonian.n_ao
+    theta = 0.7
+    # exp(-i theta sigma_x / 2) rotates the spin about x by theta.
+    rotation = np.kron(
+        np.array(
+            [
+                [np.cos(theta / 2), -1j * np.sin(theta / 2)],
+                [-1j * np.sin(theta / 2), np.cos(theta / 2)],
+            ]
+        ),
+        np.eye(n),
+    )
+    structure = BlockStructure.generalized(Ring.COMPLEX)
+    rotated = collinear.density.embed(structure).map_blocks(
+        lambda block: rotation @ block @ rotation.conj().T
+    )
+    _, energies = hamiltonian.fock(rotated)
+    assert energies.total == pytest.approx(collinear.energy, abs=ENERGY_TOL)
+    spin = spin_expectation(rotated, hamiltonian.overlap)
+    assert spin.square == pytest.approx(collinear.spin.square, abs=SPIN_TOL)
+    s_z = collinear.spin.vector[2]
+    assert spin.vector[2] == pytest.approx(s_z * np.cos(theta), abs=SPIN_TOL)
+    assert abs(spin.vector[1]) == pytest.approx(abs(s_z * np.sin(theta)), abs=SPIN_TOL)
+    assert spin.vector[0] == pytest.approx(0.0, abs=SPIN_TOL)
+    # The rotated determinant is a stationary point of the complex class.
+    noncollinear = solve_scf(
+        hamiltonian, SymmetrySpec.from_name("complex GHF"), guess=rotated
+    )
+    assert noncollinear.n_iterations <= 2
+    assert noncollinear.energy == pytest.approx(collinear.energy, abs=ENERGY_TOL)
+    assert noncollinear.spin.vector[2] == pytest.approx(
+        s_z * np.cos(theta), abs=SPIN_TOL
+    )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ScfOptions(level_shift=0.5),
+        ScfOptions(damping=0.3),
+        ScfOptions(diis_size=1, level_shift=0.2, damping=0.5),
+    ],
+)
+def test_level_shift_and_damping_reach_the_same_state(
+    options: ScfOptions, water_hamiltonian: Hamiltonian, restricted_water: ScfResult
+) -> None:
+    result = solve_scf(water_hamiltonian, SymmetrySpec(), options=options)
+    assert result.energy == pytest.approx(restricted_water.energy, abs=ENERGY_TOL)
+    check_state(result, water_hamiltonian)
+    assert result.n_iterations > restricted_water.n_iterations
+
+
+def test_linearly_dependent_functions_are_removed() -> None:
+    molecule = water()
+    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
+    duplicated = BasisSet(
+        "doubled",
+        basis.atom_symbols,
+        (basis.shells[0], *basis.shells),
+        (0, *basis.shell_atoms),
+    )
+    _, reference = hamiltonian_for(molecule, "sto-3g")
+    expected = solve_scf(reference, SymmetrySpec())
+    two_body = ExactCoulombExchange.from_molecule(ENGINE, duplicated, molecule)
+    hamiltonian = Hamiltonian.from_molecule(ENGINE, duplicated, molecule, two_body)
+    assert np.linalg.eigvalsh(hamiltonian.overlap).min() == pytest.approx(
+        0.0, abs=STRUCTURE_TOL
+    )
+    result = solve_scf(hamiltonian, SymmetrySpec())
+    assert result.energy == pytest.approx(expected.energy, abs=ENERGY_TOL)
+    assert result.mo_coefficients.shapes == ((8, 7),)
+    assert result.mo_energies.blocks[0].shape == (7,)
+    np.testing.assert_allclose(
+        np.sort(result.mo_energies.blocks[0]),
+        np.sort(expected.mo_energies.blocks[0]),
+        atol=SPIN_TOL,
+    )
+    check_state(result, hamiltonian)
+    orthogonalizer = canonical_orthogonalizer(hamiltonian.overlap)
+    assert orthogonalizer.shape == (8, 7)
+    np.testing.assert_allclose(
+        orthogonalizer.T @ hamiltonian.overlap @ orthogonalizer,
+        np.eye(7),
+        atol=STRUCTURE_TOL,
+    )
 
 
 def test_core_guess_is_spin_averaged(water_hamiltonian: Hamiltonian) -> None:
@@ -279,6 +402,11 @@ def test_core_guess_is_spin_averaged(water_hamiltonian: Hamiltonian) -> None:
     guess = core_hamiltonian_guess(cation, structure)
     np.testing.assert_allclose(guess.blocks[0], guess.blocks[1])
     assert float(guess.trace_product(overlap)) == pytest.approx(9.0, abs=STRUCTURE_TOL)
+    # Without a guess the driver starts from exactly this density, not from
+    # the integer aufbau filling of the core orbitals.
+    _, energies = cation.fock(guess)
+    started = solve_scf(cation, SymmetrySpec.from_name("UHF"))
+    assert started.history[0].energy == pytest.approx(energies.total, abs=ENERGY_TOL)
 
 
 def test_atomic_densities_are_spherical_and_superpose_by_atom() -> None:
