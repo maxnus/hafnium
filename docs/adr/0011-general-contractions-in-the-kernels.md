@@ -45,10 +45,12 @@ the exponents and the contraction coefficients enter at the very end.
 
 ## Consequences
 
-- The per-integral cost on correlation-consistent bases drops to the
-  segmented level; the exact in-core path becomes usable for benchmarks
-  at a few hundred functions, although density fitting remains the
-  production route.
+- The per-integral CPU cost on benzene in cc-pVDZ drops eight-fold, to
+  within a factor of two of libcint's, where the segmented def2-SVP basis
+  already was; the exact in-core path becomes usable for benchmarks at a
+  few hundred functions, although density fitting remains the production
+  route. The remaining factor and the thread efficiency of the four-centre
+  kernel (about 20 of 32 threads against libcint's 31) are open.
 - Hand-built tables pass `n_contractions`; omitting it means one
   contraction per entry, so the test tables of the earlier milestones
   are unchanged.

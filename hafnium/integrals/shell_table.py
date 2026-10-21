@@ -118,13 +118,19 @@ class ShellTable:
         return int(self.angular_momenta.shape[0])
 
     @property
+    def contraction_counts(self) -> Array:
+        """Contractions of each entry, ``int64 [shell]``; never ``None`` once built."""
+        assert self.n_contractions is not None
+        return self.n_contractions
+
+    @property
     def n_functions(self) -> int:
         """Number of spherical basis functions, ``2l + 1`` per contraction."""
-        assert self.n_contractions is not None
+        counts = self.contraction_counts
         return int(
             sum(
                 int(k) * (2 * int(l) + 1)
-                for k, l in zip(self.n_contractions, self.angular_momenta, strict=True)
+                for k, l in zip(counts, self.angular_momenta, strict=True)
             )
         )
 

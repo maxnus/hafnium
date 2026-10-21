@@ -54,8 +54,9 @@ uses [Semantic Versioning](https://semver.org/).
   kernel instead of once per contraction (ADR-0011): `ShellTable` entries
   carry all contraction rows of a shell, the primitive Hermite expansions
   are shared, and the four-centre kernel scatters its blocks in parallel.
-  The four-centre integrals of benzene in cc-pVDZ cost the same CPU time
-  as in the segmented def2-SVP basis, fifteen times less than before.
+  The four-centre integrals of benzene in cc-pVDZ cost eight times less
+  CPU time than before, within a factor of two of libcint, as the
+  segmented def2-SVP basis already was.
 - SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
   the result, level shifting and density damping options, and canonical
   orthogonalization that removes linearly dependent basis combinations.

@@ -440,27 +440,31 @@ fn scatter_parallel(
     swaps: [bool; 3],
 ) {
     let row = shape[1] * shape[2] * shape[3];
+    debug_assert_eq!(out.len(), shape[0] * row, "one image of the output");
     if row == 0 || shape[0] == 0 {
         return;
     }
-    let tasks = 4 * rayon::current_num_threads();
-    let rows_per_task = shape[0].div_ceil(tasks).max(1);
+    // Rows hold equal numbers of elements, so one task per thread balances.
+    let rows_per_task = shape[0].div_ceil(rayon::current_num_threads()).max(1);
     out.par_chunks_mut(rows_per_task * row)
         .enumerate()
         .for_each(|(task, chunk)| {
             let first = task * rows_per_task;
             let range = first..first + chunk.len() / row;
             for (bra_pair, pair_blocks) in bra_pairs.iter().zip(blocks) {
+                if !bra_pair.touches(&range) {
+                    // Without the pair swap only the bra shells can supply the
+                    // first index.
+                    if !swaps[2] {
+                        continue;
+                    }
+                }
                 for (ket_index, block) in pair_blocks.iter() {
-                    scatter(
-                        chunk,
-                        &range,
-                        shape,
-                        bra_pair,
-                        &ket_pairs[ket_index],
-                        block,
-                        swaps,
-                    );
+                    let ket_pair = &ket_pairs[ket_index];
+                    if !bra_pair.touches(&range) && !ket_pair.touches(&range) {
+                        continue;
+                    }
+                    scatter(chunk, &range, shape, bra_pair, ket_pair, block, swaps);
                 }
             }
         });
@@ -563,6 +567,14 @@ impl ShellPair {
     /// Spherical functions of shell `which` of the pair.
     fn n_functions_of(&self, which: usize) -> usize {
         self.contractions[which] * (2 * self.ls[which] + 1)
+    }
+
+    /// Whether a function of either shell lies in `range`.
+    fn touches(&self, range: &std::ops::Range<usize>) -> bool {
+        (0..2).any(|which| {
+            let start = self.offsets[which];
+            start < range.end && start + self.n_functions_of(which) > range.start
+        })
     }
 
     /// Spherical function pairs.
@@ -763,7 +775,9 @@ pub(crate) fn coulomb_block(
     let mut intermediate = std::mem::take(&mut workspace.intermediate);
     intermediate.clear();
     intermediate.resize(dims[2] * dims[3] * n_t * n_t * n_t, 0.0);
-    let mut values = vec![0.0; dims[0] * dims[1] * dims[2] * dims[3]];
+    let mut values = std::mem::take(&mut workspace.values);
+    values.clear();
+    values.resize(dims[0] * dims[1] * dims[2] * dims[3], 0.0);
     for (index_bra, pair_bra) in bra.pairs.iter().enumerate() {
         for (index_ket, pair_ket) in ket.pairs.iter().enumerate() {
             let prefactor = primitive_quartet(
@@ -786,6 +800,7 @@ pub(crate) fn coulomb_block(
         }
     }
     workspace.intermediate = intermediate;
+    workspace.values = values;
 }
 
 /// `values[ab][cd] = Σ_{tuv} E^{ab}_{tuv} Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ}
