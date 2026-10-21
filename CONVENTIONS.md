@@ -114,6 +114,7 @@ stored block.
 | `K L M` | k-point sectors (batch axes); a momentum transfer such as `L − K` is written out in prose |
 | `T` | lattice translations (real-space images) |
 | `G` | reciprocal lattice vectors (plane-wave components); lowercase `g` stays grid points |
+| `tx ty tz` | Hermite expansion orders along each axis, only inside integral kernels (ADR-0008) |
 
 Spin never appears as an explicit index in method code; it is part of the
 `BlockStructure`.
@@ -180,6 +181,8 @@ Spin never appears as an explicit index in method code; it is part of the
   real-space lattice sum of erfc-attenuated integrals, the long-range part
   is evaluated in reciprocal space with the `G = 0` term removed; the
   exchange energy carries the probe-charge Ewald (Madelung) correction.
+  Fourier transforms use the kernel `exp(−i G·r)` in the forward
+  direction.
   The range-separation parameter is named `omega` everywhere and results
   must not depend on it beyond the stated tolerance.
 

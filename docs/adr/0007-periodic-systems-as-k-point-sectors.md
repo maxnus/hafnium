@@ -81,7 +81,7 @@ uniform grid, or Gaussian density fitting with a range-separated kernel.
   translation vectors, range-separated Coulomb kernels and the Fourier
   transform of basis-function pairs from the start, although its first
   consumer is molecular. This favours McMurchie–Davidson for the native
-  engine (PLAN.md §12).
+  engine, decided in ADR-0008.
 - `BlockMatrix` operations become batched over k, `trace` applies the
   k weights, `eigh` runs per k, and occupation policies fill across k.
   The molecular code path is the one-k-point case and must not grow a
