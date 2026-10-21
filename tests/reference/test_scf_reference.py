@@ -15,7 +15,7 @@ from hafnium.symmetry import SymmetrySpec
 from tests.hamiltonians import ENGINE, hamiltonian_for
 from tests.molecules import ammonia_tilted, water, water_cation
 from tests.shell_tables import LIBRARY
-from tests.tolerances import ENERGY_TOL, MO_ENERGY_TOL
+from tests.tolerances import ENERGY_TOL, MO_ENERGY_TOL, SPIN_TOL
 
 AUXILIARY = "def2-universal-jkfit"
 
@@ -72,6 +72,7 @@ def check_against(result: ScfResult, expected: dict[str, Any]) -> None:
         np.sort(np.asarray(expected["mo_energies"]).ravel()),
         atol=MO_ENERGY_TOL,
     )
+    assert result.spin.square == pytest.approx(expected["spin_square"], abs=SPIN_TOL)
 
 
 @pytest.mark.reference

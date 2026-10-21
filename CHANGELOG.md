@@ -50,6 +50,9 @@ uses [Semantic Versioning](https://semver.org/).
   occupation policies, DIIS, energy terms and convergence history
   (ADR-0010); `ConvergenceError` carries the last state; reference tests
   against PySCF for RHF, UHF and GHF with exact and fitted integrals.
+- SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
+  the result, level shifting and density damping options, and canonical
+  orthogonalization that removes linearly dependent basis combinations.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.

@@ -217,8 +217,10 @@ def scf_reference(
     mean_field.max_cycle = 200
     energy = float(mean_field.kernel(dm0=guess))
     assert mean_field.converged
+    spin_square = 0.0 if kind == "rhf" else float(mean_field.spin_square()[0])
     return {
         "energy": energy,
         "mo_energies": np.asarray(mean_field.mo_energy),
         "mo_occupations": np.asarray(mean_field.mo_occ),
+        "spin_square": spin_square,
     }
