@@ -11,28 +11,13 @@ from hafnium.backend import Array
 from hafnium.basis import BasisLibrary, BasisSet
 from hafnium.integrals import RustEngine, kinetic, nuclear_attraction, overlap
 from hafnium.molecule import Molecule
+from tests.molecules import ammonia_tilted, water
 from tests.tolerances import INTEGRAL_TOL
 
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
 
-MOLECULES = {
-    "water": Molecule.from_atoms(
-        [
-            ("O", (0.0, 0.0, 0.1173)),
-            ("H", (0.0, 0.7572, -0.4692)),
-            ("H", (0.0, -0.7572, -0.4692)),
-        ]
-    ),
-    "ammonia_tilted": Molecule.from_atoms(
-        [
-            ("N", (0.1, -0.05, 0.0)),
-            ("H", (0.9, 0.3, 0.4)),
-            ("H", (-0.5, 0.8, -0.2)),
-            ("H", (-0.4, -0.7, 0.6)),
-        ]
-    ),
-}
+MOLECULES = {"water": water(), "ammonia_tilted": ammonia_tilted()}
 CASES = [
     ("water", "sto-3g"),
     ("water", "def2-svp"),

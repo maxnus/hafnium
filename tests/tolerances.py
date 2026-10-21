@@ -18,3 +18,8 @@ LITERATURE_TOL = 5e-5
 SPECTRUM_TOL = 1e-10
 # Fitted four-centre integrals against the explicit metric solve.
 DENSITY_FITTING_TOL = 1e-10
+# The erf(ωr)/r kernel with ω = 1e5 against the full 1/r kernel.
+ATTENUATION_LIMIT_TOL = 1e-8
+# Fitted versus exact four-centre integrals: the accuracy of the universal
+# JKFIT auxiliary basis itself, far looser than any kernel tolerance.
+FITTED_INTEGRAL_TOL = 1e-2

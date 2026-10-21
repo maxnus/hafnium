@@ -81,6 +81,28 @@ def coulomb_three_center(
     ``translations`` has shape ``[image, 2, 3]``: auxiliary and ket vectors.
     """
 
+def coulomb_four_center(
+    bra: tuple[ShellTable, ShellTable],
+    ket: tuple[ShellTable, ShellTable],
+    translations: NDArray[np.float64],
+    omega: float | None = None,
+    threshold: float = 0.0,
+) -> NDArray[np.float64]:
+    """Return four-centre Coulomb integrals ``(uv|wx)`` as ``[image, ao, ao, ao, ao]``.
+
+    ``translations`` has shape ``[image, 3, 3]``: the vectors applied to the
+    second bra function and to the two ket functions. Shell quartets whose
+    Schwarz bound is below ``threshold`` are left at zero.
+    """
+
+def schwarz_bounds(
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    omega: float | None = None,
+) -> NDArray[np.float64]:
+    """Return the Schwarz bounds of the shell pairs, ``[image, shell, shell]``."""
+
 def configure_threads(n_threads: int) -> None:
     """Set the size of the kernel thread pool once per process.
 

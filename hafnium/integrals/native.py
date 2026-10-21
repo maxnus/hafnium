@@ -86,3 +86,34 @@ class RustEngine:
             to_host(translations),
             omega,
         )
+
+    def coulomb_four_center(
+        self,
+        bra: tuple[ShellTable, ShellTable],
+        ket: tuple[ShellTable, ShellTable],
+        translations: Array,
+        *,
+        omega: float | None = None,
+        threshold: float = 0.0,
+    ) -> Array:
+        """Four-centre Coulomb integrals ``[image, ao, ao, ao, ao]``."""
+        return _kernels.coulomb_four_center(
+            (_kernel_table(bra[0]), _kernel_table(bra[1])),
+            (_kernel_table(ket[0]), _kernel_table(ket[1])),
+            to_host(translations),
+            omega,
+            threshold,
+        )
+
+    def schwarz_bounds(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        omega: float | None = None,
+    ) -> Array:
+        """Schwarz bounds of the shell pairs ``[image, shell, shell]``."""
+        return _kernels.schwarz_bounds(
+            _kernel_table(bra), _kernel_table(ket), to_host(translations), omega
+        )

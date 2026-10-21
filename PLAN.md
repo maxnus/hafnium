@@ -690,9 +690,10 @@ functions (ADR-0009 records the verified p-shell order); the
 `IntegralEngine` protocol and `RustEngine` exist. Two- and three-centre
 Coulomb integrals with range separation and `DensityFitting` (metric,
 three-centre tensor, fitted `B`) done 2026-10-21, matching libcint and
-PySCF's fitted repulsion. Next: the pair Fourier transform, four-centre
-integrals and Schwarz screening, and the decision whether a libcint
-adapter is still worth building (see §12).
+PySCF's fitted repulsion. Four-centre integrals with Schwarz screening,
+shell-pair bounds and permutational symmetry done 2026-10-21, matching
+libcint to 1e-12 up to g functions. Next: the pair Fourier transform, and
+the decision whether a libcint adapter is still worth building (see §12).
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.
@@ -777,9 +778,9 @@ for periodic results.
 
 1. libxc binding: `pylibxc` versus an own binding through the Rust crate.
 4. Whether to build the `LibcintEngine` at all. Its purpose was to unblock
-   M3 before native integrals exist; with the one-electron kernels native
-   and the DF kernels next, the recommendation is to drop it and keep
-   libcint as the test oracle through PySCF, which avoids compiling
+   M3 before native integrals exist; with the one-electron, density-fitting
+   and four-centre kernels native, the recommendation is to drop it and
+   keep libcint as the test oracle through PySCF, which avoids compiling
    libcint inside the Rust build on every platform.
 2. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M9).

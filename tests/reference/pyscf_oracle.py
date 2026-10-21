@@ -122,3 +122,30 @@ def fitted_repulsion_reference(
     n_ao = mol.nao
     full = np.stack([lib.unpack_tril(row) for row in cderi])
     return np.einsum("Puv,Pwx->uvwx", full, full).reshape(n_ao, n_ao, n_ao, n_ao)
+
+
+def four_center_reference(
+    molecule: Molecule, basis: BasisSet, omega: float | None = None
+) -> np.ndarray:
+    """``(uv|wx)`` in chemists' notation from libcint, full or long-range."""
+    mol = pyscf_molecule(molecule, basis)
+    if omega is None:
+        return np.asarray(mol.intor("int2e"))
+    with mol.with_range_coulomb(omega):
+        return np.asarray(mol.intor("int2e"))
+
+
+def mixed_four_center_reference(
+    molecule: Molecule, first: BasisSet, second: BasisSet, pattern: str
+) -> np.ndarray:
+    """Four-centre integrals whose indices run over two basis sets.
+
+    ``pattern`` names the basis of each index: ``"abab"`` is ``(a b|a b)``
+    with ``a`` in ``first`` and ``b`` in ``second``.
+    """
+    mol_first = pyscf_molecule(molecule, first)
+    mol_second = pyscf_molecule(molecule, second)
+    joined = gto.conc_mol(mol_first, mol_second)
+    ranges = {"a": (0, mol_first.nbas), "b": (mol_first.nbas, joined.nbas)}
+    slices = tuple(bound for letter in pattern for bound in ranges[letter])
+    return np.asarray(joined.intor("int2e", shls_slice=slices))

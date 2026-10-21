@@ -15,20 +15,16 @@ from hafnium.integrals import (
     overlap,
 )
 from hafnium.molecule import Molecule
-from tests.tolerances import INTEGRAL_TOL, LITERATURE_TOL, SPECTRUM_TOL
+from tests.molecules import water
+from tests.tolerances import (
+    ATTENUATION_LIMIT_TOL,
+    INTEGRAL_TOL,
+    LITERATURE_TOL,
+    SPECTRUM_TOL,
+)
 
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
-
-
-def water() -> Molecule:
-    return Molecule.from_atoms(
-        [
-            ("O", (0.0, 0.0, 0.1173)),
-            ("H", (0.0, 0.7572, -0.4692)),
-            ("H", (0.0, -0.7572, -0.4692)),
-        ]
-    )
 
 
 def basis_for(molecule: Molecule, name: str) -> BasisSet:
@@ -144,7 +140,7 @@ def test_attenuated_attraction_is_bounded_by_the_full_kernel() -> None:
     long_range = nuclear_attraction(ENGINE, basis, molecule, omega=0.4)
     nearly_full = nuclear_attraction(ENGINE, basis, molecule, omega=1e5)
     assert np.all(np.diag(long_range) > np.diag(full))
-    np.testing.assert_allclose(nearly_full, full, atol=1e-8)
+    np.testing.assert_allclose(nearly_full, full, atol=ATTENUATION_LIMIT_TOL)
 
 
 def test_spherical_transformation_rows_are_orthonormal_on_the_sphere() -> None:

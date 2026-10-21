@@ -30,6 +30,13 @@ uses [Semantic Versioning](https://semver.org/).
   Hermite workspace, kernel parallelism over the leading shell index with
   rayon, and `configure_threads`; reference tests against libcint and
   PySCF's density fitting.
+- Native four-centre Coulomb integrals `(uv|wx)` with range separation,
+  translations of three of the four functions, Schwarz screening by
+  shell-pair bounds and permutational symmetry wherever the tables and
+  translations allow it; `schwarz_bounds` on the engine and `eri` for
+  molecules; the three-centre kernel evaluates only `μ ≤ ν` for equal
+  tables; reference tests against libcint up to g functions and for mixed
+  basis sets.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.
