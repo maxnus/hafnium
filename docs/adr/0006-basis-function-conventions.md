@@ -1,7 +1,7 @@
 # ADR-0006: Basis function and physical conventions
 
-Status: accepted, 2026-10-21 (ordering and phase to be verified against
-libcint when the integral engine lands; revisit then if they differ).
+Status: accepted, 2026-10-21; the function order of p shells is amended by
+ADR-0009 (verified against libcint 2026-10-21: p shells are `x, y, z`).
 
 ## Context
 

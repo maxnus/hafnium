@@ -23,6 +23,10 @@ Until then the packages are documented directly.
 
 ::: hafnium.basis
 
+## hafnium.integrals
+
+::: hafnium.integrals
+
 ## hafnium.backend
 
 ::: hafnium.backend

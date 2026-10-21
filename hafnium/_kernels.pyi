@@ -13,3 +13,50 @@ def dot(a: NDArray[np.float64], b: NDArray[np.float64]) -> float:
     Raises ``ValueError`` if the lengths differ and ``TypeError`` if an array
     is not contiguous.
     """
+
+def boys_function(n_max: int, t: float) -> NDArray[np.float64]:
+    """Return the Boys function ``F_n(t)`` for ``n = 0, ..., n_max``."""
+
+def spherical_transformation(l: int) -> NDArray[np.float64]:
+    """Return the Cartesian-to-solid-harmonic matrix ``[2l + 1, n_cartesian]``."""
+
+class ShellTable:
+    """Contracted shells in structure-of-arrays form, one entry per contraction."""
+
+    def __init__(
+        self,
+        angular_momenta: NDArray[np.int64],
+        centers: NDArray[np.float64],
+        primitive_offsets: NDArray[np.int64],
+        exponents: NDArray[np.float64],
+        coefficients: NDArray[np.float64],
+    ) -> None: ...
+    @property
+    def n_shells(self) -> int:
+        """Number of shells."""
+    @property
+    def n_functions(self) -> int:
+        """Number of spherical basis functions."""
+
+def overlap(
+    bra: ShellTable, ket: ShellTable, translations: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Return overlap integrals ``[image, bra, ket]`` for each ket translation."""
+
+def kinetic(
+    bra: ShellTable, ket: ShellTable, translations: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Return kinetic energy integrals ``[image, bra, ket]``."""
+
+def nuclear_attraction(
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    charges: NDArray[np.float64],
+    positions: NDArray[np.float64],
+    omega: float | None = None,
+) -> NDArray[np.float64]:
+    """Return nuclear attraction integrals ``[image, bra, ket]`` of point charges.
+
+    ``omega`` selects the long-range kernel ``erf(ωr)/r`` instead of ``1/r``.
+    """

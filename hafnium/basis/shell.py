@@ -1,7 +1,8 @@
 """Contracted shells of spherical Gaussian functions and their normalization.
 
-Conventions (ADR-0006): a shell of angular momentum ``l`` spans ``2l + 1``
-real solid harmonics ordered ``m = -l, ..., +l`` per contraction. The
+Conventions (ADR-0006, ADR-0009): a shell of angular momentum ``l`` spans
+``2l + 1`` real solid harmonics per contraction, ordered ``m = -l, ..., +l``
+except for p shells, which are ordered ``x, y, z``. The
 ``coefficients`` of a shell are those of *normalized* primitives, the
 convention of the Basis Set Exchange and of the Gaussian94 format;
 :meth:`Shell.primitive_coefficients` returns the coefficients of bare

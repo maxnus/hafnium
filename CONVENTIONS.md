@@ -143,10 +143,12 @@ Spin never appears as an explicit index in method code; it is part of the
   `eri_antisym[p, q, r, s]`. The name says which.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
   `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`.
-- Spherical harmonics: real solid harmonics ordered `m = −l, …, +l`
-  (Molden and PySCF ordering); phase convention documented in
-  `basis/spherical.py` with a test against tabulated values. Cartesian
-  functions are supported for input conversion only (decision pending).
+- Spherical harmonics: real solid harmonics ordered `m = −l, …, +l`,
+  except p shells, which are ordered `x, y, z` (Molden, PySCF and libcint
+  ordering, ADR-0009); phase convention of Helgaker, Jørgensen and Olsen
+  equation 6.4.47, implemented in the compiled layer and tested against
+  libcint. Cartesian functions are supported for input conversion only
+  (decision pending).
 - Spin specification on `Molecule` is `n_alpha − n_beta`, never the
   multiplicity 2S+1, to avoid off-by-one errors.
 - Complex derivatives: for a real-valued function `E` of complex
