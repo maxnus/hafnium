@@ -23,9 +23,11 @@ uniform grid, or Gaussian density fitting with a range-separated kernel.
 ## Decision
 
 - `Cell` is a `Molecule` with a `Lattice`. Every molecular function
-  (electron counts, symbols, positions, XYZ output) applies to a cell
-  unchanged; `nuclear_repulsion_energy` becomes an Ewald sum. A molecule
-  is a system without a lattice, not a cell with a large box.
+  (electron counts, symbols, positions) applies to a cell unchanged;
+  `nuclear_repulsion_energy` becomes an Ewald sum, and `to_xyz` writes
+  the lattice as the extended-XYZ `Lattice="..."` field on the comment
+  line, which `Cell.from_xyz` reads back. A molecule is a system without
+  a lattice, not a cell with a large box.
 - `Lattice` stores exactly the periodic translation vectors,
   `vectors[i]` for `i < dimension` with `dimension` in {1, 2, 3}, shape
   `[d, 3]` in Bohr. Open directions carry no vacuum padding; the
@@ -36,31 +38,38 @@ uniform grid, or Gaussian density fitting with a range-separated kernel.
   Matrices, energies, charge and spin are per unit cell, and a charged
   cell is neutralized by a uniform background.
 - k-points are fractional coordinates in the reciprocal basis, wrapped
-  into `[0, 1)`, with weights. Monkhorst–Pack meshes use
+  into `[0, 1)`, with weights. Uniform meshes are Γ-centred by default,
   `k_i = (m_i + s_i) / n_i`, `m_i = 0, ..., n_i − 1`, shift `s_i` in
-  {0, 1/2}. The time-reversal partner of `k` is `(1 − k) mod 1`; a k-point
+  {0, 1/2}; the half shift gives the original Monkhorst–Pack mesh for even
+  `n_i`. The time-reversal partner of `k` is `(1 − k) mod 1`; a k-point
   equal to its partner is a time-reversal invariant momentum.
 - A k-point is a sector label of a `Block`, like the spin sector. All k
   blocks of a sector form one batched array with a leading k axis
-  (`[k, ao, ao]`); the k-point set with its weights and partner map is
+  (`[kpt, ao, ao]`); the k-point set with its weights and partner map is
   static metadata of the `BlockStructure`. The antiunitary operators a
   Fukutome class preserves act on k-space as `k → −k` combined with their
-  molecular action, so the real and paired classes store a half Brillouin
-  zone and derive `−k` by the existing partner rules (complex conjugation,
-  or the Kramers map for quaternionic blocks), with real or quaternionic
-  blocks at time-reversal invariant momenta. The complex classes store
-  every k. Blocks are `complex128` unless every stored k-point is
-  time-reversal invariant, in which case the real classes store `float64`
-  blocks, so a Γ-only cell is identical to the molecular case.
+  molecular action. The real classes store a half Brillouin zone with the
+  block at `−k` the complex conjugate of the block at `k`; paired GHF
+  stores a half zone with the block at `−k` the Kramers map of the block
+  at `k`; paired UHF stores the alpha block at every k and derives
+  `beta(k) = conj(alpha(−k))`; the complex classes store every k. At
+  time-reversal invariant momenta the derived block coincides with the
+  molecular partner rule (real, quaternionic, or `beta = conj(alpha)`).
+  k-point weights sum to one over the full zone, a stored half-zone point
+  carrying the weight of both members of its pair, so that traces and
+  energies are per unit cell. Blocks are `complex128` unless every stored
+  k-point is time-reversal invariant, in which case the real classes store
+  `float64` blocks, so a Γ-only cell is identical to the molecular case.
 - Two-electron terms conserve crystal momentum modulo a reciprocal lattice
   vector; the DF tensor is labelled by the momentum transfer `q`. The
-  periodic Coulomb terms (nuclear attraction and the DF tensor) use
-  range-separated Gaussian density fitting: the short-range part is a
-  real-space lattice sum of erfc-attenuated integrals, the long-range part
-  is evaluated in reciprocal space from the analytic Fourier transform of
-  Gaussian pair densities, the `G = 0` term is removed by the background,
-  and the exchange divergence is handled by the probe-charge Ewald
-  (Madelung) correction. FFT-based density fitting is not planned: it needs
+  periodic Coulomb terms use one range separation of the kernel: the
+  short-range part is a real-space lattice sum of erfc-attenuated
+  integrals, the long-range part is evaluated in reciprocal space from the
+  analytic Fourier transform of Gaussian pair densities, the `G = 0` term
+  is removed by the background, and the exchange divergence is handled by
+  the probe-charge Ewald (Madelung) correction. The two-electron terms go
+  through Gaussian density fitting in that split; the nuclear attraction
+  uses the split directly, without an auxiliary basis. FFT-based density fitting is not planned: it needs
   pseudopotentials to be affordable with all-electron Gaussian bases and
   does not extend cleanly to chains and slabs.
 - Translational symmetry breaking with a wavevector `Q` is described by a
@@ -89,5 +98,6 @@ uniform grid, or Gaussian density fitting with a range-separated kernel.
   basis and the Ewald exchange correction; the residual due to the
   fitting scheme is recorded with the reference data.
 - Revisit if an application needs explicit `Q` coupling, plane-wave or
-  pseudopotential treatment, or if batched storage proves wasteful for
-  k sets with very uneven block sizes after space-group reduction.
+  pseudopotential treatment, or if little-group blocking at high-symmetry
+  k-points (M6) makes block shapes differ across k, which batched storage
+  cannot express.

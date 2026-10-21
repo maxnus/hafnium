@@ -30,7 +30,7 @@ authoritative and this file explains the intent.
   is spelled out (`coefficients`, not `coeffs`; `auxiliary`, not `aux`,
   except as an index letter).
 - Counts carry the prefix `n_`: `n_ao`, `n_mo`, `n_occ`, `n_vir`, `n_aux`,
-  `n_electrons`, `n_alpha`, `n_beta`, `n_atoms`, `n_grid`, `n_k` (k-points).
+  `n_electrons`, `n_alpha`, `n_beta`, `n_atoms`, `n_grid`, `n_kpt`.
 - Functions that compute something are verbs: `build_fock`,
   `compute_energy`, `transform_to_mo`. Predicates start with `is_` or
   `has_`. Constructors that parse input are `from_<source>` class methods
@@ -59,6 +59,7 @@ authoritative and this file explains the intent.
 | `salc` | symmetry-adapted linear combination |
 | `occ`, `vir` | occupied, virtual (only in `n_occ`, `n_vir`, slice names) |
 | `rhf`, `uhf`, `ghf` | restricted, unrestricted, generalized HF (only in user-facing names) |
+| `kpt` | k-point (as an axis name and in `n_kpt`) |
 
 ### 2.3 Mathematical names
 
@@ -80,12 +81,16 @@ Public signatures use descriptive names:
 | antisymmetrized MO ERIs (physicists') | `eri_antisym` | `[mo, mo, mo, mo]` |
 | singles / doubles amplitudes | `t1`, `t2` | `[occ, vir]`, `[occ, occ, vir, vir]` |
 | lattice vectors (rows) | `lattice.vectors` | `[d, 3]`, Bohr |
-| k-points | `k_points.fractional` | `[k, d]`, reciprocal-basis fractions |
+| k-points | `k_points.fractional` | `[kpt, d]`, reciprocal-basis fractions |
+| k-point weights | `k_points.weights` | `[kpt]`, summing to one |
 
-Periodic quantities carry a leading k axis in front of the molecular shape:
-`fock[k, ao, ao]`, `mo_coefficients[k, ao, mo]`, `mo_energies[k, mo]`.
-The DF tensor is labelled by the momentum transfer as well,
-`df_tensor[q, k, aux, ao, ao]`, with the second AO index at `k + q`.
+Periodic quantities carry a leading k-point axis in front of the molecular
+shape: `fock[kpt, ao, ao]`, `mo_coefficients[kpt, ao, mo]`,
+`mo_energies[kpt, mo]`. The DF tensor carries the two k-points of its AO
+pair, `df_tensor[kpt, kpt, aux, ao, ao]`, the first AO index at the first
+k-point and the second at the second; their difference is the momentum
+transfer. The axis is named `kpt`, never `k`, because `k` is an occupied
+orbital in §2.4.
 
 Inside a short numerical function (under roughly 30 lines) single-letter
 mathematical names (`S`, `F`, `D`, `C`, `h`) are allowed when the
@@ -106,7 +111,7 @@ stored block.
 | `g` | grid points |
 | `A B` | atoms |
 | `X Y` | spin components, only inside kernels that handle spin explicitly |
-| `K L M` | k-points (batch axes); `q` for a momentum transfer in prose, never as a subscript |
+| `K L M` | k-point sectors (batch axes); a momentum transfer such as `L − K` is written out in prose |
 | `T` | lattice translations (real-space images) |
 | `G` | reciprocal lattice vectors (plane-wave components); lowercase `g` stays grid points |
 
@@ -157,8 +162,13 @@ Spin never appears as an explicit index in method code; it is part of the
   `b_i · a_j = 2π δ_ij` (with the 2π). k-points are fractional coordinates
   in the reciprocal basis wrapped into `[0, 1)`; the time-reversal partner
   of `k` is `(1 − k) mod 1`, and `k` is time-reversal invariant when the
-  two coincide. Monkhorst–Pack meshes use `k_i = (m_i + s_i) / n_i` with
-  `m_i = 0, ..., n_i − 1` and shift `s_i` in {0, 1/2}.
+  two coincide. Uniform meshes are Γ-centred by default,
+  `k_i = (m_i + s_i) / n_i` with `m_i = 0, ..., n_i − 1` and shift `s_i`
+  in {0, 1/2}; the half shift reproduces the original Monkhorst–Pack mesh
+  for even `n_i` (for odd `n_i` the two coincide), and the name
+  "Monkhorst–Pack" is reserved for that original definition. k-point
+  weights sum to one, so traces and energies are per cell; a stored
+  half-zone point carries the weight of its time-reversal pair.
 - Bloch sums: `φ_μ^k(r) = Σ_T exp(i k·T) φ_μ(r − T)` without a `1/√N_k`
   factor, so `S(k) = Σ_T exp(i k·T) S_T` where `S_T` is the overlap
   between the cell at the origin and the cell at `T`, and

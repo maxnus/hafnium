@@ -125,9 +125,9 @@ Version 1: one-electron integrals (overlap, kinetic, nuclear attraction,
 multipoles), four-centre electron repulsion integrals with Schwarz screening,
 two- and three-centre integrals for DF, range-separated (erf- and
 erfc-attenuated) variants of every Coulomb-type integral, the Fourier
-transform of basis-function pairs and of auxiliary functions, lattice-sum
-drivers that evaluate any of these over periodic images with distance
-screening, first-derivative integrals of all of these, DFT grid generation
+transform of basis-function pairs and of auxiliary functions, image loops
+that accumulate any of these over a given list of lattice translations
+with distance screening, first-derivative integrals of all of these, DFT grid generation
 (radial schemes, Lebedev angular grids, Becke partitioning) and
 basis-function values and gradients on grid batches.
 
@@ -164,10 +164,10 @@ hafnium/                   Python package
   basis/                 BasisSet, shells, normalization, BSE client + cache
   symmetry/              groups, irreps, SALCs, spin/time-reversal descriptors,
                          k-point sets, space groups
-  structured/            Structure, BlockMatrix, BlockTensor
+  structured/            BlockStructure, BlockMatrix, BlockTensor
   backend/               array namespace, device/dtype policy, linalg shims
   integrals/             IntegralEngine protocol, rust + libcint adapters, df,
-                         periodic/ (lattice sums, Ewald, reciprocal-space kernels)
+                         periodic/ (image lists, Bloch phases, Ewald, kernels)
   grid/                  DFT grids (Python orchestration of Rust kernels)
   xc/                    functional registry, libxc binding
   scf/                   SCF driver, hf, ks, guesses, convergence, stability
@@ -257,9 +257,11 @@ covers this, but it is out of scope for version 1 (§5.8).
 Names are proposals; `CONVENTIONS.md` fixes them.
 
 `BlockStructure` describes an algebra: an ordered list of `Block` records, each
-with a sector label (spin sector, irrep, k-point), a dimension, a
+with a sector label (spin sector, irrep), a dimension, a
 ring (`REAL`, `COMPLEX`, `QUATERNION`), a weight, and an optional partner
-rule (`COPY` or `CONJUGATE`) referencing another block. A `BlockStructure` also
+rule (`COPY` or `CONJUGATE`) referencing another block. For periodic
+systems the k-point set is a batch axis shared by every block, not a
+label on individual blocks (§5.9). A `BlockStructure` also
 knows the mapping from AO basis functions to sector basis functions (the
 SALC transformation) and how electron counts are distributed over sectors
 (the filling policy: n_α and n_β for collinear sectors, N for a generalized
@@ -383,23 +385,31 @@ path.
   sector have the same shape and are stored as one batched array with a
   leading k axis, which keeps `matmul`, `eigh` and `einsum` batched on
   GPUs and traceable under JAX; the k-point set with its weights is static
-  metadata of the `BlockStructure`, and per-k weights extend the block
-  weights. A system without a lattice is a molecule, so the molecular path
-  is the special case of one k-point and no lattice sum.
+  metadata of the `BlockStructure`, and per-k weights, summing to one
+  over the full zone, extend the block weights so that traces and
+  energies are per cell. A system without a lattice is a molecule, so the
+  molecular path is the special case of one k-point and no lattice sum.
 - **Time reversal pairs k with −k.** Complex conjugation maps a Bloch sum
   at k to the one at −k, so the antiunitary operators a Fukutome class
   preserves (K, Θ) act on k-space as k → −k combined with their molecular
-  action. The partner rules of §5.2 therefore apply along the k axis: in
-  the real classes the block at −k is the complex conjugate of the block
-  at k, in the paired classes it is the Kramers map ΘXΘ⁻¹ already used for
-  quaternionic blocks, and in the complex classes every k is stored. The
-  real and paired classes store a half Brillouin zone; at time-reversal
-  invariant momenta (k ≡ −k, for example Γ, or every point of an unshifted
-  2×2×2 mesh) the block is itself real or quaternionic. The eight classes
-  carry over unchanged: real RHF with k-points is TICS with F(−k) = F(k)*,
-  complex RHF (CCW) breaks that pairing and describes current-carrying
-  states, paired GHF (TSCW) keeps Kramers pairs across ±k, and so on.
-  `embed` materializes the −k partners, `project` averages them.
+  action. The partner rules of §5.2 therefore apply along the k axis,
+  composed with the map k → −k: in the real classes (TICS, ASDW, TSDW) the
+  block at −k is the complex conjugate of the block at k; in paired GHF
+  (TSCW) the block at −k is the Kramers map ΘXΘ⁻¹ of the block at k, the
+  map already used for quaternionic blocks; in paired UHF (ASCW) the beta
+  block at k is the complex conjugate of the alpha block at −k, so the
+  alpha block is stored at every k and beta is derived everywhere; in the
+  complex classes (CCW, ASW, TSW) every k of every block is stored. The
+  real classes and paired GHF therefore store a half Brillouin zone, with
+  a stored point carrying the weight of both members of its pair, and at
+  time-reversal invariant momenta (k ≡ −k, for example Γ, or every point
+  of an unshifted 2×2×2 mesh) the derived block coincides with the
+  molecular partner rule: the block is real, or quaternionic for paired
+  GHF, or beta = conj(alpha) for paired UHF. The eight classes carry over
+  unchanged: real RHF with k-points is TICS with F(−k) = F(k)*, complex
+  RHF (CCW) breaks that pairing and describes current-carrying states,
+  paired GHF (TSCW) keeps Kramers pairs across ±k, and so on. `embed`
+  materializes the derived partners, `project` averages them.
 - **Translational symmetry breaking.** Density and spin waves with a
   wavevector Q ≠ 0, the literal meaning of the Fukutome names, are
   described in a supercell commensurate with Q (band folding). Explicit
@@ -418,12 +428,15 @@ path.
 - **Coulomb sums.** The electron–nuclear, electron–electron and
   nuclear–nuclear lattice sums diverge separately and converge together
   for a neutral cell. Both the nuclear attraction and the DF tensor use
-  range-separated Gaussian density fitting: the short-range part is a
-  real-space lattice sum of erfc-attenuated integrals, the long-range part
-  is evaluated in reciprocal space from the analytic Fourier transform of
-  Gaussian pair densities, with the G = 0 term removed by a uniform
-  background and the exchange divergence handled by the probe-charge Ewald
-  (Madelung) correction. The reciprocal-space kernel is 4π/G² in three
+  the same range separation of the Coulomb kernel: the short-range part is
+  a real-space lattice sum of erfc-attenuated integrals, the long-range
+  part is evaluated in reciprocal space from the analytic Fourier
+  transform of Gaussian pair densities (against the nuclear structure
+  factor for the nuclear attraction, against the auxiliary functions for
+  the DF tensor), with the G = 0 term removed by a uniform background and
+  the exchange divergence handled by the probe-charge Ewald (Madelung)
+  correction. Only the two-electron terms are fitted; the one-electron
+  Hamiltonian carries no fitting error. The reciprocal-space kernel is 4π/G² in three
   dimensions and the analytic kernel of the reduced dimension for slabs and
   chains, which is why no vacuum padding is needed. The nuclear repulsion
   is an Ewald sum. Results must be independent of the range-separation
@@ -494,7 +507,8 @@ group and a standard orientation. Constructors accept Ångström input and
 convert once. `Lattice`: one to three translation vectors, reciprocal
 vectors, fractional coordinates, translations within a cutoff. `Cell`: a
 `Molecule` with a `Lattice`, with charge and spin per cell, supercell
-construction, and an Ewald nuclear repulsion. Owns: units at the boundary.
+construction, extended-XYZ input and output that keep the lattice, and an
+Ewald nuclear repulsion. Owns: units at the boundary.
 
 **basis.** `Shell` (angular momentum, exponents, contraction
 coefficients, spherical or Cartesian), `BasisSet` (shells per atom, AO
@@ -506,9 +520,9 @@ harmonic phase conventions, normalization.
 
 **symmetry.** Point groups and irrep tables (Abelian in version 1), SALC
 construction, `SpinSymmetry`, `Field`, `SymmetrySpec`, the mapping to
-`BlockStructure` and to Fukutome names. k-point sets: Monkhorst–Pack
-meshes and explicit lists, time-reversal pairing and weights, momentum
-conservation tables. Point-group detection of molecules and, through
+`BlockStructure` and to Fukutome names. k-point sets: uniform
+(Γ-centred or shifted) meshes and explicit lists, time-reversal pairing
+and weights, momentum conservation tables. Point-group detection of molecules and, through
 spglib, space groups of crystals with the irreducible wedge.
 
 **structured.** `BlockStructure`, `BlockMatrix`, `BlockTensor`, embed/project
@@ -524,10 +538,13 @@ derivatives, screening data), each over shell pairs at explicit translation
 vectors so that molecules and cells share it, `RustEngine`,
 `LibcintEngine`, `DensityFitting` (auxiliary basis, metric, Cholesky or
 eigen decomposition of the metric, `B[aux, ao, ao]`), `CoulombExchangeBuilder`
-implementations (DF, in-core exact, later AO-direct). `periodic/`: lattice
-sums with distance screening, Ewald sums per dimension, reciprocal-space
-Coulomb kernels per dimension, range-separated DF with momentum transfer,
-the Madelung exchange correction.
+implementations (DF, in-core exact, later AO-direct). `periodic/`: image
+lists and real-space cutoffs, Bloch phases, Ewald sums per dimension,
+reciprocal-space Coulomb kernels per dimension, range-separated DF with
+momentum transfer, the Madelung exchange correction. The image loops
+themselves run in the compiled layer (§3.4), which receives the image list
+and the screening threshold from here; the cutoff policy lives only in
+Python.
 
 **grid.** Radial schemes (Treutler–Ahlrichs, Mura–Knowles), Lebedev
 angular grids, Becke partitioning, pruning, batching; basis values and
@@ -584,7 +601,13 @@ module. No printing from library code.
   - AD gradients equal analytic gradients equal finite differences;
   - results identical across backends to a stated tolerance.
 - Periodic consistency tests, required for every periodic feature:
-  - a Γ-point cell with a large box reproduces the molecular result;
+  - a Γ-point cell with a large box converges to the molecular result as
+    the box grows: to `ENERGY_TOL` for the lattice-summed overlap and
+    kinetic matrices (Gaussian tails), algebraically for total energies,
+    whose residual at a given box size is checked against the expected
+    power law; the Ewald nuclear repulsion is checked against tabulated
+    Madelung constants in three, two and one dimensions and against
+    PySCF's `energy_nuc` instead, since the nuclei alone are not neutral;
   - a supercell at Γ reproduces the primitive cell with the matching
     k-point mesh (band folding), per cell;
   - storing the full Brillouin zone and storing the half zone with
@@ -669,17 +692,21 @@ time-reversal pairing and weights, the k axis on `BlockStructure` and
 `BlockMatrix` (batched blocks, half-zone storage with conjugate and
 Kramers partners along k), lattice-summed overlap and kinetic integrals,
 Ewald nuclear repulsion in one to three dimensions. Exit: the large-box
-test reproduces molecular overlap, kinetic and nuclear repulsion;
-`BlockMatrix` property tests pass for all eight classes with k-points; the
-band-folding test holds for the kinetic band structure.
+test reproduces the molecular overlap and kinetic matrices to
+`ENERGY_TOL`; the Ewald sums reproduce tabulated Madelung constants in
+three, two and one dimensions and PySCF's `energy_nuc`, independently of
+the Ewald splitting parameter; `BlockMatrix` property tests pass for all
+eight classes with k-points; the band-folding test holds for the kinetic
+band structure.
 
 **M5 Periodic Hartree–Fock.** Range-separated Gaussian density fitting
 with momentum transfer, nuclear attraction by the same split, k-point J
 and K, the Madelung exchange correction, occupations across k, all eight
 classes from the M3 driver; three dimensions first, then the two- and
-one-dimensional reciprocal-space kernels. Exit: the periodic consistency
-tests of §8 pass to `ENERGY_TOL`, and KRHF/KUHF/KGHF agree with PySCF's
-`pbc` module within the recorded fitting residual.
+one-dimensional reciprocal-space kernels. Exit: the band-folding and
+half-zone tests of §8 pass to `ENERGY_TOL`, the range-separation and
+large-box tests pass to their stated tolerances, and KRHF/KUHF/KGHF agree
+with PySCF's `pbc` module within the recorded fitting residual.
 
 **M6 Spatial symmetry.** Molecular point groups: detection and
 orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.
@@ -740,12 +767,14 @@ for periodic results.
    McMurchie–Davidson; Rys is better for high angular momentum ERIs,
    McMurchie–Davidson is simpler and good for one-electron and DF terms;
    both can coexist). Periodic systems tilt this towards
-   McMurchie–Davidson: its Hermite intermediates give the Fourier
-   transform of a pair density analytically (a polynomial times a
-   Gaussian in G) and range separation only changes the Boys-function
-   argument, whereas Rys quadrature has no equally direct route to either.
-   Recommendation: McMurchie–Davidson for everything in M2, Rys for
-   four-centre ERIs later only if profiling demands it.
+   McMurchie–Davidson: the Fourier transform of a pair density is a
+   polynomial times a Gaussian in G when written in the Hermite Gaussians
+   that McMurchie–Davidson builds anyway, so one set of intermediates
+   serves the real-space integrals, their range-separated variants and
+   the reciprocal-space terms. Range separation itself is equally simple
+   in both schemes (libcint evaluates erf-attenuated integrals with Rys
+   quadrature). Recommendation: McMurchie–Davidson for everything in M2,
+   Rys for four-centre ERIs later only if profiling demands it.
 2. libxc binding: `pylibxc` versus an own binding through the Rust crate.
 3. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M9).
