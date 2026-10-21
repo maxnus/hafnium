@@ -116,6 +116,17 @@ class BasisSet:
             labels.extend(
                 FunctionLabel(atom, self.atom_symbols[atom], shell_index, l, c, m)
                 for c in range(shell.n_contractions)
-                for m in range(-l, l + 1)
+                for m in m_values(l)
             )
         return tuple(labels)
+
+
+def m_values(angular_momentum: int) -> tuple[int, ...]:
+    """Return the ``m`` of each function of a shell in storage order (ADR-0009).
+
+    ``m = -l, ..., +l`` except for p shells, which are ordered ``x, y, z``,
+    that is ``m = +1, -1, 0``, as in libcint, PySCF and Molden.
+    """
+    if angular_momentum == 1:
+        return (1, -1, 0)
+    return tuple(range(-angular_momentum, angular_momentum + 1))

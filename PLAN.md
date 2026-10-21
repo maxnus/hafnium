@@ -87,8 +87,8 @@ weaknesses. The two weaknesses are addressed as follows.
 - No native integral library. Bootstrap with libcint (C, BSD-2-Clause)
   behind the `IntegralEngine` interface so that the Python architecture can
   be built and validated immediately. Then write native Rust integrals
-  (Rys quadrature or McMurchie–Davidson; decide in an ADR) and switch the
-  default once they match libcint to tight tolerances. libcint remains as a
+  in the McMurchie–Davidson scheme (ADR-0008) and switch the default once
+  they match libcint to tight tolerances. libcint remains as a
   test oracle. The Rust project REST ships `rest_libcint`, which shows this
   binding is practical.
 - Weak GPU story. Dense linear algebra, which is most of the floating-point
@@ -675,12 +675,22 @@ Exchange revisions (the cache already records them).
 cells alike: shell pairs at explicit translation vectors, range-separated
 Coulomb kernels, and the Fourier transform of basis-function pairs.
 `LibcintEngine` for the real-space integrals, DF metric and 3-index
-tensor, Schwarz screening. Native Rust one-electron integrals, then ERIs,
-then DF integrals, each validated against libcint; the pair Fourier
-transform is native from the start, since libcint has none. Exit: the Rust
-engine matches libcint to 1e-12 on a test suite of molecules and basis
-sets up to f functions, and the Fourier transforms match numerical
-quadrature.
+tensor, Schwarz screening. Native Rust kernels in the McMurchie–Davidson
+scheme (ADR-0008), in this order: Boys function, one-electron integrals,
+two- and three-centre Coulomb integrals with range separation, the pair
+Fourier transform (native from the start, since libcint has none), then
+four-centre integrals, each validated against libcint before it replaces
+the adapter. Exit: the Rust engine matches libcint to 1e-12 on a test
+suite of molecules and basis sets up to f functions, and the Fourier
+transforms match numerical quadrature. Status: Boys function, Hermite
+intermediates, the spherical transformation and the one-electron kernels
+(overlap, kinetic, nuclear attraction with range separation, all with ket
+translations) done 2026-10-21 and matching libcint to 1e-12 up to g
+functions (ADR-0009 records the verified p-shell order); the
+`IntegralEngine` protocol and `RustEngine` exist. Next: two- and
+three-centre Coulomb integrals, the pair Fourier transform, four-centre
+integrals, and the decision whether a libcint adapter is still worth
+building once the DF kernels are native (see §12).
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.
@@ -763,22 +773,15 @@ for periodic results.
 
 ## 12. Open decisions needing your input
 
-1. Integral algorithm for the native engine (Rys quadrature or
-   McMurchie–Davidson; Rys is better for high angular momentum ERIs,
-   McMurchie–Davidson is simpler and good for one-electron and DF terms;
-   both can coexist). Periodic systems tilt this towards
-   McMurchie–Davidson: the Fourier transform of a pair density is a
-   polynomial times a Gaussian in G when written in the Hermite Gaussians
-   that McMurchie–Davidson builds anyway, so one set of intermediates
-   serves the real-space integrals, their range-separated variants and
-   the reciprocal-space terms. Range separation itself is equally simple
-   in both schemes (libcint evaluates erf-attenuated integrals with Rys
-   quadrature). Recommendation: McMurchie–Davidson for everything in M2,
-   Rys for four-centre ERIs later only if profiling demands it.
-2. libxc binding: `pylibxc` versus an own binding through the Rust crate.
-3. Whether JAX is a development target from M1 (recommended: honor its
+1. libxc binding: `pylibxc` versus an own binding through the Rust crate.
+4. Whether to build the `LibcintEngine` at all. Its purpose was to unblock
+   M3 before native integrals exist; with the one-electron kernels native
+   and the DF kernels next, the recommendation is to drop it and keep
+   libcint as the test oracle through PySCF, which avoids compiling
+   libcint inside the Rust build on every platform.
+2. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M9).
-4. Space-group detection: spglib (recommended; the standard library for
+3. Space-group detection: spglib (recommended; the standard library for
    crystal symmetry, C with Python bindings, BSD-3-Clause) as an optional
    dependency, versus an own implementation. Molecular point groups stay
    in-house either way, since spglib does not treat finite systems.
@@ -792,7 +795,9 @@ functions ordered m = −l..+l with BSE normalization conventions and CODATA
 2018 units (2026-10-21, ADR-0006); periodic systems as k-point sectors,
 with `Cell` as a `Molecule` plus a `Lattice` of only the periodic vectors,
 Bloch and k-point conventions, and range-separated density fitting for
-the periodic Coulomb terms (2026-10-21, ADR-0007).
+the periodic Coulomb terms (2026-10-21, ADR-0007); McMurchie–Davidson for
+every integral type in the native engine, with Rys quadrature held in
+reserve for four-centre integrals (2026-10-21, ADR-0008).
 
 ## 13. Risks
 
@@ -815,6 +820,12 @@ the periodic Coulomb terms (2026-10-21, ADR-0007).
   Table I: the Fukutome classification with orbital-coefficient structures.
 - H. Fukutome, Int. J. Quantum Chem. 20, 955 (1981): original classification.
 - H. J. Monkhorst, J. D. Pack, Phys. Rev. B 13, 5188 (1976): k-point meshes.
+- L. E. McMurchie, E. R. Davidson, J. Comput. Phys. 26, 218 (1978): the
+  Hermite Gaussian integral scheme.
+- R. Ahlrichs, Phys. Chem. Chem. Phys. 8, 3072 (2006): three-centre
+  integrals in the Hermite form for density fitting.
+- T. Helgaker, P. Jørgensen, J. Olsen, *Molecular Electronic-Structure
+  Theory*, Wiley (2000), chapter 9: integral evaluation.
 - Q. Sun, T. C. Berkelbach, J. D. McClain, G. K.-L. Chan, J. Chem. Phys.
   147, 164119 (2017): Gaussian and mixed density fitting for periodic
   systems, the exchange divergence and low-dimensional kernels in PySCF.

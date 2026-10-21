@@ -13,6 +13,16 @@ uses [Semantic Versioning](https://semver.org/).
   sampling added to the design: k-points as sectors of the structured
   matrices, time-reversal pairing of ±k, Bloch and lattice conventions
   (ADR-0007), and a revised roadmap.
+- McMurchie–Davidson chosen for every integral type in the native engine
+  (ADR-0008).
+- Native one-electron integrals: the Boys function, Hermite expansion and
+  Hermite Coulomb intermediates, the Cartesian-to-solid-harmonic
+  transformation, and overlap, kinetic and nuclear attraction kernels with
+  ket translations and an erf-attenuated option; the `IntegralEngine`
+  protocol, `RustEngine`, `ShellTable` and molecular convenience functions;
+  reference tests against libcint through PySCF with recorded data.
+- p shells are ordered `x, y, z` as in libcint, PySCF and Molden
+  (ADR-0009); `FunctionLabel.m` follows the storage order.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.

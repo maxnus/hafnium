@@ -14,3 +14,5 @@ ADR that supersedes it.
 | [0005](0005-immutable-data-with-dataclasses.md) | Immutable data with standard-library dataclasses | accepted 2026-10-21 |
 | [0006](0006-basis-function-conventions.md) | Basis function and physical conventions | accepted 2026-10-21 |
 | [0007](0007-periodic-systems-as-k-point-sectors.md) | Periodic systems as k-point sectors | accepted 2026-10-21 |
+| [0008](0008-mcmurchie-davidson-integrals.md) | McMurchie–Davidson for the native integral engine | accepted 2026-10-21 |
+| [0009](0009-p-shell-order-verified.md) | Spherical function conventions verified against libcint | accepted 2026-10-21 |

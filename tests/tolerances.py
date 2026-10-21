@@ -10,3 +10,9 @@ KERNEL_REL_TOL = 1e-12
 STRUCTURE_TOL = 1e-10
 # Eigen-decompositions: residuals of F C - S C e and orthonormality.
 EIGEN_TOL = 1e-9
+# The Boys function against arbitrary-precision quadrature (ADR-0008).
+BOYS_REL_TOL = 1e-14
+# Four-decimal literature tables (Szabo and Ostlund).
+LITERATURE_TOL = 5e-5
+# Spectra of rotated and translated copies of a molecule.
+SPECTRUM_TOL = 1e-10

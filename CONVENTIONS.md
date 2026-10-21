@@ -114,6 +114,7 @@ stored block.
 | `K L M` | k-point sectors (batch axes); a momentum transfer such as `L − K` is written out in prose |
 | `T` | lattice translations (real-space images) |
 | `G` | reciprocal lattice vectors (plane-wave components); lowercase `g` stays grid points |
+| `tx ty tz` | Hermite expansion orders along each axis, only inside integral kernels (ADR-0008) |
 
 Spin never appears as an explicit index in method code; it is part of the
 `BlockStructure`.
@@ -143,10 +144,12 @@ Spin never appears as an explicit index in method code; it is part of the
   `eri_antisym[p, q, r, s]`. The name says which.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
   `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`.
-- Spherical harmonics: real solid harmonics ordered `m = −l, …, +l`
-  (Molden and PySCF ordering); phase convention documented in
-  `basis/spherical.py` with a test against tabulated values. Cartesian
-  functions are supported for input conversion only (decision pending).
+- Spherical harmonics: real solid harmonics ordered `m = −l, …, +l`,
+  except p shells, which are ordered `x, y, z` (Molden, PySCF and libcint
+  ordering, ADR-0009); phase convention of Helgaker, Jørgensen and Olsen
+  equation 6.4.47, implemented in the compiled layer and tested against
+  libcint. Cartesian functions are supported for input conversion only
+  (decision pending).
 - Spin specification on `Molecule` is `n_alpha − n_beta`, never the
   multiplicity 2S+1, to avoid off-by-one errors.
 - Complex derivatives: for a real-valued function `E` of complex
@@ -178,6 +181,8 @@ Spin never appears as an explicit index in method code; it is part of the
   real-space lattice sum of erfc-attenuated integrals, the long-range part
   is evaluated in reciprocal space with the `G = 0` term removed; the
   exchange energy carries the probe-charge Ewald (Madelung) correction.
+  Fourier transforms use the kernel `exp(−i G·r)` in the forward
+  direction.
   The range-separation parameter is named `omega` everywhere and results
   must not depend on it beyond the stated tolerance.
 

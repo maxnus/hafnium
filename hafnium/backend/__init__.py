@@ -7,6 +7,7 @@ and JAX arrays. New arrays that are not derived from existing ones are
 created with :func:`default_namespace`.
 """
 
+from hafnium.backend.host import host_array, to_host
 from hafnium.backend.linalg import adjoint, eigh, generalized_eigh
 from hafnium.backend.namespace import array_namespace, default_namespace
 from hafnium.backend.types import Array, Namespace
@@ -19,4 +20,6 @@ __all__ = [
     "default_namespace",
     "eigh",
     "generalized_eigh",
+    "host_array",
+    "to_host",
 ]
