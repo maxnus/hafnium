@@ -13,6 +13,8 @@ uses [Semantic Versioning](https://semver.org/).
   sampling added to the design: k-points as sectors of the structured
   matrices, time-reversal pairing of ±k, Bloch and lattice conventions
   (ADR-0007), and a revised roadmap.
+- McMurchie–Davidson chosen for every integral type in the native engine
+  (ADR-0008).
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.
