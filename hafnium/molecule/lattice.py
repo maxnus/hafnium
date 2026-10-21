@@ -144,7 +144,8 @@ class Lattice:
     def wrap(self, positions: Array) -> Array:
         """Translate ``positions`` ``[n, 3]`` into the home cell.
 
-        The fractional coordinates of the result lie in ``[0, 1)``; the
+        The fractional coordinates of the result lie in ``[0, 1)`` up to
+        rounding (a coordinate just below an integer can land on 1.0); the
         components along open directions are unchanged.
         """
         xp = array_namespace(positions)

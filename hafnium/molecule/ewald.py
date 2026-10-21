@@ -156,8 +156,7 @@ def ewald_energy(
         within ``precision``.
     """
     xp = array_namespace(charges, positions)
-    n_charges = int(charges.shape[0]) if charges.ndim == 1 else -1
-    if charges.ndim != 1 or positions.shape != (n_charges, 3):
+    if charges.ndim != 1 or positions.shape != (int(charges.shape[0]), 3):
         raise InputError("charges have shape [n] and positions shape [n, 3]")
     parameters = ewald_parameters(lattice, charges, omega=omega, precision=precision)
     wrapped = lattice.wrap(positions)

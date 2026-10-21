@@ -190,7 +190,8 @@ fn real_space_sum(
 }
 
 /// `(1 / 2V) Σ_ij Z_i Z_j [Σ_{G≠0} cos(G·r_ij) K(G, r_ij⊥) + K_0(r_ij⊥)]`
-/// with the kernels of [`Geometry`].
+/// with the kernels of [`Geometry`], over unordered pairs since every
+/// factor is symmetric in `i` and `j`.
 fn reciprocal_space_sum(
     geometry: &Geometry,
     charges: &[f64],
@@ -205,15 +206,16 @@ fn reciprocal_space_sum(
         ));
     }
     let mut energy = 0.0;
-    for (&z_i, r_i) in charges.iter().zip(positions) {
-        for (&z_j, r_j) in charges.iter().zip(positions) {
+    for (i, (&z_i, r_i)) in charges.iter().zip(positions).enumerate() {
+        for (j, (&z_j, r_j)) in charges[..=i].iter().zip(positions).enumerate() {
             let r: [f64; 3] = std::array::from_fn(|k| r_i[k] - r_j[k]);
             let perpendicular = geometry.perpendicular(&r);
             let mut pair = geometry.kernel_at_zero(perpendicular, omega);
             for (g_vector, &g) in g_vectors.iter().zip(&lengths) {
                 pair += dot(g_vector, &r).cos() * geometry.kernel(g, perpendicular, omega);
             }
-            energy += z_i * z_j * pair;
+            let multiplicity = if i == j { 1.0 } else { 2.0 };
+            energy += multiplicity * z_i * z_j * pair;
         }
     }
     Ok(energy / (2.0 * geometry.measure))

@@ -15,11 +15,12 @@ from hafnium.molecule import (
 from tests.tolerances import ENERGY_TOL, LITERATURE_TOL
 
 # Madelung constants α with the energy per formula unit −α / R for the
-# nearest-neighbour distance R (Wikipedia, "Madelung constant"; the two-
-# dimensional square lattice from Borwein et al.; the chain is 2 ln 2).
+# nearest-neighbour distance R. NaCl and CsCl to the digits of Wikipedia's
+# "Madelung constant" table, the planar square lattice to the digits
+# commonly tabulated (compared at LITERATURE_TOL), the chain exactly 2 ln 2.
 MADELUNG_NACL = 1.747_564_594_633_18
 MADELUNG_CSCL = 1.762_674_773_070_99
-MADELUNG_SQUARE = 1.615_542_626_7
+MADELUNG_SQUARE = 1.615_542_6
 MADELUNG_CHAIN = 2.0 * math.log(2.0)
 # Energy of a unit charge in a cubic cell of side L with a neutralizing
 # background, −α_sc / (2L) with α_sc = 2.837 297 479 480 6 (Leslie and Gillan).

@@ -24,6 +24,9 @@ WEIGHT_TOLERANCE = 1e-12
 PARTNER_TOLERANCE = 1e-10
 """Distance in fractional coordinates within which two k-points coincide."""
 
+_PARTNER_CHUNK = 256
+"""Points matched at a time against the whole set, bounding the work array."""
+
 _ALLOWED_SHIFTS = (0.0, 0.5)
 
 
@@ -167,17 +170,20 @@ class KPoints:
         """
         xp = default_namespace()
         points = self.fractional_array(xp)
-        targets = (-points) % 1.0
-        difference = xp.expand_dims(points, 0) - xp.expand_dims(targets, 1)
-        distance = xp.abs((difference + 0.5) % 1.0 - 0.5)
-        matches = xp.all(distance <= PARTNER_TOLERANCE, axis=-1)
-        counts = xp.sum(xp.astype(matches, xp.int64), axis=1)
-        if bool(xp.any(counts == 0)):
-            missing = int(xp.argmin(counts))
-            raise InputError(
-                f"k-point {missing} at {self.fractional[missing]} has no "
-                "time-reversal partner in the set"
-            )
-        if bool(xp.any(counts > 1)):
-            raise InputError("the k-point set holds duplicate points")
-        return tuple(int(index) for index in xp.argmax(matches, axis=1))
+        partners: list[int] = []
+        for start in range(0, self.n_kpt, _PARTNER_CHUNK):
+            targets = (-points[start : start + _PARTNER_CHUNK, :]) % 1.0
+            difference = xp.expand_dims(points, 0) - xp.expand_dims(targets, 1)
+            distance = xp.abs((difference + 0.5) % 1.0 - 0.5)
+            matches = xp.all(distance <= PARTNER_TOLERANCE, axis=-1)
+            counts = xp.sum(xp.astype(matches, xp.int64), axis=1)
+            if bool(xp.any(counts == 0)):
+                missing = start + int(xp.argmin(counts))
+                raise InputError(
+                    f"k-point {missing} at {self.fractional[missing]} has no "
+                    "time-reversal partner in the set"
+                )
+            if bool(xp.any(counts > 1)):
+                raise InputError("the k-point set holds duplicate points")
+            partners.extend(int(index) for index in xp.argmax(matches, axis=1))
+        return tuple(partners)

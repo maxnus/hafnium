@@ -100,6 +100,9 @@ const QUADRATURE_NODES: usize = 20;
 const QUADRATURE_PANEL: f64 = 1.0;
 /// Decades below the maximum at which a quadrature integrand is cut off.
 const QUADRATURE_DECAY: f64 = 40.0;
+/// Newton steps allowed per Gauss–Legendre node; convergence is quadratic
+/// from the cosine starting guess and takes a handful.
+const NEWTON_STEPS: usize = 64;
 
 /// Scaled complementary error function `exp(x²) erfc(x)` for `x ≥ 0`.
 ///
@@ -233,7 +236,7 @@ fn gauss_legendre_rule(n: usize) -> Vec<(f64, f64)> {
     let mut rule = vec![(0.0, 0.0); n];
     for i in 0..n.div_ceil(2) {
         let mut z = (PI * (to_f64(i) + 0.75) / (to_f64(n) + 0.5)).cos();
-        loop {
+        for _ in 0..NEWTON_STEPS {
             let (value, derivative) = legendre(n, z);
             let step = value / derivative;
             z -= step;
