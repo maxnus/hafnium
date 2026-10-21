@@ -701,7 +701,14 @@ still worth building is open (see §12).
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.
 Exit: energies match PySCF for RHF/UHF/GHF and complex variants; paired
-classes satisfy embedding consistency tests.
+classes satisfy embedding consistency tests. Status: the driver over
+`BlockMatrix`, the core-Hamiltonian and atomic-density guesses, DIIS, and
+the fitted and in-core Coulomb and exchange builders done 2026-10-21
+(ADR-0010); all eight classes reproduce the closed-shell energy and the
+embedded solutions are stationary; RHF, UHF and GHF match PySCF with exact
+and fitted integrals. Still open in M3: spin expectation values, level
+shifting and damping for difficult cases, canonical orthogonalization for
+linearly dependent bases.
 
 **M4 Periodic foundations.** `Lattice` and `Cell`, k-point meshes with
 time-reversal pairing and weights, the k axis on `BlockStructure` and

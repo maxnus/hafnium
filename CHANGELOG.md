@@ -43,6 +43,13 @@ uses [Semantic Versioning](https://semver.org/).
   values; tests against closed forms, numerical quadrature, the overlap at
   `G = 0`, the Coulomb metric assembled in reciprocal space, and PySCF's
   analytical transforms.
+- Molecular Hartree–Fock: one SCF driver over structured matrices for all
+  eight Fukutome classes, with Coulomb and exchange builders from the
+  fitted tensor or the in-core four-centre integrals, the core-Hamiltonian
+  and superposition-of-atomic-densities guesses, aufbau and averaged
+  occupation policies, DIIS, energy terms and convergence history
+  (ADR-0010); `ConvergenceError` carries the last state; reference tests
+  against PySCF for RHF, UHF and GHF with exact and fitted integrals.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.

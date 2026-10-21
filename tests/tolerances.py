@@ -28,3 +28,12 @@ FITTED_INTEGRAL_TOL = 1e-2
 QUADRATURE_TOL = 1e-9
 # Coulomb integrals assembled from Fourier transforms by radial quadrature.
 RECIPROCAL_SPACE_TOL = 1e-10
+# Density-fitted versus exact Hartree–Fock energies with the universal JKFIT
+# auxiliary basis: the fitting error of that basis, not a kernel tolerance.
+DENSITY_FITTING_ENERGY_TOL = 1e-4
+# Orbital energies of converged states against PySCF; first order in the
+# residual orbital error, unlike the variational total energy.
+MO_ENERGY_TOL = 1e-7
+# Densities of the same state converged in different classes: first order in
+# the residual orbital error at the default gradient tolerance.
+CONVERGED_DENSITY_TOL = 1e-6
