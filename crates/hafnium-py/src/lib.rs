@@ -6,8 +6,8 @@
 
 use hafnium_core::integrals;
 use numpy::{
-    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArrayMethods, PyReadonlyArray1,
-    PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArray5, PyArrayMethods,
+    PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -205,7 +205,7 @@ fn coulomb_three_center<'py>(
     translations: PyReadonlyArray3<'py, f64>,
     omega: Option<f64>,
 ) -> PyResult<Bound<'py, PyArray4<f64>>> {
-    let translations = to_vector_pairs(&translations)?;
+    let translations = to_vector_sets::<2>(&translations)?;
     let values = integrals::coulomb_three_center(
         &auxiliary.inner,
         &bra.inner,
@@ -219,6 +219,64 @@ fn coulomb_three_center<'py>(
         auxiliary.inner.n_functions(),
         bra.inner.n_functions(),
         ket.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
+/// Four-centre Coulomb integrals `(ab|cd)` for each triple of translations
+/// (second bra, first ket, second ket), `[image, a, b, c, d]`; shell
+/// quartets with a Schwarz bound below `threshold` are left at zero.
+#[pyfunction]
+#[pyo3(signature = (bra, ket, translations, omega=None, threshold=0.0))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn coulomb_four_center<'py>(
+    py: Python<'py>,
+    bra: (PyRef<'py, PyShellTable>, PyRef<'py, PyShellTable>),
+    ket: (PyRef<'py, PyShellTable>, PyRef<'py, PyShellTable>),
+    translations: PyReadonlyArray3<'py, f64>,
+    omega: Option<f64>,
+    threshold: f64,
+) -> PyResult<Bound<'py, PyArray5<f64>>> {
+    let translations = to_vector_sets::<3>(&translations)?;
+    let bra = [&bra.0.inner, &bra.1.inner];
+    let ket = [&ket.0.inner, &ket.1.inner];
+    let values = integrals::coulomb_four_center(bra, ket, &translations, omega, threshold)
+        .map_err(|error| value_error(&error))?;
+    let shape = [
+        translations.len(),
+        bra[0].n_functions(),
+        bra[1].n_functions(),
+        ket[0].n_functions(),
+        ket[1].n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
+/// Schwarz bounds `max sqrt((ab|ab))` of every shell pair for each
+/// translation of the ket, `[image, bra_shell, ket_shell]`.
+#[pyfunction]
+#[pyo3(signature = (bra, ket, translations, omega=None))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn schwarz_bounds<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+    omega: Option<f64>,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let values = integrals::schwarz_bounds(&bra.inner, &ket.inner, &translations, omega)
+        .map_err(|error| value_error(&error))?;
+    let shape = [
+        translations.len(),
+        bra.inner.n_shells(),
+        ket.inner.n_shells(),
     ];
     values.into_pyarray(py).reshape(shape)
 }
@@ -257,18 +315,22 @@ fn to_vectors(array: &PyReadonlyArray2<'_, f64>, name: &str) -> PyResult<Vec<[f6
         .collect())
 }
 
-/// Rows of an `[n, 2, 3]` array as pairs of vectors.
-fn to_vector_pairs(array: &PyReadonlyArray3<'_, f64>) -> PyResult<Vec<[[f64; 3]; 2]>> {
-    if array.shape()[1..] != [2, 3] {
-        return Err(PyValueError::new_err("translations have shape [n, 2, 3]"));
+/// Rows of an `[n, N, 3]` array as sets of `N` vectors.
+fn to_vector_sets<const N: usize>(
+    array: &PyReadonlyArray3<'_, f64>,
+) -> PyResult<Vec<[[f64; 3]; N]>> {
+    if array.shape()[1..] != [N, 3] {
+        return Err(PyValueError::new_err(format!(
+            "translations have shape [n, {N}, 3]"
+        )));
     }
     let values = array.as_slice()?;
     if !values.iter().all(|x| x.is_finite()) {
         return Err(PyValueError::new_err("translations are finite"));
     }
     Ok(values
-        .chunks_exact(6)
-        .map(|row| [[row[0], row[1], row[2]], [row[3], row[4], row[5]]])
+        .chunks_exact(3 * N)
+        .map(|row| std::array::from_fn(|i| [row[3 * i], row[3 * i + 1], row[3 * i + 2]]))
         .collect())
 }
 
@@ -295,6 +357,8 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(nuclear_attraction, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_two_center, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_three_center, module)?)?;
+    module.add_function(wrap_pyfunction!(coulomb_four_center, module)?)?;
+    module.add_function(wrap_pyfunction!(schwarz_bounds, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())
 }

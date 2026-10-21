@@ -73,3 +73,40 @@ class IntegralEngine(Protocol):
         translates the auxiliary function, the second the ket function.
         """
         ...
+
+    def coulomb_four_center(
+        self,
+        bra: tuple[ShellTable, ShellTable],
+        ket: tuple[ShellTable, ShellTable],
+        translations: Array,
+        *,
+        omega: float | None = None,
+        threshold: float = 0.0,
+    ) -> Array:
+        """Four-centre Coulomb integrals ``(uv|wx)`` as ``[image, ao, ao, ao, ao]``.
+
+        Chemists' notation: the bra tables give the first two indices, the
+        ket tables the last two. ``translations`` has shape ``[image, 3, 3]``:
+        the vectors applied to the second bra function and to the two ket
+        functions, the first bra function staying at its centre. Shell
+        quartets whose Schwarz bound, the product of the two pair bounds of
+        :meth:`schwarz_bounds`, is below ``threshold`` are not evaluated and
+        left at zero.
+        """
+        ...
+
+    def schwarz_bounds(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        omega: float | None = None,
+    ) -> Array:
+        """Schwarz bounds of the shell pairs as ``[image, shell, shell]``.
+
+        The bound of a pair is the largest ``sqrt((uv|uv))`` over its
+        functions, so that ``|(uv|wx)| ≤ Q_uv Q_wx`` for every integral with
+        the same kernel.
+        """
+        ...

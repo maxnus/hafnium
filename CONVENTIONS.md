@@ -144,6 +144,12 @@ Spin never appears as an explicit index in method code; it is part of the
   `eri_antisym[p, q, r, s]`. The name says which.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
   `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`.
+- Integral screening: a kernel receives a threshold and leaves every shell
+  block whose Schwarz bound `Q_uv Q_wx` lies below it at zero, where
+  `Q_uv = max sqrt((uv|uv))` over the functions of the shell pair, so every
+  neglected integral is smaller than the threshold. The thresholds
+  themselves (`DEFAULT_SCHWARZ_THRESHOLD`) are set in Python, never in the
+  compiled layer.
 - Spherical harmonics: real solid harmonics ordered `m = −l, …, +l`,
   except p shells, which are ordered `x, y, z` (Molden, PySCF and libcint
   ordering, ADR-0009); phase convention of Helgaker, Jørgensen and Olsen

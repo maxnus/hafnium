@@ -10,6 +10,7 @@ from hafnium import _kernels
 from hafnium.basis import BasisLibrary, BasisSet, Shell
 from hafnium.integrals import DensityFitting, RustEngine, ShellTable
 from hafnium.molecule import Molecule
+from tests.shell_tables import reversed_table
 from tests.tolerances import DENSITY_FITTING_TOL, INTEGRAL_TOL, SPECTRUM_TOL
 
 LIBRARY = BasisLibrary(offline=True)
@@ -91,6 +92,17 @@ def test_three_center_is_symmetric_in_the_orbital_pair() -> None:
     three = ENGINE.coulomb_three_center(aux, orbital, orbital, ZERO_PAIR)[0]
     assert three.shape == (aux.n_functions, orbital.n_functions, orbital.n_functions)
     np.testing.assert_allclose(three, np.swapaxes(three, 1, 2), atol=INTEGRAL_TOL)
+
+
+def test_three_center_generic_path_matches_the_symmetric_path() -> None:
+    # Equal bra and ket tables evaluate only μ ≤ ν; a reversed copy of the
+    # ket forces the generic path over all pairs.
+    molecule = water()
+    orbital, aux = tables(molecule, "def2-svp", "def2-universal-jkfit")
+    reordered, permutation = reversed_table(orbital)
+    symmetric = ENGINE.coulomb_three_center(aux, orbital, orbital, ZERO_PAIR)[0]
+    generic = ENGINE.coulomb_three_center(aux, orbital, reordered, ZERO_PAIR)[0]
+    np.testing.assert_allclose(generic, symmetric[:, :, permutation], atol=INTEGRAL_TOL)
 
 
 def test_three_center_with_s_auxiliary_is_an_attenuated_attraction() -> None:

@@ -4,7 +4,8 @@
 //! (−1)^{τ+ν+φ} E^{cd}_{τνφ} R_{t+τ, u+ν, v+φ}(α, R_PQ)` with the reduced
 //! exponent `α = pq / (p + q)` (Helgaker 9.9.33). With a unit partner for
 //! `b` or `d` (see [`super::pairs::single_shell_pairs`]) the same code
-//! yields the two- and three-centre integrals of density fitting.
+//! yields the two- and three-centre integrals of density fitting; with
+//! real pairs on both sides it yields the four-centre integrals.
 //!
 //! Range separation replaces `α` by `α ω² / (α + ω²)` in the Hermite
 //! integrals and scales the prefactor by `sqrt(α' / α)` (ADR-0008).
@@ -20,6 +21,8 @@ use super::coulomb::HermiteWorkspace;
 use super::pairs::{PrimitivePair, primitive_pairs, single_shell_pairs};
 use super::{ShellRef, ShellTable};
 use crate::Error;
+
+const ZERO: [f64; 3] = [0.0; 3];
 
 /// Two-centre Coulomb integrals `(P | Q(r − T))` for each translation `T`
 /// of the ket, as a row-major `[n_translations, n_bra, n_ket]` array.
@@ -79,6 +82,10 @@ pub fn coulomb_two_center(
 /// pair of translations, as a row-major `[n_images, n_aux, n_bra, n_ket]`
 /// array; `translations[image] = [T_P, T_ν]`.
 ///
+/// When `bra` and `ket` are the same table and `T_ν` is zero, only the
+/// shell pairs `μ ≤ ν` are evaluated and the symmetry `(P|μν) = (P|νμ)`
+/// fills the rest.
+///
 /// # Errors
 ///
 /// Returns [`Error::InvalidArgument`] if `omega` is not positive or a
@@ -107,6 +114,7 @@ pub fn coulomb_three_center(
         n_bra * n_ket,
         translations,
         |[aux_translation, ket_translation], p_shell, slab| {
+            let symmetric = bra == ket && same_translation(*ket_translation, ZERO);
             let lp = p_shell.angular_momentum;
             let p_center: [f64; 3] =
                 std::array::from_fn(|axis| p_shell.center[axis] + aux_translation[axis]);
@@ -114,7 +122,8 @@ pub fn coulomb_three_center(
             let mut workspace = HermiteWorkspace::default();
             for (ia, &bra_offset) in bra_offsets.iter().enumerate() {
                 let a = bra.shell(ia);
-                for (ib, &ket_offset) in ket_offsets.iter().enumerate() {
+                let first = if symmetric { ia } else { 0 };
+                for (ib, &ket_offset) in ket_offsets.iter().enumerate().skip(first) {
                     let b = ket.shell(ib);
                     let b_center: [f64; 3] =
                         std::array::from_fn(|axis| b.center[axis] + ket_translation[axis]);
@@ -131,7 +140,7 @@ pub fn coulomb_three_center(
                         &mut workspace,
                         &mut block,
                     );
-                    // spherical[ma][mb][mp] → slab[mp][μ][ν]
+                    // spherical[ma][mb][mp] → slab[mp][μ][ν] (and slab[mp][ν][μ])
                     let spherical =
                         tables.to_spherical(&block, [Some(la), Some(lb), Some(lp), None]);
                     let (nsb, nsp) = (2 * lb + 1, 2 * lp + 1);
@@ -140,11 +149,384 @@ pub fn coulomb_three_center(
                         let mb = (index / nsp) % nsb;
                         let ma = index / (nsp * nsb);
                         slab[(mp * n_bra + bra_offset + ma) * n_ket + ket_offset + mb] = *value;
+                        if symmetric && ib != ia {
+                            slab[(mp * n_bra + ket_offset + mb) * n_ket + bra_offset + ma] = *value;
+                        }
                     }
                 }
             }
         },
     ))
+}
+
+/// Four-centre Coulomb integrals `(a b(r − T_b) | c(r − T_c) d(r − T_d))`
+/// for each triple of translations, as a row-major
+/// `[n_images, n_a, n_b, n_c, n_d]` array in chemists' notation;
+/// `translations[image] = [T_b, T_c, T_d]`.
+///
+/// Shell quartets whose Schwarz bound `Q_ab Q_cd` (see [`schwarz_bounds`])
+/// is below `threshold` are not evaluated and stay zero. Where two tables
+/// coincide and the translations permit, only the unique shell quartets are
+/// evaluated and the permutational symmetry fills the rest: the bra pair
+/// may be swapped when `bra[0] == bra[1]` and `T_b = 0`, the ket pair when
+/// `ket[0] == ket[1]` and `T_c = T_d`, and the two pairs when `bra == ket`,
+/// `T_c = 0` and `T_d = T_b`.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidArgument`] if `omega` is not positive, a
+/// translation is not finite, or `threshold` is negative or not finite.
+pub fn coulomb_four_center(
+    bra: [&ShellTable; 2],
+    ket: [&ShellTable; 2],
+    translations: &[[[f64; 3]; 3]],
+    omega: Option<f64>,
+    threshold: f64,
+) -> Result<Vec<f64>, Error> {
+    check_omega(omega)?;
+    check_threshold(threshold)?;
+    for triple in translations {
+        check_finite(triple)?;
+    }
+    let shape = [
+        bra[0].n_functions(),
+        bra[1].n_functions(),
+        ket[0].n_functions(),
+        ket[1].n_functions(),
+    ];
+    let size: usize = shape.iter().product();
+    let max_l = bra
+        .iter()
+        .chain(ket.iter())
+        .map(|table| table.max_angular_momentum())
+        .max()
+        .unwrap_or(0);
+    let tables = Tables::new(max_l);
+    let mut out = vec![0.0; translations.len() * size];
+    for (image, &[t_b, t_c, t_d]) in translations.iter().enumerate() {
+        let swaps = [
+            bra[0] == bra[1] && same_translation(t_b, ZERO),
+            ket[0] == ket[1] && same_translation(t_c, t_d),
+            bra[0] == ket[0]
+                && bra[1] == ket[1]
+                && same_translation(t_c, ZERO)
+                && same_translation(t_d, t_b),
+        ];
+        let target = &mut out[image * size..(image + 1) * size];
+        let image = FourCenterImage {
+            bra,
+            ket,
+            translations: [t_b, t_c, t_d],
+            omega,
+            threshold,
+            swaps,
+        };
+        image.fill(&tables, target);
+    }
+    Ok(out)
+}
+
+/// Schwarz bounds `Q_ab = max_{a ∈ A, b ∈ B} sqrt((a b(r − T) | a b(r − T)))`
+/// of every shell pair for each translation `T` of the ket, as a row-major
+/// `[n_translations, n_bra_shells, n_ket_shells]` array.
+///
+/// The Cauchy–Schwarz inequality in the Coulomb metric gives
+/// `|(ab|cd)| ≤ Q_ab Q_cd` for every integral with the same kernel; the
+/// long-range kernel is positive definite as well, so the bound holds with
+/// `omega` too.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidArgument`] if `omega` is not positive or a
+/// translation is not finite.
+pub fn schwarz_bounds(
+    bra: &ShellTable,
+    ket: &ShellTable,
+    translations: &[[f64; 3]],
+    omega: Option<f64>,
+) -> Result<Vec<f64>, Error> {
+    check_omega(omega)?;
+    check_finite(translations)?;
+    let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
+    let tables = Tables::new(max_l);
+    let mut out = Vec::with_capacity(translations.len() * bra.n_shells() * ket.n_shells());
+    for &translation in translations {
+        let pairs = shell_pairs([bra, ket], [ZERO, translation], false, omega, &tables);
+        out.extend(pairs.iter().map(|pair| pair.bound));
+    }
+    Ok(out)
+}
+
+/// One image of the four-centre integrals: the tables, their translations
+/// and the symmetries the image admits (bra swap, ket swap, pair swap).
+struct FourCenterImage<'a> {
+    bra: [&'a ShellTable; 2],
+    ket: [&'a ShellTable; 2],
+    translations: [[f64; 3]; 3],
+    omega: Option<f64>,
+    threshold: f64,
+    swaps: [bool; 3],
+}
+
+/// Values of evaluated blocks held between a parallel chunk of bra pairs
+/// and their placement in the output; bounds the extra memory.
+const CHUNK_BUDGET: usize = 1 << 23;
+
+impl FourCenterImage<'_> {
+    /// Evaluate the unique shell quartets above the threshold in parallel
+    /// over bra pairs and place them, with their symmetric images, in `out`.
+    fn fill(&self, tables: &Tables, out: &mut [f64]) {
+        let [t_b, t_c, t_d] = self.translations;
+        let bra_pairs = shell_pairs(self.bra, [ZERO, t_b], self.swaps[0], self.omega, tables);
+        // With the pair swap the ket pairs are the bra pairs, in the same order.
+        let ket_storage;
+        let ket_pairs: &[ShellPair] = if self.swaps[2] {
+            &bra_pairs
+        } else {
+            ket_storage = shell_pairs(self.ket, [t_c, t_d], self.swaps[1], self.omega, tables);
+            &ket_storage
+        };
+        let shape = [
+            self.bra[0].n_functions(),
+            self.bra[1].n_functions(),
+            self.ket[0].n_functions(),
+            self.ket[1].n_functions(),
+        ];
+        let ket_size: usize = ket_pairs.iter().map(ShellPair::n_functions).sum();
+        let mut start = 0;
+        while start < bra_pairs.len() {
+            let end = chunk_end(&bra_pairs, start, ket_size);
+            let blocks: Vec<Vec<(usize, Vec<f64>)>> = (start..end)
+                .into_par_iter()
+                .map(|index| {
+                    let bra_pair = &bra_pairs[index];
+                    let partners = if self.swaps[2] {
+                        &ket_pairs[..=index]
+                    } else {
+                        ket_pairs
+                    };
+                    let mut workspace = HermiteWorkspace::default();
+                    partners
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, ket_pair)| bra_pair.bound * ket_pair.bound >= self.threshold)
+                        .map(|(ket_index, ket_pair)| {
+                            let block =
+                                quartet(bra_pair, ket_pair, self.omega, tables, &mut workspace);
+                            (ket_index, block)
+                        })
+                        .collect()
+                })
+                .collect();
+            for (bra_pair, blocks) in bra_pairs[start..end].iter().zip(&blocks) {
+                for (ket_index, block) in blocks {
+                    scatter(
+                        out,
+                        shape,
+                        bra_pair,
+                        &ket_pairs[*ket_index],
+                        block,
+                        self.swaps,
+                    );
+                }
+            }
+            start = end;
+        }
+    }
+}
+
+/// End of the chunk of bra pairs starting at `start` whose blocks fit the
+/// budget; always at least one pair.
+fn chunk_end(pairs: &[ShellPair], start: usize, ket_size: usize) -> usize {
+    let mut end = start + 1;
+    let mut total = pairs[start].n_functions() * ket_size;
+    while end < pairs.len() {
+        total += pairs[end].n_functions() * ket_size;
+        if total > CHUNK_BUDGET {
+            break;
+        }
+        end += 1;
+    }
+    end
+}
+
+/// The spherical block `[ma][mb][mc][md]` of one shell quartet.
+fn quartet(
+    bra: &ShellPair,
+    ket: &ShellPair,
+    omega: Option<f64>,
+    tables: &Tables,
+    workspace: &mut HermiteWorkspace,
+) -> Vec<f64> {
+    let n_cart = |ls: [usize; 2]| n_cartesian(ls[0]) * n_cartesian(ls[1]);
+    let mut block = vec![0.0; n_cart(bra.ls) * n_cart(ket.ls)];
+    coulomb_block(
+        &bra.primitives,
+        bra.ls,
+        &ket.primitives,
+        ket.ls,
+        omega,
+        tables,
+        workspace,
+        &mut block,
+    );
+    tables.to_spherical(
+        &block,
+        [
+            Some(bra.ls[0]),
+            Some(bra.ls[1]),
+            Some(ket.ls[0]),
+            Some(ket.ls[1]),
+        ],
+    )
+}
+
+/// Write a quartet block into `out` (shape `[n_a, n_b, n_c, n_d]`) at its
+/// own position and at every position the admitted swaps map it to. A swap
+/// that maps the block onto itself is skipped, so each element is written
+/// exactly once.
+fn scatter(
+    out: &mut [f64],
+    shape: [usize; 4],
+    bra: &ShellPair,
+    ket: &ShellPair,
+    block: &[f64],
+    swaps: [bool; 3],
+) {
+    let dims = [
+        2 * bra.ls[0] + 1,
+        2 * bra.ls[1] + 1,
+        2 * ket.ls[0] + 1,
+        2 * ket.ls[1] + 1,
+    ];
+    let offsets = [
+        bra.offsets[0],
+        bra.offsets[1],
+        ket.offsets[0],
+        ket.offsets[1],
+    ];
+    let swaps = [
+        swaps[0] && bra.shells[0] != bra.shells[1],
+        swaps[1] && ket.shells[0] != ket.shells[1],
+        swaps[2] && bra.shells != ket.shells,
+    ];
+    let index = |[u, v, w, x]: [usize; 4]| ((u * shape[1] + v) * shape[2] + w) * shape[3] + x;
+    for (flat, &value) in block.iter().enumerate() {
+        let md = flat % dims[3];
+        let mc = (flat / dims[3]) % dims[2];
+        let mb = (flat / (dims[3] * dims[2])) % dims[1];
+        let ma = flat / (dims[3] * dims[2] * dims[1]);
+        let base = [
+            offsets[0] + ma,
+            offsets[1] + mb,
+            offsets[2] + mc,
+            offsets[3] + md,
+        ];
+        for code in 0..8u8 {
+            let (swap_bra, swap_ket, swap_pairs) = (code & 1 != 0, code & 2 != 0, code & 4 != 0);
+            if (swap_bra && !swaps[0]) || (swap_ket && !swaps[1]) || (swap_pairs && !swaps[2]) {
+                continue;
+            }
+            let [mut u, mut v, mut w, mut x] = base;
+            if swap_bra {
+                (u, v) = (v, u);
+            }
+            if swap_ket {
+                (w, x) = (x, w);
+            }
+            if swap_pairs {
+                (u, v, w, x) = (w, x, u, v);
+            }
+            out[index([u, v, w, x])] = value;
+        }
+    }
+}
+
+/// A pair of shells with its primitive pairs and Schwarz bound.
+struct ShellPair {
+    /// Shell indices in the two tables.
+    shells: [usize; 2],
+    ls: [usize; 2],
+    /// First function of each shell in its table.
+    offsets: [usize; 2],
+    primitives: Vec<PrimitivePair>,
+    /// `max sqrt((ab|ab))` over the functions of the pair.
+    bound: f64,
+}
+
+impl ShellPair {
+    fn n_functions(&self) -> usize {
+        (2 * self.ls[0] + 1) * (2 * self.ls[1] + 1)
+    }
+}
+
+/// All shell pairs of two tables, the first translated by `translations[0]`
+/// and the second by `translations[1]`, in row-major shell order; with
+/// `symmetric` only the pairs with `second ≥ first`. Runs in parallel over
+/// the first shell.
+fn shell_pairs(
+    tables: [&ShellTable; 2],
+    translations: [[f64; 3]; 2],
+    symmetric: bool,
+    omega: Option<f64>,
+    cache: &Tables,
+) -> Vec<ShellPair> {
+    let [first, second] = tables;
+    let offsets = [first.function_offsets(), second.function_offsets()];
+    let rows: Vec<Vec<ShellPair>> = (0..first.n_shells())
+        .into_par_iter()
+        .map(|ia| {
+            let mut workspace = HermiteWorkspace::default();
+            let a = first.shell(ia);
+            let a_center: [f64; 3] =
+                std::array::from_fn(|axis| a.center[axis] + translations[0][axis]);
+            let shifted = ShellRef {
+                center: a_center,
+                ..a
+            };
+            let start = if symmetric { ia } else { 0 };
+            (start..second.n_shells())
+                .map(|ib| {
+                    let b = second.shell(ib);
+                    let b_center: [f64; 3] =
+                        std::array::from_fn(|axis| b.center[axis] + translations[1][axis]);
+                    let ls = [a.angular_momentum, b.angular_momentum];
+                    let primitives = primitive_pairs(&shifted, &b, b_center, 0);
+                    let bound = schwarz_bound(&primitives, ls, omega, cache, &mut workspace);
+                    ShellPair {
+                        shells: [ia, ib],
+                        ls,
+                        offsets: [offsets[0][ia], offsets[1][ib]],
+                        primitives,
+                        bound,
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    rows.into_iter().flatten().collect()
+}
+
+/// `max_{ab} sqrt((ab|ab))` over the spherical functions of a pair.
+fn schwarz_bound(
+    primitives: &[PrimitivePair],
+    ls: [usize; 2],
+    omega: Option<f64>,
+    tables: &Tables,
+    workspace: &mut HermiteWorkspace,
+) -> f64 {
+    let n_cart = n_cartesian(ls[0]) * n_cartesian(ls[1]);
+    let mut block = vec![0.0; n_cart * n_cart];
+    coulomb_block(
+        primitives, ls, primitives, ls, omega, tables, workspace, &mut block,
+    );
+    let spherical =
+        tables.to_spherical(&block, [Some(ls[0]), Some(ls[1]), Some(ls[0]), Some(ls[1])]);
+    let n_sph = (2 * ls[0] + 1) * (2 * ls[1] + 1);
+    (0..n_sph)
+        .map(|i| spherical[i * n_sph + i])
+        .fold(0.0_f64, f64::max)
+        .sqrt()
 }
 
 /// Evaluate one slab per leading shell in parallel and place the slabs.
@@ -311,6 +693,25 @@ pub(crate) fn check_omega(omega: Option<f64>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Exact equality of two translations: a symmetry between images needs
+/// identical vectors, not nearly equal ones.
+#[allow(
+    clippy::float_cmp,
+    reason = "translations are exact inputs, not computed values"
+)]
+fn same_translation(a: [f64; 3], b: [f64; 3]) -> bool {
+    a == b
+}
+
+fn check_threshold(threshold: f64) -> Result<(), Error> {
+    if !threshold.is_finite() || threshold < 0.0 {
+        return Err(Error::InvalidArgument(
+            "the screening threshold is finite and non-negative".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn check_finite(vectors: &[[f64; 3]]) -> Result<(), Error> {
     if vectors
         .iter()
@@ -333,6 +734,30 @@ mod tests {
     fn s_shell(a: f64, center: [f64; 3]) -> ShellTable {
         let norm = (2.0 * a / PI).powf(0.75) * (4.0 * PI).sqrt();
         ShellTable::new(vec![0], vec![center], vec![0, 1], vec![a], vec![norm]).expect("valid")
+    }
+
+    /// An s and a p shell of two primitives each on two centres, with
+    /// arbitrary coefficients.
+    fn sp_table() -> ShellTable {
+        ShellTable::new(
+            vec![0, 1, 0, 1],
+            vec![[0.0; 3], [0.0; 3], [1.2, -0.3, 0.4], [1.2, -0.3, 0.4]],
+            vec![0, 2, 4, 6, 8],
+            vec![1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
+            vec![0.7, 0.5, 0.6, 0.4, 0.8, 0.3, 0.5, 0.5],
+        )
+        .expect("valid")
+    }
+
+    fn molecular(table: &ShellTable, threshold: f64) -> Vec<f64> {
+        coulomb_four_center(
+            [table, table],
+            [table, table],
+            &[[ZERO; 3]],
+            None,
+            threshold,
+        )
+        .expect("valid")
     }
 
     #[test]
@@ -365,9 +790,7 @@ mod tests {
     #[test]
     fn three_center_with_an_s_auxiliary_is_an_attenuated_attraction() {
         // A unit-charge Gaussian of exponent q has the potential erf(√q r)/r;
-        // PySCF's normalized s function of exponent q is that charge times
-        // (2π/q)^{3/4}... in our convention the s function with unit norm is
-        // the unit charge divided by (q / 2π)^{3/4}.
+        // the s function with unit norm is that charge divided by (q / 2π)^{3/4}.
         let q = 0.7;
         let aux = s_shell(q, [0.3, -0.2, 0.5]);
         let bra = s_shell(1.1, [0.0; 3]);
@@ -385,6 +808,191 @@ mod tests {
         .expect("valid")[0];
         let expected = -attraction / (q / (2.0 * PI)).powf(0.75);
         assert!((three - expected).abs() < 1e-13, "{three} vs {expected}");
+    }
+
+    #[test]
+    fn three_center_symmetric_path_matches_the_generic_path() {
+        let table = sp_table();
+        let aux = s_shell(0.5, [0.2, 0.1, -0.1]);
+        let symmetric =
+            coulomb_three_center(&aux, &table, &table, &[[ZERO, ZERO]], None).expect("valid");
+        // A ket with a different centre list is a different table, so the
+        // generic path runs; moving it back by a translation gives the same
+        // integrals.
+        let shifted = ShellTable::new(
+            vec![0, 1, 0, 1],
+            vec![[1.0; 3], [1.0; 3], [2.2, 0.7, 1.4], [2.2, 0.7, 1.4]],
+            vec![0, 2, 4, 6, 8],
+            vec![1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
+            vec![0.7, 0.5, 0.6, 0.4, 0.8, 0.3, 0.5, 0.5],
+        )
+        .expect("valid");
+        let generic = coulomb_three_center(&aux, &table, &shifted, &[[ZERO, [-1.0; 3]]], None)
+            .expect("valid");
+        for (s, g) in symmetric.iter().zip(&generic) {
+            assert!((s - g).abs() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn four_center_ssss_matches_the_closed_form() {
+        // (ab|cd) = N 2π^{5/2}/(pq√(p+q)) exp(−μ_ab AB²) exp(−μ_cd CD²) F_0(α R_PQ²).
+        let exponents = [0.9, 0.4, 1.3, 0.6];
+        let centers = [[0.0; 3], [0.0, 0.0, 1.1], [0.5, 0.2, 0.0], [0.4, -0.3, 0.9]];
+        let shells: Vec<ShellTable> = (0..4).map(|i| s_shell(exponents[i], centers[i])).collect();
+        let value = coulomb_four_center(
+            [&shells[0], &shells[1]],
+            [&shells[2], &shells[3]],
+            &[[ZERO; 3]],
+            None,
+            0.0,
+        )
+        .expect("valid")[0];
+        let distance_squared = |x: [f64; 3], y: [f64; 3]| -> f64 {
+            (0..3).map(|axis| (x[axis] - y[axis]).powi(2)).sum()
+        };
+        // Product exponent, centre and Gaussian prefactor of one side.
+        let product = |first: usize, second: usize| -> (f64, [f64; 3], f64) {
+            let (x, y) = (exponents[first], exponents[second]);
+            let center = std::array::from_fn(|axis| {
+                (x * centers[first][axis] + y * centers[second][axis]) / (x + y)
+            });
+            let gaussian =
+                (-x * y / (x + y) * distance_squared(centers[first], centers[second])).exp();
+            (x + y, center, gaussian)
+        };
+        let (p, big_p, gaussian_bra) = product(0, 1);
+        let (q, big_q, gaussian_ket) = product(2, 3);
+        let alpha = p * q / (p + q);
+        let boys = crate::special::boys_values(0, alpha * distance_squared(big_p, big_q))[0];
+        let norms: f64 = exponents
+            .iter()
+            .map(|x| (2.0 * x / PI).powf(0.75))
+            .product();
+        let expected = norms * 2.0 * PI.powf(2.5) / (p * q * (p + q).sqrt())
+            * gaussian_bra
+            * gaussian_ket
+            * boys;
+        assert!((value - expected).abs() < 1e-13, "{value} vs {expected}");
+    }
+
+    #[test]
+    fn four_center_symmetric_paths_match_the_generic_path() {
+        let table = sp_table();
+        let n = table.n_functions();
+        let symmetric = molecular(&table, 0.0);
+        let tables = Tables::new(1);
+        let mut generic = vec![0.0; n * n * n * n];
+        FourCenterImage {
+            bra: [&table, &table],
+            ket: [&table, &table],
+            translations: [ZERO; 3],
+            omega: None,
+            threshold: 0.0,
+            swaps: [false; 3],
+        }
+        .fill(&tables, &mut generic);
+        for (s, g) in symmetric.iter().zip(&generic) {
+            assert!((s - g).abs() < 1e-13);
+        }
+        // Each partial symmetry on its own.
+        for swaps in [
+            [true, false, false],
+            [false, true, false],
+            [false, false, true],
+        ] {
+            let mut partial = vec![0.0; n * n * n * n];
+            FourCenterImage {
+                bra: [&table, &table],
+                ket: [&table, &table],
+                translations: [ZERO; 3],
+                omega: None,
+                threshold: 0.0,
+                swaps,
+            }
+            .fill(&tables, &mut partial);
+            for (s, g) in symmetric.iter().zip(&partial) {
+                assert!((s - g).abs() < 1e-13);
+            }
+        }
+    }
+
+    #[test]
+    fn four_center_translations_move_the_functions() {
+        let bra = s_shell(0.9, [0.1, 0.2, 0.3]);
+        let ket = s_shell(0.4, [0.5, -0.3, 1.0]);
+        let (t_b, t_c, t_d) = ([1.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, -0.7]);
+        let translated =
+            coulomb_four_center([&bra, &ket], [&bra, &ket], &[[t_b, t_c, t_d]], None, 0.0)
+                .expect("valid")[0];
+        let moved_b = s_shell(0.4, [1.5, -0.3, 1.0]);
+        let moved_c = s_shell(0.9, [0.1, 0.7, 0.3]);
+        let moved_d = s_shell(0.4, [0.5, -0.3, 0.3]);
+        let direct = coulomb_four_center(
+            [&bra, &moved_b],
+            [&moved_c, &moved_d],
+            &[[ZERO; 3]],
+            None,
+            0.0,
+        )
+        .expect("valid")[0];
+        assert!((translated - direct).abs() < 1e-14);
+    }
+
+    #[test]
+    fn schwarz_bounds_bound_every_quartet() {
+        let table = sp_table();
+        let bounds = schwarz_bounds(&table, &table, &[ZERO], None).expect("valid");
+        let n_shells = table.n_shells();
+        assert_eq!(bounds.len(), n_shells * n_shells);
+        let n = table.n_functions();
+        let eri = molecular(&table, 0.0);
+        let offsets = table.function_offsets();
+        let size = |i: usize| 2 * table.shell(i).angular_momentum + 1;
+        for ia in 0..n_shells {
+            for ib in 0..n_shells {
+                for ic in 0..n_shells {
+                    for id in 0..n_shells {
+                        let bound = bounds[ia * n_shells + ib] * bounds[ic * n_shells + id];
+                        for u in offsets[ia]..offsets[ia] + size(ia) {
+                            for v in offsets[ib]..offsets[ib] + size(ib) {
+                                for w in offsets[ic]..offsets[ic] + size(ic) {
+                                    for x in offsets[id]..offsets[id] + size(id) {
+                                        let value = eri[((u * n + v) * n + w) * n + x];
+                                        assert!(value.abs() <= bound + 1e-14);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // The bound of a pair is attained by its own diagonal integral.
+        let value = eri[0];
+        assert!((bounds[0] - value.sqrt()).abs() < 1e-14);
+    }
+
+    #[test]
+    fn screening_zeroes_only_quartets_below_the_threshold() {
+        let far = ShellTable::new(
+            vec![0, 0],
+            vec![[0.0; 3], [8.0, 0.0, 0.0]],
+            vec![0, 1, 2],
+            vec![1.0, 1.0],
+            vec![1.0, 1.0],
+        )
+        .expect("valid");
+        let exact = molecular(&far, 0.0);
+        let screened = molecular(&far, 1e-6);
+        let bounds = schwarz_bounds(&far, &far, &[ZERO], None).expect("valid");
+        assert!(bounds[1] < 1e-6 && bounds[0] > 1e-6);
+        let zeros = screened.iter().filter(|&&x| x == 0.0).count();
+        assert!(zeros > 0);
+        for (e, s) in exact.iter().zip(&screened) {
+            assert!(*s == 0.0 || s.to_bits() == e.to_bits());
+            assert!((e - s).abs() < 1e-6);
+        }
     }
 
     #[test]
@@ -413,5 +1021,12 @@ mod tests {
             )
             .is_err()
         );
+        let pair = [&shell, &shell];
+        assert!(coulomb_four_center(pair, pair, &[[ZERO; 3]], None, -1.0).is_err());
+        assert!(coulomb_four_center(pair, pair, &[[ZERO; 3]], None, f64::NAN).is_err());
+        assert!(
+            coulomb_four_center(pair, pair, &[[ZERO, ZERO, [f64::NAN; 3]]], None, 0.0).is_err()
+        );
+        assert!(schwarz_bounds(&shell, &shell, &[ZERO], Some(0.0)).is_err());
     }
 }
