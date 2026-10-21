@@ -33,6 +33,7 @@ nav:
       - adr/0004-python-toolchain-baseline.md
       - adr/0005-immutable-data-with-dataclasses.md
       - adr/0006-basis-function-conventions.md
+      - adr/0007-periodic-systems-as-k-point-sectors.md
   - API reference: api.md
 
 markdown_extensions:

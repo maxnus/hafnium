@@ -13,3 +13,4 @@ ADR that supersedes it.
 | [0004](0004-python-toolchain-baseline.md) | Python toolchain baseline | accepted 2026-10-21 |
 | [0005](0005-immutable-data-with-dataclasses.md) | Immutable data with standard-library dataclasses | accepted 2026-10-21 |
 | [0006](0006-basis-function-conventions.md) | Basis function and physical conventions | accepted 2026-10-21 |
+| [0007](0007-periodic-systems-as-k-point-sectors.md) | Periodic systems as k-point sectors | accepted 2026-10-21 |
