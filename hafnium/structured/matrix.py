@@ -1,21 +1,10 @@
-"""Block matrices and vectors over a :class:`Structure`.
-
-The dense spin-orbital representation (``2n`` rows, alpha components first)
-is the canonical form that relates all structures: :meth:`BlockMatrix.to_dense`
-expands a matrix into it and :meth:`BlockMatrix.from_dense` extracts the
-blocks of any structure from it. Embedding into a less symmetric structure
-is lossless; projecting onto a more symmetric one averages.
-
-Embeddings along the Fukutome hierarchy are exact by construction and are
-performed block by block without touching the dense form; only pairs outside
-the hierarchy fall back to the dense representation with a verification.
-"""
+"""Block matrices: one-body operators, densities and coefficients in a structure."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 from hafnium.backend import (
     Array,
@@ -27,43 +16,17 @@ from hafnium.backend import (
     generalized_eigh,
 )
 from hafnium.errors import StructureError
+from hafnium.structured import dense, embedding
 from hafnium.structured.kramers import (
     half_dimension,
     is_kramers_symmetric,
     kramers_adapt_eigenvectors,
-    kramers_symmetrize,
 )
-from hafnium.structured.structure import Partner, Ring, Spin, Structure
+from hafnium.structured.structure import BlockStructure, Ring, Spin
+from hafnium.structured.validation import check_block_count, check_ring, dtype_for
+from hafnium.structured.vector import BlockVector
 
 Scalar: TypeAlias = int | float | complex
-
-
-def _dtype_for(xp: Namespace, ring: Ring) -> Any:
-    """Return the one dtype a block of ``ring`` may have (CONVENTIONS.md §5)."""
-    return xp.float64 if ring is Ring.REAL else xp.complex128
-
-
-def _check_block_count(structure: Structure, blocks: Sequence[Array]) -> None:
-    if len(blocks) != structure.n_stored:
-        raise StructureError(
-            f"{structure.describe()} structure stores {structure.n_stored} blocks, "
-            f"got {len(blocks)}"
-        )
-
-
-def _check_ring(xp: Namespace, array: Array, ring: Ring) -> None:
-    if not xp.isdtype(array.dtype, ("real floating", "complex floating")):
-        raise StructureError(f"blocks must be floating point, got {array.dtype}")
-    is_complex = bool(xp.isdtype(array.dtype, "complex floating"))
-    if ring is Ring.REAL and is_complex:
-        raise StructureError(
-            "a real block has complex entries; embed into a complex structure"
-        )
-    if ring is not Ring.REAL and not is_complex:
-        raise StructureError(f"a {ring.value} block has real entries; cast explicitly")
-    expected = _dtype_for(xp, ring)
-    if array.dtype != expected:
-        raise StructureError(f"blocks must be {expected}, got {array.dtype}")
 
 
 def _require_scalar(other: object) -> None:
@@ -74,124 +37,9 @@ def _require_scalar(other: object) -> None:
         )
 
 
-def _materialize(structure: Structure, stored: Sequence[Array]) -> tuple[Array, ...]:
-    """Expand stored blocks to one array per block of the structure."""
-    arrays: list[Array] = []
-    position = 0
-    for block in structure.blocks:
-        if block.derived_from is None:
-            arrays.append(stored[position])
-            position += 1
-            continue
-        source = arrays[block.derived_from]
-        if block.partner is Partner.CONJUGATE:
-            source = array_namespace(source).conj(source)
-        arrays.append(source)
-    return tuple(arrays)
-
-
-def _block_diag(a: Array, b: Array) -> Array:
-    xp = array_namespace(a, b)
-    dtype = xp.result_type(a, b)
-    top = xp.concat(
-        [xp.astype(a, dtype), xp.zeros((a.shape[0], b.shape[1]), dtype=dtype)], axis=1
-    )
-    bottom = xp.concat(
-        [xp.zeros((b.shape[0], a.shape[1]), dtype=dtype), xp.astype(b, dtype)], axis=1
-    )
-    return xp.concat([top, bottom], axis=0)
-
-
-def _cast_to_ring(xp: Namespace, array: Array, ring: Ring) -> Array:
-    if ring is Ring.REAL:
-        real = xp.real(array) if xp.isdtype(array.dtype, "complex floating") else array
-        return xp.astype(real, xp.float64)
-    return xp.astype(array, xp.complex128)
-
-
-def _require_close(
-    xp: Namespace, actual: Array, expected: Array, tolerance: float, what: str
-) -> None:
-    scale = max(1.0, float(xp.max(xp.abs(expected))))
-    deviation = float(xp.max(xp.abs(actual - expected)))
-    if deviation > tolerance * scale:
-        raise StructureError(f"{what} (deviation {deviation:.2e})")
-
-
-def _has_kramers_invariant_range(dense: Array, tolerance: float) -> bool:
-    xp = array_namespace(dense)
-    orthonormal, _ = xp.linalg.qr(xp.astype(dense, xp.complex128))
-    projector = orthonormal @ adjoint(orthonormal)
-    return is_kramers_symmetric(projector, tolerance=tolerance)
-
-
-def _spin_level(structure: Structure) -> int:
-    """Position in the chain spatial < restricted < unrestricted < generalized."""
-    if structure.is_spatial:
-        return 0
-    if structure.is_spinor:
-        return 3
-    return 1 if structure.derived_partner is Partner.COPY else 2
-
-
-def _is_paired(structure: Structure) -> bool:
-    return structure.derived_partner is Partner.CONJUGATE or any(
-        block.ring is Ring.QUATERNION for block in structure.blocks
-    )
-
-
-def _is_structural_embedding(source: Structure, target: Structure) -> bool:
-    """Whether every member of ``source`` is a member of ``target`` by construction.
-
-    This is the Fukutome hierarchy: the spin structure may only be relaxed,
-    real data fits any ring, complex data only complex rings, and paired
-    (time-reversal symmetric) targets accept paired sources or real sources
-    whose alpha and beta blocks coincide.
-    """
-    if _spin_level(source) > _spin_level(target):
-        return False
-    source_is_real = not source.is_complex
-    if _is_paired(target):
-        return _is_paired(source) or (source_is_real and _spin_level(source) <= 1)
-    if not target.is_complex:
-        return source_is_real
-    return True
-
-
-@dataclass(frozen=True, slots=True, eq=False)
-class BlockVector:
-    """One-dimensional data per stored block, such as eigenvalues or occupations."""
-
-    structure: Structure
-    blocks: tuple[Array, ...]
-
-    def __post_init__(self) -> None:
-        _check_block_count(self.structure, self.blocks)
-        for array in self.blocks:
-            if array.ndim != 1:
-                raise StructureError("vector blocks are one-dimensional")
-
-    def materialized(self) -> tuple[Array, ...]:
-        """One array per block of the structure, derived blocks included."""
-        return _materialize(self.structure, self.blocks)
-
-    def to_dense(self) -> Array:
-        """Concatenation over the spin-orbital space (alpha first)."""
-        parts = self.materialized()
-        if self.structure.is_spatial:
-            parts = (parts[0], parts[0])
-        return array_namespace(*parts).concat(parts, axis=0)
-
-    def map_blocks(self, function: Callable[[Array], Array]) -> BlockVector:
-        """Apply ``function`` to every stored block."""
-        return BlockVector(
-            self.structure, tuple(function(block) for block in self.blocks)
-        )
-
-
 @dataclass(frozen=True, slots=True, eq=False)
 class BlockMatrix:
-    """A one-body operator, density or coefficient matrix in a :class:`Structure`.
+    """A one-body operator, density or coefficient matrix in a :class:`BlockStructure`.
 
     ``blocks`` holds one array per stored block of ``structure``, in order.
     Spatial and collinear blocks have shape ``[n, m]``; spinor blocks have
@@ -203,21 +51,21 @@ class BlockMatrix:
     A quaternionic block holds either a Θ-symmetric operator or a coefficient
     matrix whose columns come in Kramers pairs. The constructor cannot tell
     the two apart by shape, so Θ-symmetry is verified where it matters: in
-    :meth:`eigh` and in :func:`density_matrix`.
+    :meth:`eigh` and in :func:`hafnium.structured.density_matrix`.
     """
 
-    structure: Structure
+    structure: BlockStructure
     blocks: tuple[Array, ...]
 
     def __post_init__(self) -> None:
-        _check_block_count(self.structure, self.blocks)
+        check_block_count(self.structure, self.blocks)
         xp = array_namespace(*self.blocks)
         for block, array in zip(self.structure.stored_blocks, self.blocks, strict=True):
             if array.ndim != 2:
                 raise StructureError("matrix blocks are two-dimensional")
             if block.spin is Spin.SPINOR and (array.shape[0] % 2 or array.shape[1] % 2):
                 raise StructureError("spinor blocks have even dimensions")
-            _check_ring(xp, array, block.ring)
+            check_ring(xp, array, block.ring)
         rows = {int(array.shape[0]) for array in self.blocks}
         if len(rows) > 1:
             raise StructureError(
@@ -230,7 +78,7 @@ class BlockMatrix:
     @classmethod
     def zeros(
         cls,
-        structure: Structure,
+        structure: BlockStructure,
         shape: tuple[int, int],
         *,
         xp: Namespace | None = None,
@@ -240,24 +88,20 @@ class BlockMatrix:
         blocks: list[Array] = []
         for block in structure.stored_blocks:
             factor = 2 if block.spin is Spin.SPINOR else 1
-            blocks.append(
-                xp.zeros(
-                    (factor * shape[0], factor * shape[1]),
-                    dtype=_dtype_for(xp, block.ring),
-                )
-            )
+            block_shape = (factor * shape[0], factor * shape[1])
+            blocks.append(xp.zeros(block_shape, dtype=dtype_for(xp, block.ring)))
         return cls(structure, tuple(blocks))
 
     @classmethod
     def identity(
-        cls, structure: Structure, n: int, *, xp: Namespace | None = None
+        cls, structure: BlockStructure, n: int, *, xp: Namespace | None = None
     ) -> BlockMatrix:
         """Identity matrix with ``n`` spatial basis functions."""
         xp = default_namespace() if xp is None else xp
         blocks: list[Array] = []
         for block in structure.stored_blocks:
             size = 2 * n if block.spin is Spin.SPINOR else n
-            blocks.append(xp.eye(size, dtype=_dtype_for(xp, block.ring)))
+            blocks.append(xp.eye(size, dtype=dtype_for(xp, block.ring)))
         return cls(structure, tuple(blocks))
 
     def map_blocks(self, function: Callable[[Array], Array]) -> BlockMatrix:
@@ -343,8 +187,7 @@ class BlockMatrix:
     def trace(self) -> Array:
         """Trace over the full spin-orbital space, as a 0-d array."""
         xp = array_namespace(*self.blocks)
-        parts = self.spin_blocks()
-        total = sum(xp.linalg.trace(part) for part in parts)
+        total = sum(xp.linalg.trace(part) for part in self.spin_blocks())
         return xp.asarray(total)
 
     def trace_product(self, other: BlockMatrix) -> Array:
@@ -364,39 +207,26 @@ class BlockMatrix:
 
     def materialized(self) -> tuple[Array, ...]:
         """One array per block of the structure, derived blocks included."""
-        return _materialize(self.structure, self.blocks)
+        return dense.materialize(self.structure, self.blocks)
 
     def spin_blocks(self) -> tuple[Array, ...]:
         """``(alpha, beta)`` blocks, or the single spinor block."""
-        arrays = self.materialized()
-        if self.structure.is_spatial:
-            return (arrays[0], arrays[0])
-        if self.structure.is_spinor:
-            return (arrays[0],)
-        return arrays
+        return dense.spin_blocks(self.structure, self.blocks)
 
     @property
     def column_split(self) -> tuple[int, int] | None:
         """Column counts of the alpha and beta blocks; ``None`` for spinor matrices."""
-        if self.structure.is_spinor:
-            return None
-        columns = [int(block.shape[1]) for block in self.blocks]
-        if len(columns) == 1:
-            return (columns[0], columns[0])
-        return (columns[0], columns[1])
+        return dense.column_split(self.structure, self.blocks)
 
     def to_dense(self) -> Array:
         """Expand into the spin-orbital representation ``[2n, m_alpha + m_beta]``."""
-        parts = self.spin_blocks()
-        if len(parts) == 1:
-            return parts[0]
-        return _block_diag(parts[0], parts[1])
+        return dense.to_dense(self.structure, self.blocks)
 
     @classmethod
     def from_dense(
         cls,
-        structure: Structure,
-        dense: Array,
+        structure: BlockStructure,
+        matrix: Array,
         *,
         column_split: tuple[int, int] | None = None,
         check: bool = True,
@@ -406,78 +236,27 @@ class BlockMatrix:
 
         Parameters
         ----------
-        dense : Array[2n, m]
+        matrix : Array[2n, m]
             Spin-orbital matrix, alpha components first.
         column_split
             Column counts of the alpha and beta parts for collinear targets
-            with a rectangular ``dense``; defaults to equal halves.
+            with a rectangular ``matrix``; defaults to equal halves.
         check
-            If true, raise :class:`StructureError` unless ``dense`` has the
+            If true, raise :class:`StructureError` unless ``matrix`` has the
             requested structure to within ``tolerance`` (a lossless
             embedding). If false, project: average alpha and beta, take the
             real part, or Kramers-symmetrize as the structure requires.
         """
-        xp = array_namespace(dense)
-        if dense.ndim != 2:
-            raise StructureError("the dense representation is two-dimensional")
-        rows, cols = int(dense.shape[0]), int(dense.shape[1])
-        n = half_dimension(rows, "the number of rows of a spin-orbital matrix")
-        if structure.is_spinor:
-            (block,) = structure.stored_blocks
-            stored = dense
-            if block.ring is Ring.QUATERNION:
-                if rows == cols:
-                    stored = kramers_symmetrize(xp.astype(dense, xp.complex128))
-                elif not check:
-                    raise StructureError(
-                        "projecting a rectangular matrix onto a paired structure "
-                        "is not defined"
-                    )
-                elif not _has_kramers_invariant_range(dense, tolerance):
-                    raise StructureError(
-                        "the column space is not invariant under time reversal"
-                    )
-            parts: tuple[Array, ...] = (stored,)
-        else:
-            if column_split is None:
-                if cols % 2:
-                    raise StructureError(
-                        f"the dense matrix has {cols} columns; pass "
-                        "column_split=(m_alpha, m_beta) to split them between "
-                        "the spin blocks"
-                    )
-                m_alpha = m_beta = cols // 2
-            else:
-                m_alpha, m_beta = column_split
-            if m_alpha + m_beta != cols:
-                raise StructureError("column_split must sum to the number of columns")
-            alpha, beta = dense[:n, :m_alpha], dense[n:, m_alpha:]
-            if structure.is_spatial or structure.derived_partner is Partner.COPY:
-                if m_alpha != m_beta:
-                    raise StructureError("alpha and beta blocks must have equal shapes")
-                parts = ((alpha + beta) / 2,)
-            elif structure.derived_partner is Partner.CONJUGATE:
-                if m_alpha != m_beta:
-                    raise StructureError("alpha and beta blocks must have equal shapes")
-                parts = ((alpha + xp.conj(beta)) / 2,)
-            else:
-                parts = (alpha, beta)
-        cast = tuple(
-            _cast_to_ring(xp, part, block.ring)
-            for part, block in zip(parts, structure.stored_blocks, strict=True)
+        blocks = dense.blocks_from_dense(
+            structure,
+            matrix,
+            column_split=column_split,
+            check=check,
+            tolerance=tolerance,
         )
-        result = cls(structure, cast)
-        if check:
-            _require_close(
-                xp,
-                result.to_dense(),
-                dense,
-                tolerance,
-                f"the matrix does not have the {structure.describe()} structure",
-            )
-        return result
+        return cls(structure, blocks)
 
-    def embed(self, target: Structure) -> BlockMatrix:
+    def embed(self, target: BlockStructure) -> BlockMatrix:
         """Re-express the matrix in a less symmetric structure, losslessly.
 
         Pairs within the Fukutome hierarchy are converted block by block.
@@ -490,30 +269,15 @@ class BlockMatrix:
         """
         if target == self.structure:
             return self
-        if _is_structural_embedding(self.structure, target):
-            return self._embed_structurally(target)
+        if embedding.is_structural_embedding(self.structure, target):
+            return BlockMatrix(
+                target, embedding.embed_blocks(self.structure, self.blocks, target)
+            )
         return BlockMatrix.from_dense(
             target, self.to_dense(), column_split=self.column_split, check=True
         )
 
-    def _embed_structurally(self, target: Structure) -> BlockMatrix:
-        xp = array_namespace(*self.blocks)
-        if target.is_spinor:
-            parts = self.spin_blocks()
-            spinor = parts[0] if len(parts) == 1 else _block_diag(parts[0], parts[1])
-            stored: tuple[Array, ...] = (spinor,)
-        elif target.is_spatial:
-            stored = (self.blocks[0],)
-        else:
-            alpha, beta = self.spin_blocks()
-            stored = (alpha,) if target.derived_partner is not None else (alpha, beta)
-        cast = tuple(
-            _cast_to_ring(xp, part, block.ring)
-            for part, block in zip(stored, target.stored_blocks, strict=True)
-        )
-        return BlockMatrix(target, cast)
-
-    def project(self, target: Structure) -> BlockMatrix:
+    def project(self, target: BlockStructure) -> BlockMatrix:
         """Project the matrix onto a more symmetric structure by averaging."""
         return BlockMatrix.from_dense(
             target, self.to_dense(), column_split=self.column_split, check=False
@@ -532,10 +296,9 @@ class BlockMatrix:
             m = half_dimension(int(parts[0].shape[1]), "the number of spinor columns")
             total = parts[0][:n, :m] + parts[0][n:, m:]
         xp = array_namespace(total)
-        ring = (
-            Ring.COMPLEX if xp.isdtype(total.dtype, "complex floating") else Ring.REAL
-        )
-        return BlockMatrix(Structure.spatial(ring), (total,))
+        is_complex = xp.isdtype(total.dtype, "complex floating")
+        ring = Ring.COMPLEX if is_complex else Ring.REAL
+        return BlockMatrix(BlockStructure.spatial(ring), (total,))
 
     # ------------------------------------------------------------------ eigenproblem
 
@@ -556,14 +319,7 @@ class BlockMatrix:
         for index, (block, array) in enumerate(
             zip(self.structure.stored_blocks, self.blocks, strict=True)
         ):
-            adapt = None
-            if block.ring is Ring.QUATERNION:
-                if not is_kramers_symmetric(array):
-                    raise StructureError(
-                        "a paired (quaternionic) block must be Θ-symmetric to be "
-                        "diagonalized; build it with from_dense or kramers_symmetrize"
-                    )
-                adapt = kramers_adapt_eigenvectors
+            adapt = _kramers_adaptation(block.ring, array)
             if overlap is None:
                 w, v = eigh(array)
                 if adapt is not None:
@@ -577,32 +333,15 @@ class BlockMatrix:
         )
 
 
-def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> BlockMatrix:
-    """Return ``C diag(occupations) adjoint(C)`` block by block.
-
-    Parameters
-    ----------
-    coefficients : BlockMatrix
-        Orbital coefficients ``[ao, mo]`` per block.
-    occupations : BlockVector
-        Occupation numbers ``[mo]`` per block, as floats. In a paired
-        generalized structure they must be equal within each Kramers pair.
-    """
-    if coefficients.structure != occupations.structure:
-        raise StructureError("coefficients and occupations must share a structure")
-    blocks: list[Array] = []
-    for block, c, occupation in zip(
-        coefficients.structure.stored_blocks,
-        coefficients.blocks,
-        occupations.blocks,
-        strict=True,
-    ):
-        xp = array_namespace(c, occupation)
-        density = (c * xp.expand_dims(occupation, axis=0)) @ adjoint(c)
-        if block.ring is Ring.QUATERNION and not is_kramers_symmetric(density):
-            raise StructureError(
-                "occupations of a paired structure must be equal within each "
-                "Kramers pair"
-            )
-        blocks.append(density)
-    return BlockMatrix(coefficients.structure, tuple(blocks))
+def _kramers_adaptation(
+    ring: Ring, array: Array
+) -> Callable[[Array, Array], Array] | None:
+    """Return the eigenvector post-processing a block needs, after validating it."""
+    if ring is not Ring.QUATERNION:
+        return None
+    if not is_kramers_symmetric(array):
+        raise StructureError(
+            "a paired (quaternionic) block must be Θ-symmetric to be diagonalized; "
+            "build it with from_dense or kramers_symmetrize"
+        )
+    return kramers_adapt_eigenvectors

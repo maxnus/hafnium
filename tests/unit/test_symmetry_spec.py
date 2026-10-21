@@ -3,7 +3,7 @@
 import pytest
 
 from hafnium.errors import InputError
-from hafnium.structured import Ring, Structure
+from hafnium.structured import BlockStructure, Ring
 from hafnium.symmetry import FUKUTOME_CLASSES, Field, SpinSymmetry, SymmetrySpec
 
 
@@ -15,19 +15,19 @@ def test_all_eight_classes_are_listed() -> None:
 @pytest.mark.parametrize(
     ("name", "acronym", "structure"),
     [
-        ("RHF", "TICS", Structure.restricted(Ring.REAL)),
-        ("complex rhf", "CCW", Structure.restricted(Ring.COMPLEX)),
-        ("UHF", "ASDW", Structure.unrestricted(Ring.REAL)),
-        ("complex UHF", "ASW", Structure.unrestricted(Ring.COMPLEX)),
-        ("paired UHF", "ASCW", Structure.paired_unrestricted()),
-        ("real GHF", "TSDW", Structure.generalized(Ring.REAL)),
-        ("complex GHF", "TSW", Structure.generalized(Ring.COMPLEX)),
-        ("paired GHF", "TSCW", Structure.paired_generalized()),
-        ("ascw", "ASCW", Structure.paired_unrestricted()),
+        ("RHF", "TICS", BlockStructure.restricted(Ring.REAL)),
+        ("complex rhf", "CCW", BlockStructure.restricted(Ring.COMPLEX)),
+        ("UHF", "ASDW", BlockStructure.unrestricted(Ring.REAL)),
+        ("complex UHF", "ASW", BlockStructure.unrestricted(Ring.COMPLEX)),
+        ("paired UHF", "ASCW", BlockStructure.paired_unrestricted()),
+        ("real GHF", "TSDW", BlockStructure.generalized(Ring.REAL)),
+        ("complex GHF", "TSW", BlockStructure.generalized(Ring.COMPLEX)),
+        ("paired GHF", "TSCW", BlockStructure.paired_generalized()),
+        ("ascw", "ASCW", BlockStructure.paired_unrestricted()),
     ],
 )
 def test_names_map_to_classes_and_structures(
-    name: str, acronym: str, structure: Structure
+    name: str, acronym: str, structure: BlockStructure
 ) -> None:
     spec = SymmetrySpec.from_name(name)
     assert spec.fukutome.acronym == acronym

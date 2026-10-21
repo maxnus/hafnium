@@ -77,6 +77,10 @@ select = [
   "TID",       # tidy imports (banned numpy import outside backend)
   "NPY",       # numpy rules
   "RUF",       # ruff rules
+  "C901",      # cyclomatic complexity
+  "PLR0912",   # too many branches
+  "PLR0913",   # too many arguments
+  "PLR0915",   # too many statements
 ]
 allowed-confusables = ["−", "–", "σ", "×"]
 ignore = [
@@ -86,6 +90,14 @@ ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-statements = 30
+max-branches = 10
+max-args = 6
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "numpy".msg = "Import numpy only inside hafnium/backend; elsewhere use the array namespace (CONVENTIONS.md §5)."

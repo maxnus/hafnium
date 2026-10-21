@@ -11,6 +11,9 @@ authoritative and this file explains the intent.
 - Python: `ruff` formats and lints (line length 88, rule set in
   `pyproject.toml`); `pyright` in strict mode type-checks (ADR-0004);
   `pytest` runs tests. All three gate merges.
+- Function size is limited by ruff: at most 30 statements, 10 branches,
+  cyclomatic complexity 10 and 6 parameters. A function that trips a limit
+  is split, not exempted.
 - Rust: `rustfmt` default style; `cargo clippy -- -D warnings` with the
   `pedantic` group enabled; `cargo nextest` runs tests. All gate merges.
 - `pre-commit` runs the formatters and linters locally.
@@ -98,7 +101,7 @@ stored block.
 | `X Y` | spin components, only inside kernels that handle spin explicitly |
 
 Spin never appears as an explicit index in method code; it is part of the
-`Structure`.
+`BlockStructure`.
 
 ## 3. Physical and mathematical conventions
 
@@ -141,7 +144,7 @@ Spin never appears as an explicit index in method code; it is part of the
 
 ## 4. Data model
 
-- Inputs (`Molecule`, `BasisSet`, method specifications, `Structure`) are
+- Inputs (`Molecule`, `BasisSet`, method specifications, `BlockStructure`) are
   frozen dataclasses (or `attrs` classes with `frozen=True`; decide in an
   ADR and use one everywhere). They validate in `__post_init__` and raise
   on bad input.

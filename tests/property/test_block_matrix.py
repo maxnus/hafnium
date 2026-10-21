@@ -9,26 +9,26 @@ from hafnium.backend import adjoint
 from hafnium.errors import StructureError
 from hafnium.structured import (
     BlockMatrix,
+    BlockStructure,
     BlockVector,
     Ring,
-    Structure,
     density_matrix,
     is_kramers_symmetric,
     time_reverse,
 )
 from tests.tolerances import EIGEN_TOL, STRUCTURE_TOL
 
-STRUCTURES: dict[str, Structure] = {
-    "spatial-real": Structure.spatial(Ring.REAL),
-    "spatial-complex": Structure.spatial(Ring.COMPLEX),
-    "restricted-real": Structure.restricted(Ring.REAL),
-    "restricted-complex": Structure.restricted(Ring.COMPLEX),
-    "unrestricted-real": Structure.unrestricted(Ring.REAL),
-    "unrestricted-complex": Structure.unrestricted(Ring.COMPLEX),
-    "paired-unrestricted": Structure.paired_unrestricted(),
-    "generalized-real": Structure.generalized(Ring.REAL),
-    "generalized-complex": Structure.generalized(Ring.COMPLEX),
-    "paired-generalized": Structure.paired_generalized(),
+STRUCTURES: dict[str, BlockStructure] = {
+    "spatial-real": BlockStructure.spatial(Ring.REAL),
+    "spatial-complex": BlockStructure.spatial(Ring.COMPLEX),
+    "restricted-real": BlockStructure.restricted(Ring.REAL),
+    "restricted-complex": BlockStructure.restricted(Ring.COMPLEX),
+    "unrestricted-real": BlockStructure.unrestricted(Ring.REAL),
+    "unrestricted-complex": BlockStructure.unrestricted(Ring.COMPLEX),
+    "paired-unrestricted": BlockStructure.paired_unrestricted(),
+    "generalized-real": BlockStructure.generalized(Ring.REAL),
+    "generalized-complex": BlockStructure.generalized(Ring.COMPLEX),
+    "paired-generalized": BlockStructure.paired_generalized(),
 }
 
 # (lower symmetry class, higher symmetry class): every member of the first is
@@ -145,7 +145,7 @@ def test_eigh_diagonalizes_every_block(seed: int, n: int, name: str) -> None:
 def test_eigh_with_overlap(seed: int, n: int, name: str) -> None:
     rng = np.random.default_rng(seed)
     f = member(name, n, rng)
-    overlap = BlockMatrix(Structure.spatial(), (random_positive_definite(rng, n),))
+    overlap = BlockMatrix(BlockStructure.spatial(), (random_positive_definite(rng, n),))
     s = overlap.embed(f.structure)
     values, vectors = f.eigh(s)
     for fb, sb, w, c in zip(
@@ -166,7 +166,7 @@ def test_paired_structures_give_kramers_pairs(
     overlap = None
     if with_overlap:
         overlap = BlockMatrix(
-            Structure.spatial(), (random_positive_definite(rng, n),)
+            BlockStructure.spatial(), (random_positive_definite(rng, n),)
         ).embed(f.structure)
     values, vectors = f.eigh(overlap)
     if name == "paired-generalized":
@@ -197,10 +197,10 @@ def test_spin_trace_sums_the_spin_diagonal(seed: int, n: int, name: str) -> None
 
 def test_rectangular_coefficients_embed_through_the_hierarchy() -> None:
     rng = np.random.default_rng(1)
-    c = BlockMatrix(Structure.restricted(), (rng.standard_normal((5, 3)),))
-    unrestricted = c.embed(Structure.unrestricted())
+    c = BlockMatrix(BlockStructure.restricted(), (rng.standard_normal((5, 3)),))
+    unrestricted = c.embed(BlockStructure.unrestricted())
     assert unrestricted.shapes == ((5, 3), (5, 3))
-    generalized = unrestricted.embed(Structure.generalized())
+    generalized = unrestricted.embed(BlockStructure.generalized())
     assert generalized.shapes == ((10, 6),)
     assert np.allclose(generalized.to_dense(), c.to_dense())
     assert generalized.column_split is None
@@ -210,7 +210,7 @@ def test_rectangular_coefficients_embed_through_the_hierarchy() -> None:
 def test_uneven_column_split_round_trips() -> None:
     rng = np.random.default_rng(2)
     c = BlockMatrix(
-        Structure.unrestricted(),
+        BlockStructure.unrestricted(),
         (rng.standard_normal((4, 3)), rng.standard_normal((4, 1))),
     )
     again = BlockMatrix.from_dense(c.structure, c.to_dense(), column_split=(3, 1))
@@ -221,7 +221,7 @@ def test_embedding_into_a_more_symmetric_structure_is_rejected() -> None:
     rng = np.random.default_rng(3)
     u = member("unrestricted-real", 3, rng)
     with pytest.raises(StructureError, match="does not have the restricted"):
-        u.embed(Structure.restricted())
+        u.embed(BlockStructure.restricted())
 
 
 def test_operations_require_matching_structures() -> None:
@@ -236,39 +236,47 @@ def test_operations_require_matching_structures() -> None:
 
 def test_dtype_must_match_ring() -> None:
     with pytest.raises(StructureError, match="complex entries"):
-        BlockMatrix(Structure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=complex),))
+        BlockMatrix(
+            BlockStructure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=complex),)
+        )
     with pytest.raises(StructureError, match="real entries"):
-        BlockMatrix(Structure.spatial(Ring.COMPLEX), (np.zeros((2, 2)),))
+        BlockMatrix(BlockStructure.spatial(Ring.COMPLEX), (np.zeros((2, 2)),))
     with pytest.raises(StructureError, match="floating"):
-        BlockMatrix(Structure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=int),))
+        BlockMatrix(BlockStructure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=int),))
     with pytest.raises(StructureError, match="float64"):
-        BlockMatrix(Structure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=np.float32),))
+        BlockMatrix(
+            BlockStructure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=np.float32),)
+        )
     with pytest.raises(StructureError, match="complex128"):
         BlockMatrix(
-            Structure.spatial(Ring.COMPLEX), (np.zeros((2, 2), dtype=np.complex64),)
+            BlockStructure.spatial(Ring.COMPLEX),
+            (np.zeros((2, 2), dtype=np.complex64),),
         )
 
 
 def test_projection_casts_to_the_64_bit_dtypes() -> None:
     dense = np.eye(4, dtype=np.float32)
     assert (
-        BlockMatrix.from_dense(Structure.spatial(), dense).blocks[0].dtype == np.float64
+        BlockMatrix.from_dense(BlockStructure.spatial(), dense).blocks[0].dtype
+        == np.float64
     )
-    complex_block = BlockMatrix.from_dense(Structure.generalized(Ring.COMPLEX), dense)
+    complex_block = BlockMatrix.from_dense(
+        BlockStructure.generalized(Ring.COMPLEX), dense
+    )
     assert complex_block.blocks[0].dtype == np.complex128
 
 
 def test_block_count_and_shape_are_validated() -> None:
     with pytest.raises(StructureError, match="stores 2 blocks"):
-        BlockMatrix(Structure.unrestricted(), (np.zeros((2, 2)),))
+        BlockMatrix(BlockStructure.unrestricted(), (np.zeros((2, 2)),))
     with pytest.raises(StructureError, match="even"):
-        BlockMatrix(Structure.generalized(), (np.zeros((3, 3)),))
+        BlockMatrix(BlockStructure.generalized(), (np.zeros((3, 3)),))
     with pytest.raises(StructureError, match="row counts differ"):
-        BlockMatrix(Structure.unrestricted(), (np.eye(2), np.eye(3)))
+        BlockMatrix(BlockStructure.unrestricted(), (np.eye(2), np.eye(3)))
 
 
 def test_elementwise_products_of_block_matrices_are_rejected() -> None:
-    a = BlockMatrix(Structure.spatial(), (np.eye(2),))
+    a = BlockMatrix(BlockStructure.spatial(), (np.eye(2),))
     with pytest.raises(StructureError, match="use @"):
         _ = a * a  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]
     with pytest.raises(StructureError, match="use @"):
@@ -279,24 +287,24 @@ def test_elementwise_products_of_block_matrices_are_rejected() -> None:
 
 def test_odd_column_count_points_at_column_split() -> None:
     with pytest.raises(StructureError, match="column_split"):
-        BlockMatrix.from_dense(Structure.unrestricted(), np.zeros((4, 7)))
+        BlockMatrix.from_dense(BlockStructure.unrestricted(), np.zeros((4, 7)))
 
 
 def test_embedding_outside_the_hierarchy_uses_the_verified_dense_path() -> None:
     block = np.diag([1.0, 2.0])
-    equal = BlockMatrix(Structure.unrestricted(), (block, block.copy()))
-    restricted = equal.embed(Structure.restricted())
+    equal = BlockMatrix(BlockStructure.unrestricted(), (block, block.copy()))
+    restricted = equal.embed(BlockStructure.restricted())
     assert np.allclose(restricted.blocks[0], block)
-    unequal = BlockMatrix(Structure.unrestricted(), (block, 2 * block))
+    unequal = BlockMatrix(BlockStructure.unrestricted(), (block, 2 * block))
     with pytest.raises(StructureError, match="does not have the restricted"):
-        unequal.embed(Structure.restricted())
+        unequal.embed(BlockStructure.restricted())
 
 
 @pytest.mark.parametrize("with_overlap", [False, True])
 def test_degenerate_clusters_are_split_into_kramers_pairs(with_overlap: bool) -> None:
     rng = np.random.default_rng(5)
     n = 3
-    paired = Structure.paired_generalized()
+    paired = BlockStructure.paired_generalized()
     # the identity: one 2n-fold cluster; a block-diagonal matrix: a four-fold one
     spatial = np.diag([1.0, 1.0, 2.0]).astype(complex)
     four_fold = np.block(
@@ -307,7 +315,7 @@ def test_degenerate_clusters_are_split_into_kramers_pairs(with_overlap: bool) ->
         metric = np.eye(2 * n)
         if with_overlap:
             overlap = BlockMatrix(
-                Structure.spatial(), (random_positive_definite(rng, n),)
+                BlockStructure.spatial(), (random_positive_definite(rng, n),)
             ).embed(paired)
             metric = overlap.blocks[0]
         values, vectors = f.eigh(overlap)
@@ -321,14 +329,14 @@ def test_degenerate_clusters_are_split_into_kramers_pairs(with_overlap: bool) ->
 def test_quaternionic_blocks_must_be_kramers_symmetric_to_diagonalize() -> None:
     rng = np.random.default_rng(6)
     not_symmetric = BlockMatrix(
-        Structure.paired_generalized(), (random_hermitian(rng, 4),)
+        BlockStructure.paired_generalized(), (random_hermitian(rng, 4),)
     )
     with pytest.raises(StructureError, match="Θ-symmetric"):
         not_symmetric.eigh()
 
 
 def test_paired_occupations_must_respect_kramers_pairs() -> None:
-    paired = Structure.paired_generalized()
+    paired = BlockStructure.paired_generalized()
     _, vectors = BlockMatrix.identity(paired, 2).eigh()
     with pytest.raises(StructureError, match="Kramers pair"):
         density_matrix(vectors, BlockVector(paired, (np.array([1.0, 0.0, 0.0, 0.0]),)))
@@ -339,11 +347,11 @@ def test_paired_occupations_must_respect_kramers_pairs() -> None:
 
 
 def test_zeros_and_identity_have_the_right_block_shapes() -> None:
-    assert BlockMatrix.zeros(Structure.generalized(), (3, 2)).shapes == ((6, 4),)
-    assert BlockMatrix.zeros(Structure.unrestricted(), (3, 2)).shapes == (
+    assert BlockMatrix.zeros(BlockStructure.generalized(), (3, 2)).shapes == ((6, 4),)
+    assert BlockMatrix.zeros(BlockStructure.unrestricted(), (3, 2)).shapes == (
         (3, 2),
         (3, 2),
     )
-    identity = BlockMatrix.identity(Structure.paired_generalized(), 3)
+    identity = BlockMatrix.identity(BlockStructure.paired_generalized(), 3)
     assert identity.shapes == ((6, 6),)
     assert identity.blocks[0].dtype == np.complex128

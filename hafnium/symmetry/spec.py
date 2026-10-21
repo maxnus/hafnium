@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from hafnium.errors import InputError
-from hafnium.structured import Ring, Structure
+from hafnium.structured import BlockStructure, Ring
 
 
 class SpinSymmetry(Enum):
@@ -144,18 +144,18 @@ class SymmetrySpec:
         """The Fukutome class of this specification."""
         return FUKUTOME_CLASSES[(self.spin, self.field)]
 
-    def structure(self) -> Structure:
+    def structure(self) -> BlockStructure:
         """Block structure of one-body operators (Fock, density) in this class."""
         if self.field is Field.PAIRED:
             if self.spin is SpinSymmetry.UNRESTRICTED:
-                return Structure.paired_unrestricted()
-            return Structure.paired_generalized()
+                return BlockStructure.paired_unrestricted()
+            return BlockStructure.paired_generalized()
         ring = Ring.REAL if self.field is Field.REAL else Ring.COMPLEX
         if self.spin is SpinSymmetry.RESTRICTED:
-            return Structure.restricted(ring)
+            return BlockStructure.restricted(ring)
         if self.spin is SpinSymmetry.UNRESTRICTED:
-            return Structure.unrestricted(ring)
-        return Structure.generalized(ring)
+            return BlockStructure.unrestricted(ring)
+        return BlockStructure.generalized(ring)
 
     def validate_electrons(self, n_alpha: int, n_beta: int) -> None:
         """Check that an electron count is representable in this class.

@@ -42,7 +42,7 @@ class Partner(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Block:
-    """One block of a :class:`Structure`.
+    """One block of a :class:`BlockStructure`.
 
     Parameters
     ----------
@@ -83,7 +83,7 @@ class Block:
 
 
 @dataclass(frozen=True, slots=True)
-class Structure:
+class BlockStructure:
     """Ordered blocks of a symmetry-constrained one-body operator.
 
     Use the class methods to build the structures of the Fukutome classes;
@@ -115,12 +115,12 @@ class Structure:
                 raise StructureError("a derived block shares the ring of its source")
 
     @classmethod
-    def spatial(cls, ring: Ring = Ring.REAL) -> Structure:
+    def spatial(cls, ring: Ring = Ring.REAL) -> BlockStructure:
         """One block acting identically on both spins (overlap, core Hamiltonian)."""
         return cls((Block(Spin.NONE, ring),))
 
     @classmethod
-    def restricted(cls, ring: Ring = Ring.REAL) -> Structure:
+    def restricted(cls, ring: Ring = Ring.REAL) -> BlockStructure:
         """Alpha block stored, beta block a copy (RHF)."""
         return cls(
             (
@@ -130,12 +130,12 @@ class Structure:
         )
 
     @classmethod
-    def unrestricted(cls, ring: Ring = Ring.REAL) -> Structure:
+    def unrestricted(cls, ring: Ring = Ring.REAL) -> BlockStructure:
         """Independent alpha and beta blocks (UHF)."""
         return cls((Block(Spin.ALPHA, ring), Block(Spin.BETA, ring)))
 
     @classmethod
-    def paired_unrestricted(cls) -> Structure:
+    def paired_unrestricted(cls) -> BlockStructure:
         """Alpha block stored, beta block its complex conjugate (paired UHF)."""
         return cls(
             (
@@ -147,12 +147,12 @@ class Structure:
         )
 
     @classmethod
-    def generalized(cls, ring: Ring = Ring.REAL) -> Structure:
+    def generalized(cls, ring: Ring = Ring.REAL) -> BlockStructure:
         """One spinor block of dimension ``2n`` (GHF)."""
         return cls((Block(Spin.SPINOR, ring),))
 
     @classmethod
-    def paired_generalized(cls) -> Structure:
+    def paired_generalized(cls) -> BlockStructure:
         """One quaternionic spinor block (paired GHF)."""
         return cls((Block(Spin.SPINOR, Ring.QUATERNION),))
 
@@ -194,7 +194,7 @@ class Structure:
         """Whether any stored block has complex entries."""
         return any(block.ring is not Ring.REAL for block in self.stored_blocks)
 
-    def with_ring(self, ring: Ring) -> Structure:
+    def with_ring(self, ring: Ring) -> BlockStructure:
         """Return the same block pattern over another ring.
 
         Only real and complex rings can be chosen; the paired structures
@@ -202,13 +202,13 @@ class Structure:
         """
         if ring is Ring.QUATERNION:
             raise StructureError(
-                "use Structure.paired_generalized() for quaternionic blocks"
+                "use BlockStructure.paired_generalized() for quaternionic blocks"
             )
         if self.derived_partner is Partner.CONJUGATE or any(
             block.ring is Ring.QUATERNION for block in self.blocks
         ):
             raise StructureError("paired structures fix their ring")
-        return Structure(
+        return BlockStructure(
             tuple(
                 Block(block.spin, ring, block.weight, block.derived_from, block.partner)
                 for block in self.blocks
