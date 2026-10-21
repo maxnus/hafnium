@@ -12,3 +12,10 @@ uses [Semantic Versioning](https://semver.org/).
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.
+- Backend module: array-namespace discovery, the allowed array API subset
+  with an enforcing test, Hermitian and generalized eigensolvers.
+- Symmetry-structured matrices: `Structure`, `BlockMatrix`, `BlockVector`,
+  lossless embedding and averaging projection between structures,
+  Kramers-adapted eigensolvers for paired classes, density construction.
+- `SymmetrySpec` mapping the eight Fukutome classes to block structures,
+  with electron-count validation.

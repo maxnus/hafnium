@@ -213,7 +213,7 @@ given by the Frobenius–Schur indicator of each irrep). In concrete terms:
 Everything an SCF needs, namely addition, multiplication, adjoint, trace,
 and eigendecomposition, is block-wise. So one implementation of HF, written
 against a block-structured matrix type, covers every symmetry combination.
-Which combination is active is data (the `Structure`), not code.
+Which combination is active is data (the `BlockStructure`), not code.
 
 The eight Fukutome classes, as tabulated in Table I of Henderson,
 Jiménez-Hoyos and Scuseria (arXiv:1710.00932), the companion to the JCTC
@@ -244,10 +244,10 @@ covers this, but it is out of scope for version 1 (§5.8).
 
 Names are proposals; `CONVENTIONS.md` fixes them.
 
-`Structure` describes an algebra: an ordered list of `Block` records, each
+`BlockStructure` describes an algebra: an ordered list of `Block` records, each
 with a sector label (spin sector, irrep, later k-point), a dimension, a
 ring (`REAL`, `COMPLEX`, `QUATERNION`), a weight, and an optional partner
-rule (`COPY` or `CONJUGATE`) referencing another block. A `Structure` also
+rule (`COPY` or `CONJUGATE`) referencing another block. A `BlockStructure` also
 knows the mapping from AO basis functions to sector basis functions (the
 SALC transformation) and how electron counts are distributed over sectors
 (the filling policy: n_α and n_β for collinear sectors, N for a generalized
@@ -340,7 +340,7 @@ Symmetry(spin="collinear", field="complex", point_group="C2v")
 Symmetry.from_name("complex UHF", point_group="C2v")
 ```
 
-The library maps this to a `Structure`, reports the resulting Fukutome
+The library maps this to a `BlockStructure`, reports the resulting Fukutome
 class, and refuses inconsistent requests (paired UHF with n_α ≠ n_β).
 Stability analysis takes a target structure and reports whether lowering
 to it decreases the energy.
@@ -369,7 +369,7 @@ promotion). Rules:
 - The allowed subset of the array API is listed in `backend/allowed.py`
   and checked by a lint test, so that code written on NumPy is known to run
   under JAX and CuPy.
-- Dtype and device are properties of the `Structure`'s blocks and the
+- Dtype and device are properties of the `BlockStructure`'s blocks and the
   backend configuration, never implicit.
 
 Backends in version 1: NumPy (CPU; threads via BLAS), CuPy (GPU), JAX
@@ -381,7 +381,7 @@ JAX imposes constraints that are cheap to honor from the start and costly
 to retrofit:
 
 - Pure functions and immutable data: already principle 2.
-- Static shapes: block shapes are static metadata of `Structure`, so
+- Static shapes: block shapes are static metadata of `BlockStructure`, so
   tracing works. Occupation counts per sector are static too.
 - Pytrees: `BlockMatrix` and `BlockTensor` are registered pytrees.
 - Iterative solvers: the SCF loop is written as a step function applied by
@@ -424,9 +424,9 @@ harmonic phase conventions, normalization.
 
 **symmetry.** Point groups and irrep tables (Abelian in version 1), SALC
 construction, `SpinStructure`, `FieldStructure`, `SymmetrySpec`, the
-mapping to `Structure` and to Fukutome names.
+mapping to `BlockStructure` and to Fukutome names.
 
-**structured.** `Structure`, `BlockMatrix`, `BlockTensor`, embed/project
+**structured.** `BlockStructure`, `BlockMatrix`, `BlockTensor`, embed/project
 maps, structured `einsum`. Backend-agnostic.
 
 **backend.** Array namespace selection, device and dtype policy, linear
@@ -533,7 +533,7 @@ and CI configuration done 2026-10-21; the CI run and the PEP 541 filing
 wait for the GitHub remote.
 
 **M1 Foundations.** `Molecule`, `BasisSet` with BSE client and cache,
-backend module with the NumPy backend, `Structure` and `BlockMatrix` with
+backend module with the NumPy backend, `BlockStructure` and `BlockMatrix` with
 the full operation set and embed/project maps, `SymmetrySpec` for all
 Fukutome classes without point groups. Exit: `BlockMatrix` property tests
 pass for all eight structures.
