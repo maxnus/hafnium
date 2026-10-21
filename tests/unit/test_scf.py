@@ -91,7 +91,7 @@ def check_state(result: ScfResult, hamiltonian: Hamiltonian) -> None:
 def test_h2_sto3g_matches_szabo_and_ostlund() -> None:
     # Szabo and Ostlund, Modern Quantum Chemistry, section 3.5.2 (R = 1.4 Bohr).
     molecule = hydrogen()
-    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
     result = hartree_fock(ENGINE, basis, molecule)
     assert result.energies.electronic == pytest.approx(-1.8310, abs=LITERATURE_TOL)
     assert result.energy == pytest.approx(-1.1167, abs=LITERATURE_TOL)
@@ -227,8 +227,8 @@ def test_open_shell_classes_agree_on_the_water_cation() -> None:
 
 def test_density_fitting_reproduces_the_exact_energy_closely() -> None:
     molecule = water()
-    basis = BasisSet.for_molecule(molecule, "def2-svp", library=LIBRARY)
-    auxiliary = BasisSet.for_molecule(molecule, "def2-universal-jkfit", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "def2-svp", library=LIBRARY)
+    auxiliary = BasisSet.for_atoms(molecule, "def2-universal-jkfit", library=LIBRARY)
     exact = hartree_fock(ENGINE, basis, molecule)
     fitted = hartree_fock(ENGINE, basis, molecule, auxiliary=auxiliary)
     assert fitted.energy == pytest.approx(exact.energy, abs=DENSITY_FITTING_ENERGY_TOL)
@@ -363,7 +363,7 @@ def test_level_shift_and_damping_reach_the_same_state(
 
 def test_linearly_dependent_functions_are_removed() -> None:
     molecule = water()
-    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
     duplicated = BasisSet(
         "doubled",
         basis.atom_symbols,
@@ -415,14 +415,14 @@ def test_core_guess_is_spin_averaged(water_hamiltonian: Hamiltonian) -> None:
 
 def test_atomic_densities_are_spherical_and_superpose_by_atom() -> None:
     carbon = Molecule.from_atoms([("C", (0.0, 0.0, 0.0))])
-    basis = BasisSet.for_molecule(carbon, "sto-3g", library=LIBRARY)
+    basis = BasisSet.for_atoms(carbon, "sto-3g", library=LIBRARY)
     density = atomic_density(ENGINE, basis, 0)
     # STO-3G carbon: 1s, 2s, then 2p x y z. Two 2p electrons spread over
     # three orbitals give 1/3 per spin and no preferred direction.
     np.testing.assert_allclose(density[2:, 2:], np.eye(3) / 3, atol=STRUCTURE_TOL)
     np.testing.assert_allclose(density[:2, 2:], 0.0, atol=STRUCTURE_TOL)
     molecule = water()
-    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
     structure = BlockStructure.generalized()
     guess = atomic_density_guess(ENGINE, basis, structure)
     assert guess.structure == structure

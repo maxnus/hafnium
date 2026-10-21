@@ -59,9 +59,11 @@ uses [Semantic Versioning](https://semver.org/).
   segmented def2-SVP basis already was.
 - Periodic foundations (M4, part one): `Lattice` with one to three
   translation vectors, reciprocal vectors, fractional coordinates,
-  wrapping, translations within a cutoff and supercells; `Cell` as a
-  `Molecule` with a lattice, extended-XYZ input and output that keep the
-  lattice, supercell construction; `KPoints` meshes (Γ-centred, shifted,
+  wrapping, translations within a cutoff and supercells; `AtomicSystem`
+  as the common base of `Molecule` and `Cell`, which are siblings
+  (ADR-0013), with `BasisSet.for_molecule` renamed `for_atoms`; `Cell`
+  with a lattice, extended-XYZ input and output that keep the lattice,
+  supercell construction; `KPoints` meshes (Γ-centred, shifted,
   Monkhorst–Pack) and explicit lists with weights, time-reversal partners
   and invariant momenta; Ewald nuclear repulsion in one to three
   dimensions with one regularization of the `G = 0` term (ADR-0012), the

@@ -23,8 +23,8 @@ STORED_CASES = CASES[:1]
 
 def compute(name: str, basis_name: str, omega: float | None = None) -> DensityFitting:
     molecule = MOLECULES[name]
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
-    auxiliary = BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+    auxiliary = BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY)
     return DensityFitting.build(ENGINE, basis, auxiliary, molecule, omega=omega)
 
 
@@ -32,8 +32,8 @@ def bases(name: str, basis_name: str) -> tuple[Molecule, BasisSet, BasisSet]:
     molecule = MOLECULES[name]
     return (
         molecule,
-        BasisSet.for_molecule(molecule, basis_name, library=LIBRARY),
-        BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY),
+        BasisSet.for_atoms(molecule, basis_name, library=LIBRARY),
+        BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY),
     )
 
 

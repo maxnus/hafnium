@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hafnium.basis.library import BasisLibrary
 from hafnium.basis.shell import Shell
 from hafnium.errors import BasisSetError
-from hafnium.molecule import Molecule
+from hafnium.molecule import AtomicSystem
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,15 +59,15 @@ class BasisSet:
             raise BasisSetError("shells are ordered by atom")
 
     @classmethod
-    def for_molecule(
-        cls, molecule: Molecule, name: str, *, library: BasisLibrary | None = None
+    def for_atoms(
+        cls, system: AtomicSystem, name: str, *, library: BasisLibrary | None = None
     ) -> BasisSet:
-        """Assign basis set ``name`` to every atom of ``molecule``."""
+        """Assign basis set ``name`` to every atom of a molecule or a cell."""
         library = BasisLibrary() if library is None else library
-        by_element = library.shells(name, molecule.atomic_numbers)
+        by_element = library.shells(name, system.atomic_numbers)
         shells: list[Shell] = []
         centres: list[int] = []
-        for index, atom in enumerate(molecule.atoms):
+        for index, atom in enumerate(system.atoms):
             element_shells = by_element[atom.atomic_number]
             if not element_shells:
                 raise BasisSetError(
@@ -75,7 +75,7 @@ class BasisSet:
                 )
             shells.extend(element_shells)
             centres.extend([index] * len(element_shells))
-        return cls(name, molecule.symbols, tuple(shells), tuple(centres))
+        return cls(name, system.symbols, tuple(shells), tuple(centres))
 
     @property
     def n_atoms(self) -> int:

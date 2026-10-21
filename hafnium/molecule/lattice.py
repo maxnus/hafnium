@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from hafnium.backend import Array, Namespace, array_namespace, default_namespace
 from hafnium.errors import InputError
-from hafnium.molecule.molecule import bohr_per_unit
+from hafnium.molecule.system import bohr_per_unit
 
 Vector = tuple[float, float, float]
 

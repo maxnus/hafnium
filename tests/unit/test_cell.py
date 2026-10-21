@@ -6,6 +6,7 @@ import pytest
 from hafnium.errors import InputError
 from hafnium.molecule import (
     ANGSTROM_IN_BOHR,
+    AtomicSystem,
     Cell,
     Lattice,
     Molecule,
@@ -24,9 +25,11 @@ def lithium_hydride() -> Cell:
     return Cell.from_molecule(molecule, CUBIC)
 
 
-def test_cell_is_a_molecule_with_a_lattice() -> None:
+def test_cell_and_molecule_are_siblings_under_the_atomic_system() -> None:
     cell = lithium_hydride()
-    assert isinstance(cell, Molecule)
+    assert isinstance(cell, AtomicSystem)
+    assert not isinstance(cell, Molecule)
+    assert not isinstance(Molecule(cell.atoms), Cell)
     assert cell.dimension == 3
     assert cell.n_electrons == 4
     assert cell.symbols == ("Li", "H")
@@ -34,8 +37,25 @@ def test_cell_is_a_molecule_with_a_lattice() -> None:
     charged = Cell(cell.atoms, charge=1, spin=1, lattice=CUBIC)
     assert charged.n_alpha == 2
     assert charged.n_beta == 1
+    assert charged != Cell(
+        cell.atoms, charge=1, spin=1, lattice=CUBIC.supercell((2, 1, 1))
+    )
     with pytest.raises(InputError, match="at least one atom"):
         Cell((), lattice=CUBIC)
+
+
+def test_from_atoms_takes_vectors_in_the_same_unit_or_a_lattice() -> None:
+    cell = Cell.from_atoms(
+        [("He", (0.0, 0.0, 0.0)), ("He", (1.0, 1.0, 1.0))],
+        [(2.0, 0.0, 0.0), (0.0, 2.0, 0.0), (0.0, 0.0, 2.0)],
+    )
+    assert cell.positions[1] == (ANGSTROM_IN_BOHR,) * 3
+    assert cell.lattice.vectors[0] == (2.0 * ANGSTROM_IN_BOHR, 0.0, 0.0)
+    in_bohr = Cell.from_atoms([("He", (0.0, 0.0, 0.0))], CUBIC, charge=1, spin=1)
+    assert in_bohr.lattice == CUBIC
+    assert in_bohr.n_electrons == 1
+    with pytest.raises(InputError, match="dependent"):
+        Cell.from_atoms([("He", (0.0, 0.0, 0.0))], [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
 
 
 def test_extended_xyz_round_trips_in_every_dimension() -> None:

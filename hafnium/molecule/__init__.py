@@ -9,7 +9,14 @@ from hafnium.molecule.ewald import (
     ewald_parameters,
 )
 from hafnium.molecule.lattice import Lattice
-from hafnium.molecule.molecule import Atom, Molecule, bohr_per_unit, parse_xyz
+from hafnium.molecule.molecule import Molecule
+from hafnium.molecule.system import (
+    Atom,
+    AtomicSystem,
+    atoms_in_bohr,
+    bohr_per_unit,
+    parse_xyz,
+)
 from hafnium.molecule.units import (
     ANGSTROM_IN_BOHR,
     BOHR_IN_ANGSTROM,
@@ -24,12 +31,14 @@ __all__ = [
     "DEFAULT_EWALD_PRECISION",
     "HARTREE_IN_EV",
     "Atom",
+    "AtomicSystem",
     "Cell",
     "EwaldParameters",
     "Lattice",
     "Molecule",
     "angstrom_to_bohr",
     "atomic_number",
+    "atoms_in_bohr",
     "bohr_per_unit",
     "bohr_to_angstrom",
     "element_symbol",

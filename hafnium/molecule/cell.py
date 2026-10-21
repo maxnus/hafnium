@@ -1,40 +1,66 @@
-"""Periodic systems: a molecule with a lattice (ADR-0007)."""
+"""Periodic systems: atoms repeated on a lattice (ADR-0007, ADR-0013)."""
 
 from __future__ import annotations
 
 import itertools
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from hafnium.backend import host_array
 from hafnium.errors import InputError
 from hafnium.molecule.ewald import DEFAULT_EWALD_PRECISION, ewald_energy
 from hafnium.molecule.lattice import Lattice
-from hafnium.molecule.molecule import Atom, Molecule, bohr_per_unit, parse_xyz
+from hafnium.molecule.molecule import Molecule
+from hafnium.molecule.system import (
+    Atom,
+    AtomicSystem,
+    atoms_in_bohr,
+    bohr_per_unit,
+    parse_xyz,
+)
 
 _LATTICE_FIELD = re.compile(r'Lattice="([^"]*)"')
 
 
 @dataclass(frozen=True, slots=True)
-class Cell(Molecule):
+class Cell(AtomicSystem):
     """A unit cell: atoms with charge and spin per cell, and a lattice.
 
-    Build it with the constructor (positions and lattice in Bohr), with
-    :meth:`from_molecule`, or with :meth:`from_xyz` from extended-XYZ text
-    whose comment line carries the lattice. Every molecular property applies
-    per cell; a charged cell is neutralized by a uniform background, and the
-    nuclear repulsion is an Ewald sum.
+    Build it with :meth:`from_atoms`, :meth:`from_molecule`, or
+    :meth:`from_xyz` from extended-XYZ text whose comment line carries the
+    lattice; the constructor takes positions and lattice in Bohr. Charge
+    and spin are per cell; a charged cell is neutralized by a uniform
+    background, and the nuclear repulsion is an Ewald sum.
     """
 
     lattice: Lattice = field(kw_only=True)
 
-    def __post_init__(self) -> None:
-        Molecule.__post_init__(self)
+    @classmethod
+    def from_atoms(
+        cls,
+        atoms: Iterable[tuple[str, Iterable[float]]],
+        lattice: Lattice | Iterable[Iterable[float]],
+        *,
+        charge: int = 0,
+        spin: int = 0,
+        unit: str = "angstrom",
+    ) -> Cell:
+        """Build from ``(symbol, (x, y, z))`` pairs and lattice vectors.
+
+        Positions and vectors are in ``unit``, Ångström by default; a
+        :class:`Lattice` is taken as it is, in Bohr.
+        """
+        if not isinstance(lattice, Lattice):
+            lattice = Lattice.from_vectors(lattice, unit=unit)
+        return cls(
+            atoms_in_bohr(atoms, unit), charge=charge, spin=spin, lattice=lattice
+        )
 
     @classmethod
     def from_molecule(cls, molecule: Molecule, lattice: Lattice) -> Cell:
-        """Repeat ``molecule`` on ``lattice``, keeping its charge and spin."""
+        """Repeat the atoms of ``molecule`` on ``lattice``, keeping charge and spin."""
         return cls(
             molecule.atoms, charge=molecule.charge, spin=molecule.spin, lattice=lattice
         )
@@ -61,10 +87,7 @@ class Cell(Molecule):
                 f"vectors, got {len(values)}"
             )
         vectors = [values[start : start + 3] for start in range(0, len(values), 3)]
-        return cls.from_molecule(
-            Molecule.from_atoms(atoms, charge=charge, spin=spin, unit=unit),
-            Lattice.from_vectors(vectors, unit=unit),
-        )
+        return cls.from_atoms(atoms, vectors, charge=charge, spin=spin, unit=unit)
 
     @property
     def dimension(self) -> int:
@@ -134,4 +157,4 @@ class Cell(Molecule):
             for component in vector
         )
         header = f'Lattice="{numbers}" {comment}'.rstrip()
-        return Molecule.to_xyz(self, comment=header, unit=unit)
+        return AtomicSystem.to_xyz(self, comment=header, unit=unit)

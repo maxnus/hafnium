@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 
 from hafnium.basis import BasisSet
-from hafnium.molecule import Molecule
+from hafnium.molecule import AtomicSystem
 from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
     density_fitting_reference,
@@ -53,7 +53,7 @@ DIRECTORY = Path(__file__).parent / "data"
 
 def record(
     kind: str,
-    molecule: Molecule,
+    system: AtomicSystem,
     name: str,
     basis_name: str,
     settings: str,
@@ -69,7 +69,7 @@ def record(
         "molecule": name,
         "basis": basis_name,
         **extra,
-        "positions_bohr": [list(p) for p in molecule.positions],
+        "positions_bohr": [list(p) for p in system.positions],
     }
     data = {"provenance": provenance}
     data.update({key: matrix.tolist() for key, matrix in matrices.items()})
@@ -82,7 +82,7 @@ def main() -> None:
     DIRECTORY.mkdir(exist_ok=True)
     for name, basis_name in STORED_CASES:
         molecule = MOLECULES[name]
-        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
         record(
             "one_electron",
             molecule,
@@ -93,8 +93,8 @@ def main() -> None:
         )
     for name, basis_name in DENSITY_FITTING_CASES:
         molecule = MOLECULES[name]
-        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
-        auxiliary = BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY)
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY)
         record(
             "density_fitting",
             molecule,
@@ -106,7 +106,7 @@ def main() -> None:
         )
     for name, basis_name in FOUR_CENTER_CASES:
         molecule = MOLECULES[name]
-        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
         record(
             "four_center",
             molecule,
@@ -117,7 +117,7 @@ def main() -> None:
         )
     for name, basis_name in FOURIER_CASES:
         molecule = MOLECULES[name]
-        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
         transforms = fourier_transform_reference(molecule, basis, G_VECTORS)
         parts = {
             f"{key}_{part}": getattr(np, part)(value)
@@ -134,7 +134,7 @@ def main() -> None:
         )
     for name, basis_name, kind in SCF_CASES:
         molecule = SCF_MOLECULES[name]
-        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
         reference = scf_reference(molecule, basis, kind)
         record(
             "scf",

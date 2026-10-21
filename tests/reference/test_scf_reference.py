@@ -94,7 +94,7 @@ def test_density_fitted_hartree_fock_matches_pyscf(kind: str) -> None:
 
     molecule = MOLECULES["water" if kind == "rhf" else "water_cation"]
     basis, hamiltonian = hamiltonian_for(molecule, "def2-svp", AUXILIARY)
-    auxiliary = BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY)
+    auxiliary = BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY)
     result = converge(hamiltonian, basis, kind, "atoms")
     check_against(result, scf_reference(molecule, basis, kind, auxiliary=auxiliary))
 

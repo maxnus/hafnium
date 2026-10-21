@@ -29,8 +29,8 @@ def tables(
     molecule: Molecule, orbital: str, auxiliary: str
 ) -> tuple[ShellTable, ShellTable]:
     positions = molecule.positions_array()
-    basis = BasisSet.for_molecule(molecule, orbital, library=LIBRARY)
-    aux = BasisSet.for_molecule(molecule, auxiliary, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, orbital, library=LIBRARY)
+    aux = BasisSet.for_atoms(molecule, auxiliary, library=LIBRARY)
     return ShellTable.from_basis(basis, positions), ShellTable.from_basis(
         aux, positions
     )
@@ -105,7 +105,7 @@ def test_three_center_with_s_auxiliary_is_an_attenuated_attraction() -> None:
     # A unit-norm s auxiliary function of exponent q is the unit Gaussian
     # charge divided by (q / 2π)^{3/4}, whose potential is erf(√q r) / r.
     molecule = water()
-    basis = BasisSet.for_molecule(molecule, "cc-pvdz", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "cc-pvdz", library=LIBRARY)
     q = 0.6
     aux_basis = BasisSet("s", ("O",), (Shell(0, (q,), ((1.0,),)),), (0,))
     probe = Molecule.from_atoms([("O", molecule.positions[0])], unit="bohr")
@@ -174,8 +174,8 @@ def test_attenuated_integrals_are_bounded_by_the_full_kernel() -> None:
 
 def test_fitted_tensor_reproduces_the_fitted_repulsion() -> None:
     molecule = water()
-    basis = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
-    aux = BasisSet.for_molecule(molecule, "def2-universal-jkfit", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
+    aux = BasisSet.for_atoms(molecule, "def2-universal-jkfit", library=LIBRARY)
     fitting = DensityFitting.build(ENGINE, basis, aux, molecule)
     assert fitting.n_aux == aux.n_functions
     assert fitting.n_ao == basis.n_functions

@@ -39,6 +39,7 @@ nav:
       - adr/0010-scf-driver-over-structured-matrices.md
       - adr/0011-general-contractions-in-the-kernels.md
       - adr/0012-ewald-sums-in-reduced-dimensions.md
+      - adr/0013-molecule-and-cell-as-siblings.md
   - API reference: api.md
 
 markdown_extensions:

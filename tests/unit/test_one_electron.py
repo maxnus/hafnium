@@ -28,7 +28,7 @@ ENGINE = RustEngine()
 
 
 def basis_for(molecule: Molecule, name: str) -> BasisSet:
-    return BasisSet.for_molecule(molecule, name, library=LIBRARY)
+    return BasisSet.for_atoms(molecule, name, library=LIBRARY)
 
 
 def hydrogen_molecule() -> tuple[Molecule, BasisSet]:

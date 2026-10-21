@@ -372,9 +372,10 @@ storage are later extensions that the data model already accommodates.
 ### 5.9 Periodic systems: k-points as sectors
 
 Periodic boundary conditions in one, two or three dimensions are part of
-version 1. A `Cell` is a `Molecule` with a `Lattice` of d ∈ {1, 2, 3}
-translation vectors; the open directions of a chain or a slab carry no
-vacuum padding (ADR-0007). Translational symmetry is handled like every
+version 1. A `Cell` is an `AtomicSystem` with a `Lattice` of d ∈ {1, 2, 3}
+translation vectors, a sibling of `Molecule` rather than a subclass
+(ADR-0013); the open directions of a chain or a slab carry no vacuum
+padding (ADR-0007). Translational symmetry is handled like every
 other symmetry: as data in the block structure, not as a separate code
 path.
 
@@ -506,9 +507,10 @@ coordinates in Bohr; total charge; spin given as n_α − n_β; detected point
 group and a standard orientation. Constructors accept Ångström input and
 convert once. `Lattice`: one to three translation vectors, reciprocal
 vectors, fractional coordinates, translations within a cutoff. `Cell`: a
-`Molecule` with a `Lattice`, with charge and spin per cell, supercell
-construction, extended-XYZ input and output that keep the lattice, and an
-Ewald nuclear repulsion. Owns: units at the boundary.
+sibling of `Molecule` under `AtomicSystem` with a `Lattice`, charge and
+spin per cell, supercell construction, extended-XYZ input and output that
+keep the lattice, and an Ewald nuclear repulsion. Owns: units at the
+boundary.
 
 **basis.** `Shell` (angular momentum, exponents, contraction
 coefficients, spherical or Cartesian), `BasisSet` (shells per atom, AO
@@ -816,7 +818,8 @@ ADR-0003 and the risk table; Python 3.11+, NumPy 2, uv, ruff and pyright
 strict as the toolchain baseline (2026-10-21, ADR-0004); spherical
 functions ordered m = −l..+l with BSE normalization conventions and CODATA
 2018 units (2026-10-21, ADR-0006); periodic systems as k-point sectors,
-with `Cell` as a `Molecule` plus a `Lattice` of only the periodic vectors,
+with `Cell` as an `AtomicSystem` plus a `Lattice` of only the periodic vectors
+(a sibling of `Molecule`, ADR-0013),
 Bloch and k-point conventions, and range-separated density fitting for
 the periodic Coulomb terms (2026-10-21, ADR-0007); McMurchie–Davidson for
 every integral type in the native engine, with Rys quadrature held in
