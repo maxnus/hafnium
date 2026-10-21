@@ -78,6 +78,7 @@ select = [
   "NPY",       # numpy rules
   "RUF",       # ruff rules
 ]
+allowed-confusables = ["−", "–", "σ", "×"]
 ignore = [
   "D105",      # magic method docstrings
   "D107",      # __init__ docstrings (documented on the class)
@@ -102,6 +103,13 @@ include = ["hafnium", "tests"]
 exclude = ["**/__pycache__", "target", ".venv"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
+stubPath = "stubs"
+# NumPy's array-like parameters show up as partially unknown in strict mode;
+# the library itself never calls NumPy directly, so relax the rule for tests.
+executionEnvironments = [
+  { root = "tests", extraPaths = ["."], reportUnknownMemberType = false },
+  { root = "hafnium" },
+]
 venvPath = "."
 venv = ".venv"
 

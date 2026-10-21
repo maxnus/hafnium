@@ -31,6 +31,7 @@ nav:
       - adr/0002-rust-for-compiled-layer.md
       - adr/0003-package-name-hafnium.md
       - adr/0004-python-toolchain-baseline.md
+      - adr/0005-immutable-data-with-dataclasses.md
   - API reference: api.md
 
 markdown_extensions:

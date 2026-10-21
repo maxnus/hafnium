@@ -11,3 +11,4 @@ ADR that supersedes it.
 | [0002](0002-rust-for-compiled-layer.md) | Rust for the compiled layer | accepted 2026-10-21 |
 | [0003](0003-package-name-hafnium.md) | Package name `hafnium` | accepted 2026-10-21 |
 | [0004](0004-python-toolchain-baseline.md) | Python toolchain baseline | accepted 2026-10-21 |
+| [0005](0005-immutable-data-with-dataclasses.md) | Immutable data with standard-library dataclasses | accepted 2026-10-21 |

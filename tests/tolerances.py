@@ -6,3 +6,7 @@ GRID_TOL = 1e-6
 # Kernel results versus NumPy: the two sum in different orders (sequential
 # loop versus BLAS), so they agree only to about n * machine epsilon.
 KERNEL_REL_TOL = 1e-12
+# Block-structure round trips and algebra identities on small matrices.
+STRUCTURE_TOL = 1e-10
+# Eigen-decompositions: residuals of F C - S C e and orthonormality.
+EIGEN_TOL = 1e-9
