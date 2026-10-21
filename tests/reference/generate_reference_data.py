@@ -3,8 +3,9 @@
     uv run python -m tests.reference.generate_reference_data
 
 Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
-``density_fitting_<molecule>_<basis>.json`` and
-``four_center_<molecule>_<basis>.json`` with the libcint values and their
+``density_fitting_<molecule>_<basis>.json``,
+``four_center_<molecule>_<basis>.json`` and
+``fourier_<molecule>_<basis>.json`` with the PySCF values and their
 provenance.
 """
 
@@ -18,9 +19,11 @@ from typing import Any
 import numpy as np
 
 from hafnium.basis import BasisSet
+from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
     density_fitting_reference,
     four_center_reference,
+    fourier_transform_reference,
     one_electron_reference,
     pyscf,
 )
@@ -31,6 +34,7 @@ from tests.reference.test_density_fitting_reference import (
 from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
+from tests.reference.test_fourier_reference import STORED_CASES as FOURIER_CASES
 from tests.reference.test_one_electron_reference import (
     LIBRARY,
     MOLECULES,
@@ -100,6 +104,22 @@ def main() -> None:
             basis_name,
             "int2e; cart=False; unit=Bohr",
             {"eri": four_center_reference(molecule, basis)},
+        )
+    for name, basis_name in FOURIER_CASES:
+        molecule = MOLECULES[name]
+        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        transforms = fourier_transform_reference(molecule, basis, G_VECTORS)
+        parts = {
+            f"{key}_{part}": getattr(np, part)(value)
+            for key, value in transforms.items()
+            for part in ("real", "imag")
+        }
+        record(
+            "fourier",
+            name,
+            basis_name,
+            "gto.ft_ao.ft_ao and ft_aopair with exp(-iG.r); cart=False; Bohr",
+            {"g_vectors": G_VECTORS, **parts},
         )
 
 

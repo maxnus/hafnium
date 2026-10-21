@@ -75,8 +75,8 @@ pub fn nuclear_attraction(
         });
     }
     check_omega(omega)?;
-    check_finite(translations)?;
-    check_finite(positions)?;
+    check_finite(translations, "translations")?;
+    check_finite(positions, "positions")?;
     if !charges.iter().all(|z| z.is_finite()) {
         return Err(Error::InvalidArgument("charges are finite".to_string()));
     }
@@ -156,12 +156,7 @@ fn assemble(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// One normalized s primitive of exponent `a` at `center`.
-    fn s_shell(a: f64, center: [f64; 3]) -> ShellTable {
-        let norm = (2.0 * a / PI).powf(0.75) * (4.0 * PI).sqrt();
-        ShellTable::new(vec![0], vec![center], vec![0, 1], vec![a], vec![norm]).expect("valid")
-    }
+    use crate::integrals::test_tables::s_shell;
 
     #[test]
     fn normalized_s_function_has_unit_overlap() {

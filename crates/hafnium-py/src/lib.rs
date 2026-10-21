@@ -6,7 +6,7 @@
 
 use hafnium_core::integrals;
 use numpy::{
-    IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArray5, PyArrayMethods,
+    Complex64, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArray5, PyArrayMethods,
     PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
@@ -281,6 +281,54 @@ fn schwarz_bounds<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
+/// Fourier transforms `∫ χ(r) exp(−i G·r) dr` of every function for each
+/// vector in `g_vectors` (inverse Bohr), complex `[G, ao]`.
+#[pyfunction]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn fourier_transform<'py>(
+    py: Python<'py>,
+    table: &PyShellTable,
+    g_vectors: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray2<Complex64>>> {
+    let g_vectors = to_vectors(&g_vectors, "G vectors")?;
+    let values = integrals::fourier_transform(&table.inner, &g_vectors)
+        .map_err(|error| value_error(&error))?;
+    values
+        .into_pyarray(py)
+        .reshape([g_vectors.len(), table.inner.n_functions()])
+}
+
+/// Pair transforms `∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr` for each
+/// translation `T` of the ket, complex `[image, G, ao, ao]`.
+#[pyfunction]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn pair_fourier_transform<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+    g_vectors: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray4<Complex64>>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let g_vectors = to_vectors(&g_vectors, "G vectors")?;
+    let values =
+        integrals::pair_fourier_transform(&bra.inner, &ket.inner, &translations, &g_vectors)
+            .map_err(|error| value_error(&error))?;
+    let shape = [
+        translations.len(),
+        g_vectors.len(),
+        bra.inner.n_functions(),
+        ket.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
 /// Set the size of the kernel thread pool once per process.
 #[pyfunction]
 fn configure_threads(n_threads: usize) -> PyResult<()> {
@@ -359,6 +407,8 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(coulomb_three_center, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_four_center, module)?)?;
     module.add_function(wrap_pyfunction!(schwarz_bounds, module)?)?;
+    module.add_function(wrap_pyfunction!(fourier_transform, module)?)?;
+    module.add_function(wrap_pyfunction!(pair_fourier_transform, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())
 }

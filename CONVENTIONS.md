@@ -188,7 +188,9 @@ Spin never appears as an explicit index in method code; it is part of the
   is evaluated in reciprocal space with the `G = 0` term removed; the
   exchange energy carries the probe-charge Ewald (Madelung) correction.
   Fourier transforms use the kernel `exp(−i G·r)` in the forward
-  direction.
+  direction; reciprocal vectors are `[G, 3]` arrays in inverse Bohr, the
+  transform of a function is `[G, ao]` and that of a pair
+  `[image, G, ao, ao]`, both complex.
   The range-separation parameter is named `omega` everywhere and results
   must not depend on it beyond the stated tolerance.
 

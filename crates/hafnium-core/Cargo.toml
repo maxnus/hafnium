@@ -12,6 +12,7 @@ publish.workspace = true
 thiserror.workspace = true
 libm.workspace = true
 rayon.workspace = true
+num-complex.workspace = true
 
 [lints]
 workspace = true

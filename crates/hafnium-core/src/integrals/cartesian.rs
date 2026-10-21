@@ -7,6 +7,7 @@
 //! normalized on the unit sphere (ADR-0006).
 
 use std::f64::consts::PI;
+use std::ops::{AddAssign, Mul};
 
 use crate::to_f64;
 
@@ -64,17 +65,20 @@ pub fn spherical_transformation(l: usize) -> Vec<f64> {
 /// Transform one index of a row-major array with layout
 /// `[left, n_cart, right]` to spherical functions:
 /// `out[l][m][r] = Σ_c transform[m][c] data[l][c][r]`, where `transform`
-/// is row-major `[n_sph, n_cart]`.
+/// is row-major `[n_sph, n_cart]`. The values may be real or complex.
 #[must_use]
-pub fn transform_index(
-    data: &[f64],
+pub fn transform_index<T>(
+    data: &[T],
     left: usize,
     n_cart: usize,
     right: usize,
     transform: &[f64],
-) -> Vec<f64> {
+) -> Vec<T>
+where
+    T: Copy + Default + AddAssign + Mul<f64, Output = T>,
+{
     let n_sph = transform.len() / n_cart;
-    let mut out = vec![0.0; left * n_sph * right];
+    let mut out = vec![T::default(); left * n_sph * right];
     for l in 0..left {
         for (m, row) in transform.chunks(n_cart).enumerate() {
             let target = &mut out[(l * n_sph + m) * right..(l * n_sph + m + 1) * right];
@@ -84,7 +88,7 @@ pub fn transform_index(
                 }
                 let source = &data[(l * n_cart + c) * right..(l * n_cart + c + 1) * right];
                 for (t, s) in target.iter_mut().zip(source) {
-                    *t += weight * s;
+                    *t += *s * weight;
                 }
             }
         }

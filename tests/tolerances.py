@@ -23,3 +23,8 @@ ATTENUATION_LIMIT_TOL = 1e-8
 # Fitted versus exact four-centre integrals: the accuracy of the universal
 # JKFIT auxiliary basis itself, far looser than any kernel tolerance.
 FITTED_INTEGRAL_TOL = 1e-2
+# Analytic Fourier transforms against trapezoid quadrature of Gaussians on
+# a cubic grid, limited by the grid's truncation of the tails.
+QUADRATURE_TOL = 1e-9
+# Coulomb integrals assembled from Fourier transforms by radial quadrature.
+RECIPROCAL_SPACE_TOL = 1e-10

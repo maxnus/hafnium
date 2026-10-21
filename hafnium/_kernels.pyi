@@ -103,6 +103,19 @@ def schwarz_bounds(
 ) -> NDArray[np.float64]:
     """Return the Schwarz bounds of the shell pairs, ``[image, shell, shell]``."""
 
+def fourier_transform(
+    table: ShellTable, g_vectors: NDArray[np.float64]
+) -> NDArray[np.complex128]:
+    """Return ``∫ χ(r) exp(−i G·r) dr`` of every function as ``[G, ao]``."""
+
+def pair_fourier_transform(
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    g_vectors: NDArray[np.float64],
+) -> NDArray[np.complex128]:
+    """Return ``∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr`` as ``[image, G, ao, ao]``."""
+
 def configure_threads(n_threads: int) -> None:
     """Set the size of the kernel thread pool once per process.
 

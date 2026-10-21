@@ -11,6 +11,7 @@
 //! integrals and scales the prefactor by `sqrt(α' / α)` (ADR-0008).
 
 use std::f64::consts::PI;
+use std::ops::{AddAssign, Mul};
 
 use rayon::prelude::*;
 
@@ -38,7 +39,7 @@ pub fn coulomb_two_center(
     omega: Option<f64>,
 ) -> Result<Vec<f64>, Error> {
     check_omega(omega)?;
-    check_finite(translations)?;
+    check_finite(translations, "translations")?;
     let n_ket = ket.n_functions();
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
     let tables = Tables::new(max_l);
@@ -99,7 +100,7 @@ pub fn coulomb_three_center(
 ) -> Result<Vec<f64>, Error> {
     check_omega(omega)?;
     for pair in translations {
-        check_finite(pair)?;
+        check_finite(pair, "translations")?;
     }
     let (n_bra, n_ket) = (bra.n_functions(), ket.n_functions());
     let max_l = aux
@@ -186,7 +187,7 @@ pub fn coulomb_four_center(
     check_omega(omega)?;
     check_threshold(threshold)?;
     for triple in translations {
-        check_finite(triple)?;
+        check_finite(triple, "translations")?;
     }
     let size: usize = output_shape(bra, ket).iter().product();
     let max_l = bra
@@ -258,7 +259,7 @@ pub fn schwarz_bounds(
     omega: Option<f64>,
 ) -> Result<Vec<f64>, Error> {
     check_omega(omega)?;
-    check_finite(translations)?;
+    check_finite(translations, "translations")?;
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
     let tables = Tables::new(max_l);
     let mut out = Vec::with_capacity(translations.len() * bra.n_shells() * ket.n_shells());
@@ -587,7 +588,11 @@ impl Tables {
     /// Transform a row-major Cartesian block with index layout
     /// `[a, b, c, d]` to spherical functions. An index of `None` is a unit
     /// partner (see [`single_shell_pairs`]): one component, left untouched.
-    pub(crate) fn to_spherical(&self, block: &[f64], ls: [Option<usize>; 4]) -> Vec<f64> {
+    /// The values may be real or complex.
+    pub(crate) fn to_spherical<T>(&self, block: &[T], ls: [Option<usize>; 4]) -> Vec<T>
+    where
+        T: Copy + Default + AddAssign + Mul<f64, Output = T>,
+    {
         let mut data = block.to_vec();
         let mut shape: [usize; 4] = std::array::from_fn(|i| ls[i].map_or(1, n_cartesian));
         for (index, l) in ls.iter().enumerate() {
@@ -721,16 +726,15 @@ fn check_threshold(threshold: f64) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn check_finite(vectors: &[[f64; 3]]) -> Result<(), Error> {
+/// Reject non-finite vectors, naming the quantity in the error.
+pub(crate) fn check_finite(vectors: &[[f64; 3]], name: &str) -> Result<(), Error> {
     if vectors
         .iter()
         .all(|vector| vector.iter().all(|x| x.is_finite()))
     {
         Ok(())
     } else {
-        Err(Error::InvalidArgument(
-            "translations and positions are finite".to_string(),
-        ))
+        Err(Error::InvalidArgument(format!("{name} are finite")))
     }
 }
 
@@ -738,38 +742,7 @@ pub(crate) fn check_finite(vectors: &[[f64; 3]]) -> Result<(), Error> {
 mod tests {
     use super::*;
     use crate::integrals::nuclear_attraction;
-
-    /// One normalized s primitive of exponent `a` at `center`.
-    fn s_shell(a: f64, center: [f64; 3]) -> ShellTable {
-        let norm = (2.0 * a / PI).powf(0.75) * (4.0 * PI).sqrt();
-        ShellTable::new(vec![0], vec![center], vec![0, 1], vec![a], vec![norm]).expect("valid")
-    }
-
-    /// An s and a p shell of two primitives each on two centres, with
-    /// arbitrary coefficients, translated as a whole by `shift`.
-    fn sp_table_at(shift: [f64; 3]) -> ShellTable {
-        let centers = [[0.0; 3], [1.2, -0.3, 0.4]];
-        let moved = |center: [f64; 3]| -> [f64; 3] {
-            std::array::from_fn(|axis| center[axis] + shift[axis])
-        };
-        ShellTable::new(
-            vec![0, 1, 0, 1],
-            vec![
-                moved(centers[0]),
-                moved(centers[0]),
-                moved(centers[1]),
-                moved(centers[1]),
-            ],
-            vec![0, 2, 4, 6, 8],
-            vec![1.3, 0.4, 0.9, 0.3, 1.1, 0.35, 0.8, 0.25],
-            vec![0.7, 0.5, 0.6, 0.4, 0.8, 0.3, 0.5, 0.5],
-        )
-        .expect("valid")
-    }
-
-    fn sp_table() -> ShellTable {
-        sp_table_at(ZERO)
-    }
+    use crate::integrals::test_tables::{s_shell, sp_table, sp_table_at};
 
     /// The four-centre integrals of one image without any symmetry shortcut.
     fn generic_image(table: &ShellTable, translations: [[f64; 3]; 3]) -> Vec<f64> {

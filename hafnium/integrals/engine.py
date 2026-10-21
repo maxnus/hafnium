@@ -110,3 +110,23 @@ class IntegralEngine(Protocol):
         the same kernel.
         """
         ...
+
+    def fourier_transform(self, table: ShellTable, g_vectors: Array) -> Array:
+        """Transform every function: ``∫ χ_P(r) exp(−i G·r) dr``, complex ``[G, ao]``.
+
+        ``g_vectors`` has shape ``[G, 3]`` in inverse Bohr. A function
+        translated by ``T`` has its transform multiplied by ``exp(−i G·T)``,
+        so no translations are taken.
+        """
+        ...
+
+    def pair_fourier_transform(
+        self, bra: ShellTable, ket: ShellTable, translations: Array, g_vectors: Array
+    ) -> Array:
+        """Transform every pair: ``∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr``.
+
+        Complex ``[image, G, ao, ao]`` for the translations ``T`` of the ket
+        and the ``g_vectors`` ``[G, 3]`` in inverse Bohr. At ``G = 0`` the
+        transform is the overlap matrix of the same translation.
+        """
+        ...
