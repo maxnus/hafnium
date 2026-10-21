@@ -10,11 +10,28 @@ mod cartesian;
 mod coulomb;
 mod hermite;
 mod one_electron;
+mod pairs;
+mod two_electron;
 
-pub use cartesian::{cartesian_components, n_cartesian, spherical_transformation};
+pub use cartesian::{cartesian_components, n_cartesian, spherical_transformation, transform_index};
 pub use one_electron::{kinetic, nuclear_attraction, overlap};
+pub use two_electron::{coulomb_three_center, coulomb_two_center};
 
 use crate::Error;
+
+/// Set the size of the global thread pool used by the kernels.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidArgument`] if the pool has already been built,
+/// which happens on the first parallel kernel call or an earlier
+/// configuration.
+pub fn configure_threads(n_threads: usize) -> Result<(), Error> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build_global()
+        .map_err(|error| Error::InvalidArgument(format!("thread pool: {error}")))
+}
 
 /// Highest angular momentum the spherical transformation supports; the
 /// exact integer factorials it uses fit in 128 bits up to this value.

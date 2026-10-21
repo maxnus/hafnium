@@ -55,3 +55,34 @@ class RustEngine:
             to_host(positions),
             omega,
         )
+
+    def coulomb_two_center(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        omega: float | None = None,
+    ) -> Array:
+        """Two-centre Coulomb integrals ``[image, aux, aux]``."""
+        return _kernels.coulomb_two_center(
+            _kernel_table(bra), _kernel_table(ket), to_host(translations), omega
+        )
+
+    def coulomb_three_center(
+        self,
+        auxiliary: ShellTable,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        omega: float | None = None,
+    ) -> Array:
+        """Three-centre Coulomb integrals ``[image, aux, ao, ao]``."""
+        return _kernels.coulomb_three_center(
+            _kernel_table(auxiliary),
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            omega,
+        )

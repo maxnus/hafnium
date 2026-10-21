@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 thiserror.workspace = true
 libm.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

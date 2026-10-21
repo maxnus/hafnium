@@ -23,6 +23,13 @@ uses [Semantic Versioning](https://semver.org/).
   reference tests against libcint through PySCF with recorded data.
 - p shells are ordered `x, y, z` as in libcint, PySCF and Molden
   (ADR-0009); `FunctionLabel.m` follows the storage order.
+- Native two- and three-centre Coulomb integrals from one generic
+  pair-pair Hermite kernel, with range separation and translations of the
+  auxiliary and ket functions; `DensityFitting` with the metric, the
+  three-centre integrals and the fitted tensor `B[aux, ao, ao]`; a reusable
+  Hermite workspace, kernel parallelism over the leading shell index with
+  rayon, and `configure_threads`; reference tests against libcint and
+  PySCF's density fitting.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.

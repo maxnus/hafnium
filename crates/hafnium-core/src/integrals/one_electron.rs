@@ -3,11 +3,12 @@
 
 use std::f64::consts::PI;
 
-use super::cartesian::{cartesian_components, n_cartesian, spherical_transformation};
-use super::coulomb::HermiteIntegrals;
-use super::hermite::ExpansionCoefficients;
-use super::{ShellRef, ShellTable};
-use crate::{Error, to_f64};
+use super::ShellTable;
+use super::cartesian::n_cartesian;
+use super::coulomb::{HermiteTable, HermiteWorkspace};
+use super::pairs::{PrimitivePair, primitive_pairs};
+use super::two_electron::{Tables, check_finite, check_omega};
+use crate::Error;
 
 /// Overlap integrals `S[T][μ][ν] = ⟨μ | ν(r − T)⟩` for each translation
 /// `T`, as a row-major `[n_translations, n_bra, n_ket]` array.
@@ -73,27 +74,23 @@ pub fn nuclear_attraction(
             right: positions.len(),
         });
     }
-    if omega.is_some_and(|w| w.is_nan() || w <= 0.0) {
-        return Err(Error::InvalidArgument(
-            "the range-separation parameter omega is positive".to_string(),
-        ));
-    }
-    if !all_finite(translations) || !all_finite(positions) || !charges.iter().all(|z| z.is_finite())
-    {
-        return Err(Error::InvalidArgument(
-            "translations, charges and positions are finite".to_string(),
-        ));
+    check_omega(omega)?;
+    check_finite(translations)?;
+    check_finite(positions)?;
+    if !charges.iter().all(|z| z.is_finite()) {
+        return Err(Error::InvalidArgument("charges are finite".to_string()));
     }
     Ok(assemble(bra, ket, translations, 0, |pairs, a, b, block| {
+        let mut workspace = HermiteWorkspace::default();
         for pair in pairs {
             // Attenuation replaces p by p ω² / (p + ω²) in every Hermite
             // integral and scales the prefactor by sqrt(alpha / p).
             let alpha = omega.map_or(pair.p, |w| pair.p * w * w / (pair.p + w * w));
             let prefactor = pair.coefficient * 2.0 * PI / pair.p * (alpha / pair.p).sqrt();
-            let mut summed = HermiteIntegrals::zeros(pair.order);
+            let mut summed = HermiteTable::zeros(pair.order);
             for (charge, position) in charges.iter().zip(positions) {
                 let pc: [f64; 3] = std::array::from_fn(|axis| pair.center[axis] - position[axis]);
-                summed.add_scaled(&HermiteIntegrals::new(pair.order, alpha, pc), -charge);
+                summed.add_scaled(workspace.compute(pair.order, alpha, pc), -charge);
             }
             for (ia, ca) in a.iter().enumerate() {
                 for (ib, cb) in b.iter().enumerate() {
@@ -112,86 +109,6 @@ pub fn nuclear_attraction(
     }))
 }
 
-fn all_finite(vectors: &[[f64; 3]]) -> bool {
-    vectors
-        .iter()
-        .all(|vector| vector.iter().all(|x| x.is_finite()))
-}
-
-/// A pair of primitives with their Hermite expansion along each axis.
-struct PrimitivePair {
-    p: f64,
-    exponent_b: f64,
-    center: [f64; 3],
-    coefficient: f64,
-    order: usize,
-    hermite: [ExpansionCoefficients; 3],
-}
-
-impl PrimitivePair {
-    /// Product of the expansion coefficients along the three axes.
-    #[inline]
-    fn product(&self, a: &[usize; 3], b: &[usize; 3], t: [usize; 3]) -> f64 {
-        self.hermite[0].get(a[0], b[0], t[0])
-            * self.hermite[1].get(a[1], b[1], t[1])
-            * self.hermite[2].get(a[2], b[2], t[2])
-    }
-
-    /// `⟨x^i | d²/dx² | x^j⟩ / sqrt(π/p)` along one axis (Helgaker 9.3.33).
-    #[inline]
-    fn second_derivative(&self, axis: usize, i: usize, j: usize) -> f64 {
-        let e = &self.hermite[axis];
-        let b = self.exponent_b;
-        let mut value =
-            4.0 * b * b * e.get(i, j + 2, 0) - 2.0 * b * to_f64(2 * j + 1) * e.get(i, j, 0);
-        if j >= 2 {
-            value += to_f64(j * (j - 1)) * e.get(i, j - 2, 0);
-        }
-        value
-    }
-}
-
-/// All primitive pairs of two shells, with the ket centred at `b_center`.
-/// `extra_b` raises the ket order of the expansion, as kinetic integrals
-/// need.
-fn primitive_pairs(
-    a: &ShellRef<'_>,
-    b: &ShellRef<'_>,
-    b_center: [f64; 3],
-    extra_b: usize,
-) -> Vec<PrimitivePair> {
-    let mut pairs = Vec::with_capacity(a.exponents.len() * b.exponents.len());
-    for (&exponent_a, &coefficient_a) in a.exponents.iter().zip(a.coefficients) {
-        for (&exponent_b, &coefficient_b) in b.exponents.iter().zip(b.coefficients) {
-            let p = exponent_a + exponent_b;
-            let mu = exponent_a * exponent_b / p;
-            let center: [f64; 3] = std::array::from_fn(|axis| {
-                (exponent_a * a.center[axis] + exponent_b * b_center[axis]) / p
-            });
-            let hermite = std::array::from_fn(|axis| {
-                ExpansionCoefficients::new(
-                    a.angular_momentum,
-                    b.angular_momentum + extra_b,
-                    p,
-                    mu,
-                    a.center[axis] - b_center[axis],
-                    center[axis] - a.center[axis],
-                    center[axis] - b_center[axis],
-                )
-            });
-            pairs.push(PrimitivePair {
-                p,
-                exponent_b,
-                center,
-                coefficient: coefficient_a * coefficient_b,
-                order: a.angular_momentum + b.angular_momentum,
-                hermite,
-            });
-        }
-    }
-    pairs
-}
-
 /// Loop over translations and shell pairs, let `block_fn` fill the Cartesian
 /// block of each pair, transform it to spherical functions and place it.
 fn assemble(
@@ -204,8 +121,7 @@ fn assemble(
     let n_bra = bra.n_functions();
     let n_ket = ket.n_functions();
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
-    let components: Vec<Vec<[usize; 3]>> = (0..=max_l).map(cartesian_components).collect();
-    let transforms: Vec<Vec<f64>> = (0..=max_l).map(spherical_transformation).collect();
+    let tables = Tables::new(max_l);
     let bra_offsets = bra.function_offsets();
     let ket_offsets = ket.function_offsets();
     let mut out = vec![0.0; translations.len() * n_bra * n_ket];
@@ -220,37 +136,18 @@ fn assemble(
                 let pairs = primitive_pairs(&a, &b, b_center, extra_b);
                 let (la, lb) = (a.angular_momentum, b.angular_momentum);
                 let mut cartesian = vec![0.0; n_cartesian(la) * n_cartesian(lb)];
-                block_fn(&pairs, &components[la], &components[lb], &mut cartesian);
-                let spherical = to_spherical(&cartesian, &transforms[la], &transforms[lb], la, lb);
+                block_fn(
+                    &pairs,
+                    &tables.components[la],
+                    &tables.components[lb],
+                    &mut cartesian,
+                );
+                let spherical = tables.to_spherical(&cartesian, [Some(la), Some(lb), None, None]);
                 for (row, values) in spherical.chunks(2 * lb + 1).enumerate() {
                     let start = (bra_offset + row) * n_ket + ket_offset;
                     matrix[start..start + values.len()].copy_from_slice(values);
                 }
             }
-        }
-    }
-    out
-}
-
-/// `C_a · block · C_bᵀ` for the spherical transformations of both shells.
-fn to_spherical(block: &[f64], c_a: &[f64], c_b: &[f64], la: usize, lb: usize) -> Vec<f64> {
-    let (nca, ncb) = (n_cartesian(la), n_cartesian(lb));
-    let (nsa, nsb) = (2 * la + 1, 2 * lb + 1);
-    // First contract the ket index: half[ca][mb] = Σ_cb block[ca][cb] C_b[mb][cb].
-    let mut half = vec![0.0; nca * nsb];
-    for ca in 0..nca {
-        for mb in 0..nsb {
-            half[ca * nsb + mb] = (0..ncb)
-                .map(|cb| block[ca * ncb + cb] * c_b[mb * ncb + cb])
-                .sum();
-        }
-    }
-    let mut out = vec![0.0; nsa * nsb];
-    for ma in 0..nsa {
-        for mb in 0..nsb {
-            out[ma * nsb + mb] = (0..nca)
-                .map(|ca| c_a[ma * nca + ca] * half[ca * nsb + mb])
-                .sum();
         }
     }
     out
