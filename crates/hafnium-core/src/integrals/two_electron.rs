@@ -13,12 +13,12 @@ use std::f64::consts::PI;
 
 use rayon::prelude::*;
 
-use super::ShellTable;
 use super::cartesian::{
     cartesian_components, n_cartesian, spherical_transformation, transform_index,
 };
 use super::coulomb::HermiteWorkspace;
 use super::pairs::{PrimitivePair, primitive_pairs, single_shell_pairs};
+use super::{ShellRef, ShellTable};
 use crate::Error;
 
 /// Two-centre Coulomb integrals `(P | Q(r − T))` for each translation `T`
@@ -36,53 +36,43 @@ pub fn coulomb_two_center(
 ) -> Result<Vec<f64>, Error> {
     check_omega(omega)?;
     check_finite(translations)?;
-    let n_bra = bra.n_functions();
     let n_ket = ket.n_functions();
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
     let tables = Tables::new(max_l);
     let ket_offsets = ket.function_offsets();
-    let mut out = vec![0.0; translations.len() * n_bra * n_ket];
-    for (it, translation) in translations.iter().enumerate() {
-        let slabs: Vec<Vec<f64>> = (0..bra.n_shells())
-            .into_par_iter()
-            .map(|ia| {
-                let a = bra.shell(ia);
-                let la = a.angular_momentum;
-                let bra_pairs = single_shell_pairs(&a, a.center);
-                let mut workspace = HermiteWorkspace::default();
-                let mut slab = vec![0.0; (2 * la + 1) * n_ket];
-                for (ic, &ket_offset) in ket_offsets.iter().enumerate() {
-                    let c = ket.shell(ic);
-                    let lc = c.angular_momentum;
-                    let c_center: [f64; 3] =
-                        std::array::from_fn(|axis| c.center[axis] + translation[axis]);
-                    let ket_pairs = single_shell_pairs(&c, c_center);
-                    let mut block = vec![0.0; n_cartesian(la) * n_cartesian(lc)];
-                    coulomb_block(
-                        &bra_pairs,
-                        [la, 0],
-                        &ket_pairs,
-                        [lc, 0],
-                        omega,
-                        &tables,
-                        &mut workspace,
-                        &mut block,
-                    );
-                    let spherical = tables.to_spherical(&block, [Some(la), None, Some(lc), None]);
-                    for (ma, row) in spherical.chunks(2 * lc + 1).enumerate() {
-                        slab[ma * n_ket + ket_offset..ma * n_ket + ket_offset + row.len()]
-                            .copy_from_slice(row);
-                    }
+    Ok(assemble_parallel(
+        bra,
+        n_ket,
+        translations,
+        |translation, a, slab| {
+            let la = a.angular_momentum;
+            let bra_pairs = single_shell_pairs(&a, a.center);
+            let mut workspace = HermiteWorkspace::default();
+            for (ic, &ket_offset) in ket_offsets.iter().enumerate() {
+                let c = ket.shell(ic);
+                let lc = c.angular_momentum;
+                let c_center: [f64; 3] =
+                    std::array::from_fn(|axis| c.center[axis] + translation[axis]);
+                let ket_pairs = single_shell_pairs(&c, c_center);
+                let mut block = vec![0.0; n_cartesian(la) * n_cartesian(lc)];
+                coulomb_block(
+                    &bra_pairs,
+                    [la, 0],
+                    &ket_pairs,
+                    [lc, 0],
+                    omega,
+                    &tables,
+                    &mut workspace,
+                    &mut block,
+                );
+                let spherical = tables.to_spherical(&block, [Some(la), None, Some(lc), None]);
+                for (ma, row) in spherical.chunks(2 * lc + 1).enumerate() {
+                    slab[ma * n_ket + ket_offset..ma * n_ket + ket_offset + row.len()]
+                        .copy_from_slice(row);
                 }
-                slab
-            })
-            .collect();
-        let image = &mut out[it * n_bra * n_ket..(it + 1) * n_bra * n_ket];
-        for (offset, slab) in bra.function_offsets().into_iter().zip(slabs) {
-            image[offset * n_ket..offset * n_ket + slab.len()].copy_from_slice(&slab);
-        }
-    }
-    Ok(out)
+            }
+        },
+    ))
 }
 
 /// Three-centre Coulomb integrals `(P(r − T_P) | μ ν(r − T_ν))` for each
@@ -104,7 +94,7 @@ pub fn coulomb_three_center(
     for pair in translations {
         check_finite(pair)?;
     }
-    let (n_aux, n_bra, n_ket) = (aux.n_functions(), bra.n_functions(), ket.n_functions());
+    let (n_bra, n_ket) = (bra.n_functions(), ket.n_functions());
     let max_l = aux
         .max_angular_momentum()
         .max(bra.max_angular_momentum())
@@ -112,60 +102,81 @@ pub fn coulomb_three_center(
     let tables = Tables::new(max_l);
     let bra_offsets = bra.function_offsets();
     let ket_offsets = ket.function_offsets();
-    let mut out = vec![0.0; translations.len() * n_aux * n_bra * n_ket];
-    for (it, [aux_translation, ket_translation]) in translations.iter().enumerate() {
-        let slabs: Vec<Vec<f64>> = (0..aux.n_shells())
-            .into_par_iter()
-            .map(|ip| {
-                let p_shell = aux.shell(ip);
-                let lp = p_shell.angular_momentum;
-                let p_center: [f64; 3] =
-                    std::array::from_fn(|axis| p_shell.center[axis] + aux_translation[axis]);
-                let aux_pairs = single_shell_pairs(&p_shell, p_center);
-                let mut workspace = HermiteWorkspace::default();
-                let mut slab = vec![0.0; (2 * lp + 1) * n_bra * n_ket];
-                for (ia, &bra_offset) in bra_offsets.iter().enumerate() {
-                    let a = bra.shell(ia);
-                    for (ib, &ket_offset) in ket_offsets.iter().enumerate() {
-                        let b = ket.shell(ib);
-                        let b_center: [f64; 3] =
-                            std::array::from_fn(|axis| b.center[axis] + ket_translation[axis]);
-                        let (la, lb) = (a.angular_momentum, b.angular_momentum);
-                        let pairs = primitive_pairs(&a, &b, b_center, 0);
-                        let mut block =
-                            vec![0.0; n_cartesian(la) * n_cartesian(lb) * n_cartesian(lp)];
-                        coulomb_block(
-                            &pairs,
-                            [la, lb],
-                            &aux_pairs,
-                            [lp, 0],
-                            omega,
-                            &tables,
-                            &mut workspace,
-                            &mut block,
-                        );
-                        // spherical[ma][mb][mp] → slab[mp][μ][ν]
-                        let spherical =
-                            tables.to_spherical(&block, [Some(la), Some(lb), Some(lp), None]);
-                        let (nsb, nsp) = (2 * lb + 1, 2 * lp + 1);
-                        for (index, value) in spherical.iter().enumerate() {
-                            let mp = index % nsp;
-                            let mb = (index / nsp) % nsb;
-                            let ma = index / (nsp * nsb);
-                            slab[(mp * n_bra + bra_offset + ma) * n_ket + ket_offset + mb] = *value;
-                        }
+    Ok(assemble_parallel(
+        aux,
+        n_bra * n_ket,
+        translations,
+        |[aux_translation, ket_translation], p_shell, slab| {
+            let lp = p_shell.angular_momentum;
+            let p_center: [f64; 3] =
+                std::array::from_fn(|axis| p_shell.center[axis] + aux_translation[axis]);
+            let aux_pairs = single_shell_pairs(&p_shell, p_center);
+            let mut workspace = HermiteWorkspace::default();
+            for (ia, &bra_offset) in bra_offsets.iter().enumerate() {
+                let a = bra.shell(ia);
+                for (ib, &ket_offset) in ket_offsets.iter().enumerate() {
+                    let b = ket.shell(ib);
+                    let b_center: [f64; 3] =
+                        std::array::from_fn(|axis| b.center[axis] + ket_translation[axis]);
+                    let (la, lb) = (a.angular_momentum, b.angular_momentum);
+                    let pairs = primitive_pairs(&a, &b, b_center, 0);
+                    let mut block = vec![0.0; n_cartesian(la) * n_cartesian(lb) * n_cartesian(lp)];
+                    coulomb_block(
+                        &pairs,
+                        [la, lb],
+                        &aux_pairs,
+                        [lp, 0],
+                        omega,
+                        &tables,
+                        &mut workspace,
+                        &mut block,
+                    );
+                    // spherical[ma][mb][mp] → slab[mp][μ][ν]
+                    let spherical =
+                        tables.to_spherical(&block, [Some(la), Some(lb), Some(lp), None]);
+                    let (nsb, nsp) = (2 * lb + 1, 2 * lp + 1);
+                    for (index, value) in spherical.iter().enumerate() {
+                        let mp = index % nsp;
+                        let mb = (index / nsp) % nsb;
+                        let ma = index / (nsp * nsb);
+                        slab[(mp * n_bra + bra_offset + ma) * n_ket + ket_offset + mb] = *value;
                     }
                 }
+            }
+        },
+    ))
+}
+
+/// Evaluate one slab per leading shell in parallel and place the slabs.
+///
+/// The output is `[n_images, n_leading, row_size]` row-major, where the
+/// leading index runs over the functions of `leading` and `fill` writes the
+/// `(2l + 1) * row_size` values of one shell for one image.
+fn assemble_parallel<T: Sync>(
+    leading: &ShellTable,
+    row_size: usize,
+    images: &[T],
+    fill: impl Fn(&T, ShellRef<'_>, &mut [f64]) + Sync,
+) -> Vec<f64> {
+    let n_leading = leading.n_functions();
+    let offsets = leading.function_offsets();
+    let mut out = vec![0.0; images.len() * n_leading * row_size];
+    for (it, image) in images.iter().enumerate() {
+        let slabs: Vec<Vec<f64>> = (0..leading.n_shells())
+            .into_par_iter()
+            .map(|index| {
+                let shell = leading.shell(index);
+                let mut slab = vec![0.0; (2 * shell.angular_momentum + 1) * row_size];
+                fill(image, shell, &mut slab);
                 slab
             })
             .collect();
-        let image = &mut out[it * n_aux * n_bra * n_ket..(it + 1) * n_aux * n_bra * n_ket];
-        for (offset, slab) in aux.function_offsets().into_iter().zip(slabs) {
-            let start = offset * n_bra * n_ket;
-            image[start..start + slab.len()].copy_from_slice(&slab);
+        let target = &mut out[it * n_leading * row_size..(it + 1) * n_leading * row_size];
+        for (&offset, slab) in offsets.iter().zip(&slabs) {
+            target[offset * row_size..offset * row_size + slab.len()].copy_from_slice(slab);
         }
     }
-    Ok(out)
+    out
 }
 
 /// Per-angular-momentum tables shared by the kernels of one call.
@@ -246,9 +257,10 @@ pub(crate) fn coulomb_block(
                 .enumerate()
             {
                 let slot = &mut intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
+                // Only t + u + v ≤ l_a + l_b is consumed by the bra contraction.
                 for t in 0..n_t {
-                    for u in 0..n_t {
-                        for v in 0..n_t {
+                    for u in 0..n_t - t {
+                        for v in 0..n_t - t - u {
                             let mut sum = 0.0;
                             for tau in 0..=cc[0] + cd[0] {
                                 for nu in 0..=cc[1] + cd[1] {

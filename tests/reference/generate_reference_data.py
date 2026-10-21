@@ -1,6 +1,6 @@
 """Record reference integrals from PySCF (run by hand).
 
-    uv run python -m tests.reference.generate_one_electron
+    uv run python -m tests.reference.generate_reference_data
 
 Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json`` and
 ``density_fitting_<molecule>_<basis>.json`` with the libcint values and

@@ -1,10 +1,12 @@
 """Two- and three-centre Coulomb integrals and the fitted tensor."""
 
+import contextlib
 import math
 
 import numpy as np
 import pytest
 
+from hafnium import _kernels
 from hafnium.basis import BasisLibrary, BasisSet, Shell
 from hafnium.integrals import DensityFitting, RustEngine, ShellTable
 from hafnium.molecule import Molecule
@@ -169,11 +171,11 @@ def test_fitted_tensor_reproduces_the_fitted_repulsion() -> None:
     fitting = DensityFitting.build(ENGINE, basis, aux, molecule)
     assert fitting.n_aux == aux.n_functions
     assert fitting.n_ao == basis.n_functions
-    fitted = fitting.fitted_tensor()
+    fitted = fitting.df_tensor()
     # The metric is absorbed: Σ_P B B equals (uv|P) M^{-1} (Q|wx).
     three = fitting.three_center.reshape(fitting.n_aux, -1)
     expected = three.T @ np.linalg.solve(fitting.metric, three)
-    eri = fitting.electron_repulsion()
+    eri = fitting.eri()
     np.testing.assert_allclose(
         eri.reshape(expected.shape), expected, atol=DENSITY_FITTING_TOL
     )
@@ -193,3 +195,12 @@ def test_density_fitting_validates_shapes() -> None:
     orbital, aux = tables(water(), "sto-3g", "def2-universal-jkfit")
     with pytest.raises(ValueError, match=r"\[n, 2, 3\]"):
         ENGINE.coulomb_three_center(aux, orbital, orbital, np.zeros((1, 3, 2)))
+
+
+def test_thread_pool_can_be_configured_once() -> None:
+    # The pool may already exist from earlier parallel kernels; after one
+    # attempt a second configuration must be refused.
+    with contextlib.suppress(ValueError):
+        _kernels.configure_threads(2)
+    with pytest.raises(ValueError, match="thread pool"):
+        _kernels.configure_threads(2)

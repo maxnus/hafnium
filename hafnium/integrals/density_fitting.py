@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from hafnium.backend import Array, array_namespace, eigh, host_array
+from hafnium.backend import Array, adjoint, array_namespace, eigh, host_array
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.integrals.engine import IntegralEngine
@@ -82,12 +82,13 @@ class DensityFitting:
         """Number of orbital basis functions."""
         return int(self.three_center.shape[1])
 
-    def fitted_tensor(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
-        """``B[aux, ao, ao]`` with the metric absorbed, ``B = M^{-1/2} (P|uv)``.
+    def df_tensor(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
+        """``df_tensor[aux, ao, ao]`` with the metric absorbed: ``M^{-1/2} (P|uv)``.
 
         Metric eigenvalues below ``threshold`` times the largest are dropped,
         which removes near-linear dependence of the auxiliary basis; the
-        number dropped is logged.
+        number dropped is logged, which reads the count on the host (the
+        JAX milestone revisits this).
         """
         xp = array_namespace(self.metric)
         eigenvalues, eigenvectors = eigh(self.metric)
@@ -98,20 +99,17 @@ class DensityFitting:
             logger.info(
                 "density fitting dropped %d near-null metric eigenvalues", dropped
             )
-        inverse_root = xp.where(
-            keep, 1.0 / xp.sqrt(xp.where(keep, eigenvalues, 1.0)), 0.0
-        )
-        half = (eigenvectors * inverse_root) @ xp.conj(eigenvectors).T
+        safe = xp.where(keep, eigenvalues, xp.ones_like(eigenvalues))
+        inverse_root = xp.where(keep, 1.0 / xp.sqrt(safe), xp.zeros_like(eigenvalues))
+        half = (eigenvectors * inverse_root) @ adjoint(eigenvectors)
         flat = xp.reshape(self.three_center, (self.n_aux, -1))
         return xp.reshape(half @ flat, self.three_center.shape)
 
-    def electron_repulsion(
-        self, *, threshold: float = DEFAULT_METRIC_THRESHOLD
-    ) -> Array:
-        """Fitted four-centre integrals ``(uv|wx)`` in chemists' notation.
+    def eri(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
+        """Fitted four-centre integrals ``eri[ao, ao, ao, ao]``, chemists' notation.
 
-        Stored in full as ``[ao, ao, ao, ao]``; for tests and small systems.
+        Stored in full; for tests and small systems.
         """
         xp = array_namespace(self.metric)
-        fitted = self.fitted_tensor(threshold=threshold)
+        fitted = self.df_tensor(threshold=threshold)
         return xp.einsum("Puv,Pwx->uvwx", fitted, fitted)

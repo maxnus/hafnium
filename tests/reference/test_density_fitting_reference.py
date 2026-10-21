@@ -62,9 +62,7 @@ def test_fitted_repulsion_matches_pyscf(name: str, basis_name: str) -> None:
     fitting = compute(name, basis_name)
     molecule, basis, auxiliary = bases(name, basis_name)
     expected = fitted_repulsion_reference(molecule, basis, auxiliary)
-    np.testing.assert_allclose(
-        fitting.electron_repulsion(), expected, atol=DENSITY_FITTING_TOL
-    )
+    np.testing.assert_allclose(fitting.eri(), expected, atol=DENSITY_FITTING_TOL)
 
 
 @pytest.mark.reference
