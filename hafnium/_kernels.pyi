@@ -117,6 +117,21 @@ def pair_fourier_transform(
 ) -> NDArray[np.complex128]:
     """Return ``∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr`` as ``[image, G, ao, ao]``."""
 
+def ewald_energy(
+    vectors: NDArray[np.float64],
+    charges: NDArray[np.float64],
+    positions: NDArray[np.float64],
+    translations: NDArray[np.float64],
+    g_vectors: NDArray[np.float64],
+    omega: float,
+) -> float:
+    """Return the Ewald energy per cell of point charges on a lattice.
+
+    ``vectors`` ``[d, 3]`` span the lattice, ``translations`` ``[T, 3]`` are
+    the real-space images summed over and ``g_vectors`` ``[G, 3]`` the
+    non-zero reciprocal vectors; ``omega`` is the range-separation parameter.
+    """
+
 def configure_threads(n_threads: int) -> None:
     """Set the size of the kernel thread pool once per process.
 

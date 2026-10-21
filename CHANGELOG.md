@@ -57,6 +57,17 @@ uses [Semantic Versioning](https://semver.org/).
   The four-centre integrals of benzene in cc-pVDZ cost eight times less
   CPU time than before, within a factor of two of libcint, as the
   segmented def2-SVP basis already was.
+- Periodic foundations (M4, part one): `Lattice` with one to three
+  translation vectors, reciprocal vectors, fractional coordinates,
+  wrapping, translations within a cutoff and supercells; `Cell` as a
+  `Molecule` with a lattice, extended-XYZ input and output that keep the
+  lattice, supercell construction; `KPoints` meshes (Γ-centred, shifted,
+  Monkhorst–Pack) and explicit lists with weights, time-reversal partners
+  and invariant momenta; Ewald nuclear repulsion in one to three
+  dimensions with one regularization of the `G = 0` term (ADR-0012), the
+  lattice loops in Rust and the cutoffs chosen in Python; tests against
+  Madelung constants, direct summation, PySCF's `energy_nuc` and
+  independence of the range-separation parameter.
 - SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
   the result, level shifting and density damping options, and canonical
   orthogonalization that removes linearly dependent basis combinations.

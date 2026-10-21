@@ -38,6 +38,7 @@ nav:
       - adr/0009-p-shell-order-verified.md
       - adr/0010-scf-driver-over-structured-matrices.md
       - adr/0011-general-contractions-in-the-kernels.md
+      - adr/0012-ewald-sums-in-reduced-dimensions.md
   - API reference: api.md
 
 markdown_extensions:

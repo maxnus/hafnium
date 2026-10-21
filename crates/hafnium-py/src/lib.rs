@@ -4,7 +4,7 @@
 //! calls `hafnium-core`, and maps errors to Python exceptions. No numerics
 //! live here.
 
-use hafnium_core::integrals;
+use hafnium_core::{integrals, periodic};
 use numpy::{
     Complex64, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArray5, PyArrayMethods,
     PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
@@ -332,6 +332,37 @@ fn pair_fourier_transform<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
+/// Ewald energy per cell of point `charges` at `positions` on the lattice
+/// spanned by `vectors`, summed over the real-space `translations` and the
+/// non-zero reciprocal `g_vectors`, with the range-separation parameter `omega`.
+#[pyfunction]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn ewald_energy(
+    vectors: PyReadonlyArray2<'_, f64>,
+    charges: PyReadonlyArray1<'_, f64>,
+    positions: PyReadonlyArray2<'_, f64>,
+    translations: PyReadonlyArray2<'_, f64>,
+    g_vectors: PyReadonlyArray2<'_, f64>,
+    omega: f64,
+) -> PyResult<f64> {
+    let charges = charges.as_slice()?;
+    if !charges.iter().all(|z| z.is_finite()) {
+        return Err(PyValueError::new_err("charges are finite"));
+    }
+    periodic::ewald_energy(
+        &to_vectors(&vectors, "lattice vectors")?,
+        charges,
+        &to_vectors(&positions, "positions")?,
+        &to_vectors(&translations, "translations")?,
+        &to_vectors(&g_vectors, "G vectors")?,
+        omega,
+    )
+    .map_err(|error| value_error(&error))
+}
+
 /// Set the size of the kernel thread pool once per process.
 #[pyfunction]
 fn configure_threads(n_threads: usize) -> PyResult<()> {
@@ -412,6 +443,7 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(schwarz_bounds, module)?)?;
     module.add_function(wrap_pyfunction!(fourier_transform, module)?)?;
     module.add_function(wrap_pyfunction!(pair_fourier_transform, module)?)?;
+    module.add_function(wrap_pyfunction!(ewald_energy, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())
 }

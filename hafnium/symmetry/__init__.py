@@ -1,5 +1,6 @@
-"""Symmetry specifications and their mapping to block structures."""
+"""Symmetry specifications, their block structures, and k-point sets."""
 
+from hafnium.symmetry.kpoints import KPoints
 from hafnium.symmetry.spec import (
     FUKUTOME_CLASSES,
     Field,
@@ -12,6 +13,7 @@ __all__ = [
     "FUKUTOME_CLASSES",
     "Field",
     "FukutomeClass",
+    "KPoints",
     "SpinSymmetry",
     "SymmetrySpec",
 ]

@@ -725,7 +725,12 @@ test reproduces the molecular overlap and kinetic matrices to
 three, two and one dimensions and PySCF's `energy_nuc`, independently of
 the Ewald splitting parameter; `BlockMatrix` property tests pass for all
 eight classes with k-points; the band-folding test holds for the kinetic
-band structure.
+band structure. Status: `Lattice`, `Cell`, `KPoints` with time-reversal
+pairing, and the Ewald nuclear repulsion in one to three dimensions
+(ADR-0012) done 2026-10-21, matching the Madelung constants, PySCF's
+`energy_nuc` in three and two dimensions, and independent of the
+range-separation parameter. The k axis on the structured matrices and the
+lattice-summed one-electron integrals follow.
 
 **M5 Periodic Hartree–Fock.** Range-separated Gaussian density fitting
 with momentum transfer, nuclear attraction by the same split, k-point J

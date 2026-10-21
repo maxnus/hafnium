@@ -36,6 +36,7 @@ ALLOWED: frozenset[str] = frozenset(
         "clip",
         "conj",
         "exp",
+        "floor",
         "imag",
         "isfinite",
         "isinf",

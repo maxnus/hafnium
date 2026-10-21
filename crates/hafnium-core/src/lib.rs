@@ -10,6 +10,7 @@
 //! from Hermite integrals of the Boys function.
 
 pub mod integrals;
+pub mod periodic;
 pub mod special;
 
 /// Version of this crate, as given in `Cargo.toml`.

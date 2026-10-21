@@ -34,6 +34,35 @@ def _to_bohr(symbol: str, position: Iterable[float], unit: str) -> Position:
     return (values[0] * scale, values[1] * scale, values[2] * scale)
 
 
+def parse_xyz(text: str) -> tuple[str, list[tuple[str, Position]]]:
+    """Split XYZ-format text into its comment line and ``(symbol, xyz)`` rows.
+
+    A file that starts with a line holding a single integer has the standard
+    header: that count, then one comment line, then the atoms. Without the
+    header the comment is empty. Coordinates are returned as written.
+    """
+    raw = text.splitlines()
+    first = raw[0].split() if raw else []
+    comment = ""
+    if len(first) == 1 and first[0].isdigit():
+        count = int(first[0])
+        comment = raw[1] if len(raw) > 1 else ""
+        lines = [line for line in raw[2:] if line.strip()]
+        if len(lines) != count:
+            raise InputError(f"XYZ header announces {count} atoms, found {len(lines)}")
+    else:
+        lines = [line for line in raw if line.strip()]
+    atoms: list[tuple[str, Position]] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 4:
+            raise InputError(f"cannot parse atom line {line!r}")
+        atoms.append(
+            (fields[0], (float(fields[1]), float(fields[2]), float(fields[3])))
+        )
+    return comment, atoms
+
+
 @dataclass(frozen=True, slots=True)
 class Atom:
     """An atom at a position in Bohr."""
@@ -125,25 +154,7 @@ class Molecule:
         have the standard header: that count, then one comment line of any
         content, then the atoms.
         """
-        raw = text.splitlines()
-        first = raw[0].split() if raw else []
-        if len(first) == 1 and first[0].isdigit():
-            count = int(first[0])
-            lines = [line for line in raw[2:] if line.strip()]
-            if len(lines) != count:
-                raise InputError(
-                    f"XYZ header announces {count} atoms, found {len(lines)}"
-                )
-        else:
-            lines = [line for line in raw if line.strip()]
-        atoms: list[tuple[str, tuple[float, float, float]]] = []
-        for line in lines:
-            fields = line.split()
-            if len(fields) != 4:
-                raise InputError(f"cannot parse atom line {line!r}")
-            atoms.append(
-                (fields[0], (float(fields[1]), float(fields[2]), float(fields[3])))
-            )
+        _, atoms = parse_xyz(text)
         return cls.from_atoms(atoms, charge=charge, spin=spin, unit=unit)
 
     @property

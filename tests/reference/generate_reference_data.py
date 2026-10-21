@@ -4,9 +4,9 @@
 
 Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``density_fitting_<molecule>_<basis>.json``,
-``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``
-and ``scf_<molecule>_<basis>.json`` with the PySCF values and their
-provenance.
+``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
+``scf_<molecule>_<basis>.json`` and ``ewald_<cell>_nuclei.json`` with the
+PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from hafnium.molecule import Molecule
 from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
     density_fitting_reference,
+    ewald_reference,
     four_center_reference,
     fourier_transform_reference,
     one_electron_reference,
@@ -33,6 +34,8 @@ from tests.reference.test_density_fitting_reference import AUXILIARY
 from tests.reference.test_density_fitting_reference import (
     STORED_CASES as DENSITY_FITTING_CASES,
 )
+from tests.reference.test_ewald_reference import CELLS
+from tests.reference.test_ewald_reference import STORED_CASES as EWALD_CASES
 from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
@@ -143,6 +146,18 @@ def main() -> None:
             method=kind,
             charge=molecule.charge,
             spin=molecule.spin,
+        )
+    for name in EWALD_CASES:
+        cell = CELLS[name]()
+        record(
+            "ewald",
+            cell,
+            name,
+            "nuclei",
+            "Cell.energy_nuc() with precision=1e-12; Bohr",
+            {"energy": np.asarray(ewald_reference(cell))},
+            dimension=cell.dimension,
+            lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
         )
 
 

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.molecule import Molecule
+from hafnium.molecule import Cell, Molecule
 
 pyscf = pytest.importorskip("pyscf")
 gto: Any = pyscf.gto
@@ -224,3 +224,32 @@ def scf_reference(
         "mo_occupations": np.asarray(mean_field.mo_occ),
         "spin_square": spin_square,
     }
+
+
+def ewald_reference(cell: Cell, *, vacuum: float = 80.0) -> float:
+    """Nuclear repulsion of ``cell`` from PySCF's Ewald sum, in Hartree.
+
+    PySCF needs three lattice vectors; a slab gets a vacuum vector of
+    ``vacuum`` Bohr along ``z`` and must lie in the ``xy`` plane, since its
+    two-dimensional Ewald sum assumes that orientation. The analytic sum
+    does not depend on the vacuum. Chains are not supported by PySCF.
+    """
+    pbc_gto: Any = pytest.importorskip("pyscf.pbc.gto")
+    vectors = [list(vector) for vector in cell.lattice.vectors]
+    if cell.dimension == 2:
+        assert all(vector[2] == 0.0 for vector in vectors)
+        vectors.append([0.0, 0.0, vacuum])
+    elif cell.dimension != 3:
+        raise ValueError("PySCF has Ewald sums in two and three dimensions only")
+    atoms = [[atom.symbol, list(atom.position)] for atom in cell.atoms]
+    reference = pbc_gto.Cell(
+        atom=atoms,
+        a=np.asarray(vectors),
+        unit="Bohr",
+        basis="sto-3g",
+        dimension=cell.dimension,
+        precision=1e-12,
+        verbose=0,
+    )
+    reference.build()
+    return float(reference.energy_nuc())
