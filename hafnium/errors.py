@@ -18,3 +18,7 @@ class StructureError(HafniumError, ValueError):
 
 class BackendError(HafniumError):
     """The active array backend cannot perform the requested operation."""
+
+
+class BasisSetError(HafniumError, ValueError):
+    """A basis set is unavailable, malformed or unsupported."""

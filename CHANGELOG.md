@@ -19,3 +19,8 @@ uses [Semantic Versioning](https://semver.org/).
   Kramers-adapted eigensolvers for paired classes, density construction.
 - `SymmetrySpec` mapping the eight Fukutome classes to block structures,
   with electron-count validation.
+- `Molecule` and `Atom` with XYZ parsing, electron counts and nuclear
+  repulsion; CODATA 2018 unit constants.
+- `Shell`, `BasisSet` and `BasisLibrary`: contraction normalization, the
+  Basis Set Exchange client with a per-element cache, and bundled STO-3G,
+  def2-SVP, cc-pVDZ and def2-universal-JKFIT data for H through Ar.

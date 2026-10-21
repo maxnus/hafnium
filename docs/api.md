@@ -15,6 +15,14 @@ Until then the packages are documented directly.
 
 ::: hafnium.symmetry
 
+## hafnium.molecule
+
+::: hafnium.molecule
+
+## hafnium.basis
+
+::: hafnium.basis
+
 ## hafnium.backend
 
 ::: hafnium.backend
