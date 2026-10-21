@@ -1,0 +1,25 @@
+[package]
+name = "hafnium-py"
+description = "Python bindings for hafnium-core (built into the hafnium wheel by maturin)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+name = "hafnium_kernels"
+crate-type = ["cdylib"]
+# The extension module cannot link a standalone test binary; it is tested
+# through pytest from the Python side.
+test = false
+doctest = false
+
+[dependencies]
+hafnium-core.workspace = true
+pyo3.workspace = true
+numpy.workspace = true
+
+[lints]
+workspace = true

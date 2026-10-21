@@ -503,9 +503,9 @@ module. No printing from library code.
 - Every non-obvious decision gets an ADR: a short file with context,
   decision, consequences. The first ones: language for the compiled layer,
   integral algorithm, spherical harmonic ordering, libxc binding, license.
-- Tooling: `uv` for environments, `maturin` for building, `ruff` for
-  formatting and linting, `pyright` in strict mode (or `mypy --strict`;
-  pick one), `pytest` with markers, `hypothesis`, `pre-commit`, `cargo
+- Tooling (ADR-0004): `uv` for environments, `maturin` for building,
+  `ruff` for formatting and linting, `pyright` in strict mode, `pytest`
+  with markers, `hypothesis`, `pre-commit`, `cargo
   clippy --pedantic`, `rustfmt`, `cargo nextest`, `criterion` benchmarks,
   `mkdocs-material` with `mkdocstrings` for documentation.
 - Documentation has three parts: user guide, API reference generated from
@@ -528,7 +528,9 @@ milestone can proceed in parallel. Each milestone has an exit criterion.
 ADRs, Python package skeleton, Rust crate skeleton with a trivial
 PyO3 function built by maturin, CI running lint, type check and tests,
 documentation site building, PEP 541 request for the PyPI name filed.
-Exit: a wheel builds on Linux and macOS in CI.
+Exit: a wheel builds on Linux and macOS in CI. Status: skeleton, checks
+and CI configuration done 2026-10-21; the CI run and the PEP 541 filing
+wait for the GitHub remote.
 
 **M1 Foundations.** `Molecule`, `BasisSet` with BSE client and cache,
 backend module with the NumPy backend, `Structure` and `BlockMatrix` with
@@ -601,16 +603,15 @@ PySCF is never a runtime dependency.
 2. Spherical harmonic ordering and phase (proposal in `CONVENTIONS.md`:
    m = −l..+l, real solid harmonics; Cartesian functions supported only for
    input conversion).
-3. Type checker: pyright strict or mypy strict.
-4. libxc binding: `pylibxc` versus an own binding through the Rust crate.
-5. Minimum Python version (suggested 3.11) and NumPy 2 only.
-6. Whether JAX is a development target from M1 (recommended: honor its
+3. libxc binding: `pylibxc` versus an own binding through the Rust crate.
+4. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M7).
 
 Decided so far: Apache-2.0 license (2026-10-21, ADR-0001); Rust for the
 compiled layer (2026-10-21, ADR-0002); the package name `hafnium`
 (2026-10-21, ADR-0003), with the PyPI name still to be obtained, see
-ADR-0003 and the risk table.
+ADR-0003 and the risk table; Python 3.11+, NumPy 2, uv, ruff and pyright
+strict as the toolchain baseline (2026-10-21, ADR-0004).
 
 ## 13. Risks
 
