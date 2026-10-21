@@ -50,6 +50,12 @@ uses [Semantic Versioning](https://semver.org/).
   occupation policies, DIIS, energy terms and convergence history
   (ADR-0010); `ConvergenceError` carries the last state; reference tests
   against PySCF for RHF, UHF and GHF with exact and fitted integrals.
+- General contractions are evaluated once per shell in every integral
+  kernel instead of once per contraction (ADR-0011): `ShellTable` entries
+  carry all contraction rows of a shell, the primitive Hermite expansions
+  are shared, and the four-centre kernel scatters its blocks in parallel.
+  The four-centre integrals of benzene in cc-pVDZ cost the same CPU time
+  as in the segmented def2-SVP basis, fifteen times less than before.
 - SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
   the result, level shifting and density damping options, and canonical
   orthogonalization that removes linearly dependent basis combinations.

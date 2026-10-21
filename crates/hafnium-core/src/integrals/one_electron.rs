@@ -14,24 +14,32 @@ use crate::Error;
 /// `T`, as a row-major `[n_translations, n_bra, n_ket]` array.
 #[must_use]
 pub fn overlap(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) -> Vec<f64> {
-    assemble(bra, ket, translations, 0, |pairs, a, b, block| {
-        for pair in pairs {
-            let scale = pair.coefficient * (PI / pair.p).powf(1.5);
+    assemble(
+        bra,
+        ket,
+        translations,
+        0,
+        |pair, a, b, _workspace, values| {
+            let scale = (PI / pair.p).powf(1.5);
             for (ia, ca) in a.iter().enumerate() {
                 for (ib, cb) in b.iter().enumerate() {
-                    block[ia * b.len() + ib] += scale * pair.product(ca, cb, [0, 0, 0]);
+                    values[ia * b.len() + ib] = scale * pair.product(ca, cb, [0, 0, 0]);
                 }
             }
-        }
-    })
+        },
+    )
 }
 
 /// Kinetic energy integrals `⟨μ | −½∇² | ν(r − T)⟩`, laid out as [`overlap`].
 #[must_use]
 pub fn kinetic(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) -> Vec<f64> {
-    assemble(bra, ket, translations, 2, |pairs, a, b, block| {
-        for pair in pairs {
-            let scale = pair.coefficient * (PI / pair.p).powf(1.5);
+    assemble(
+        bra,
+        ket,
+        translations,
+        2,
+        |pair, a, b, _workspace, values| {
+            let scale = (PI / pair.p).powf(1.5);
             for (ia, ca) in a.iter().enumerate() {
                 for (ib, cb) in b.iter().enumerate() {
                     let s: [f64; 3] =
@@ -40,11 +48,11 @@ pub fn kinetic(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) ->
                         pair.second_derivative(axis, ca[axis], cb[axis])
                     });
                     let value = d[0] * s[1] * s[2] + s[0] * d[1] * s[2] + s[0] * s[1] * d[2];
-                    block[ia * b.len() + ib] -= 0.5 * scale * value;
+                    values[ia * b.len() + ib] = -0.5 * scale * value;
                 }
             }
-        }
-    })
+        },
+    )
 }
 
 /// Nuclear attraction integrals `⟨μ | Σ_C −Z_C v(r_C) | ν(r − T)⟩` for point
@@ -80,13 +88,16 @@ pub fn nuclear_attraction(
     if !charges.iter().all(|z| z.is_finite()) {
         return Err(Error::InvalidArgument("charges are finite".to_string()));
     }
-    Ok(assemble(bra, ket, translations, 0, |pairs, a, b, block| {
-        let mut workspace = HermiteWorkspace::default();
-        for pair in pairs {
+    Ok(assemble(
+        bra,
+        ket,
+        translations,
+        0,
+        |pair, a, b, workspace, values| {
             // Attenuation replaces p by p ω² / (p + ω²) in every Hermite
             // integral and scales the prefactor by sqrt(alpha / p).
             let alpha = omega.map_or(pair.p, |w| pair.p * w * w / (pair.p + w * w));
-            let prefactor = pair.coefficient * 2.0 * PI / pair.p * (alpha / pair.p).sqrt();
+            let prefactor = 2.0 * PI / pair.p * (alpha / pair.p).sqrt();
             let mut summed = HermiteTable::zeros(pair.order);
             for (charge, position) in charges.iter().zip(positions) {
                 let pc: [f64; 3] = std::array::from_fn(|axis| pair.center[axis] - position[axis]);
@@ -102,21 +113,22 @@ pub fn nuclear_attraction(
                             }
                         }
                     }
-                    block[ia * b.len() + ib] += prefactor * value;
+                    values[ia * b.len() + ib] = prefactor * value;
                 }
             }
-        }
-    }))
+        },
+    ))
 }
 
-/// Loop over translations and shell pairs, let `block_fn` fill the Cartesian
-/// block of each pair, transform it to spherical functions and place it.
+/// Loop over translations and shell pairs, let `values_fn` fill the
+/// Cartesian values of each primitive pair, accumulate them into every
+/// contraction, transform to spherical functions and place the block.
 fn assemble(
     bra: &ShellTable,
     ket: &ShellTable,
     translations: &[[f64; 3]],
     extra_b: usize,
-    block_fn: impl Fn(&[PrimitivePair], &[[usize; 3]], &[[usize; 3]], &mut [f64]),
+    values_fn: impl Fn(&PrimitivePair, &[[usize; 3]], &[[usize; 3]], &mut HermiteWorkspace, &mut [f64]),
 ) -> Vec<f64> {
     let n_bra = bra.n_functions();
     let n_ket = ket.n_functions();
@@ -124,6 +136,7 @@ fn assemble(
     let tables = Tables::new(max_l);
     let bra_offsets = bra.function_offsets();
     let ket_offsets = ket.function_offsets();
+    let mut workspace = HermiteWorkspace::default();
     let mut out = vec![0.0; translations.len() * n_bra * n_ket];
     for (it, translation) in translations.iter().enumerate() {
         let matrix = &mut out[it * n_bra * n_ket..(it + 1) * n_bra * n_ket];
@@ -135,15 +148,25 @@ fn assemble(
                     std::array::from_fn(|axis| b.center[axis] + translation[axis]);
                 let pairs = primitive_pairs(&a, &b, b_center, extra_b);
                 let (la, lb) = (a.angular_momentum, b.angular_momentum);
-                let mut cartesian = vec![0.0; n_cartesian(la) * n_cartesian(lb)];
-                block_fn(
-                    &pairs,
-                    &tables.components[la],
-                    &tables.components[lb],
-                    &mut cartesian,
+                let (nca, ncb) = (n_cartesian(la), n_cartesian(lb));
+                let mut cartesian = vec![0.0; pairs.n_contracted() * nca * ncb];
+                let mut values = vec![0.0; nca * ncb];
+                for (index, pair) in pairs.pairs.iter().enumerate() {
+                    values_fn(
+                        pair,
+                        &tables.components[la],
+                        &tables.components[lb],
+                        &mut workspace,
+                        &mut values,
+                    );
+                    pairs.accumulate(index, &values, nca, ncb, &mut cartesian);
+                }
+                let spherical = tables.to_spherical(
+                    &cartesian,
+                    [Some(la), Some(lb), None, None],
+                    [a.n_contractions, b.n_contractions, 1, 1],
                 );
-                let spherical = tables.to_spherical(&cartesian, [Some(la), Some(lb), None, None]);
-                for (row, values) in spherical.chunks(2 * lb + 1).enumerate() {
+                for (row, values) in spherical.chunks(b.n_functions()).enumerate() {
                     let start = (bra_offset + row) * n_ket + ket_offset;
                     matrix[start..start + values.len()].copy_from_slice(values);
                 }
@@ -156,7 +179,50 @@ fn assemble(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrals::test_tables::s_shell;
+    use crate::integrals::test_tables::{general_table, s_shell, split_table};
+
+    fn assert_same(general: &[f64], split: &[f64]) {
+        assert_eq!(general.len(), split.len());
+        for (g, s) in general.iter().zip(split) {
+            assert!((g - s).abs() < 1e-14, "{g} vs {s}");
+        }
+    }
+
+    #[test]
+    fn general_contractions_match_split_shells() {
+        let (general, split) = (general_table(), split_table());
+        let translations = [[0.0; 3], [0.3, -0.2, 0.5]];
+        assert_eq!(general.n_functions(), split.n_functions());
+        assert_same(
+            &overlap(&general, &general, &translations),
+            &overlap(&split, &split, &translations),
+        );
+        assert_same(
+            &kinetic(&general, &split, &translations),
+            &kinetic(&split, &split, &translations),
+        );
+        let charges = [1.0, 2.0];
+        let positions = [[0.1, 0.2, 0.3], [-0.5, 0.4, 0.0]];
+        let general_v = nuclear_attraction(
+            &general,
+            &general,
+            &translations,
+            &charges,
+            &positions,
+            Some(0.7),
+        )
+        .expect("valid");
+        let split_v = nuclear_attraction(
+            &split,
+            &split,
+            &translations,
+            &charges,
+            &positions,
+            Some(0.7),
+        )
+        .expect("valid");
+        assert_same(&general_v, &split_v);
+    }
 
     #[test]
     fn normalized_s_function_has_unit_overlap() {

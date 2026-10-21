@@ -11,12 +11,14 @@ from hafnium.errors import InputError
 
 @dataclass(frozen=True, slots=True)
 class ShellTable:
-    """Contracted shells with their centres, one entry per contraction.
+    """Contracted shells with their centres, one entry per shell.
 
-    General contractions of a :class:`~hafnium.basis.Shell` are split into
-    consecutive entries sharing the exponents, which keeps the function
-    order of ADR-0006 (contraction-major, then ``m``). Coefficients are
-    those of bare primitives from :meth:`Shell.primitive_coefficients`.
+    A general contraction of a :class:`~hafnium.basis.Shell` stays one
+    entry with several coefficient rows over the same exponents, and the
+    kernels evaluate its primitives once for all rows (ADR-0011); the
+    function order of ADR-0006 (contraction-major, then ``m``) is kept.
+    Coefficients are those of bare primitives from
+    :meth:`Shell.primitive_coefficients`.
 
     Parameters
     ----------
@@ -26,8 +28,13 @@ class ShellTable:
         Centre of each entry in Bohr.
     primitive_offsets : Array[shell + 1]
         Entry ``i`` owns primitives ``offsets[i]:offsets[i + 1]``.
-    exponents, coefficients : Array[primitive]
-        Primitive exponents and bare-primitive coefficients.
+    exponents : Array[primitive]
+        Primitive exponents.
+    coefficients : Array
+        Bare-primitive coefficients, shell by shell, one row per
+        contraction and one entry per primitive of the shell.
+    n_contractions : Array[shell]
+        Contractions of each entry; one each when omitted.
     """
 
     angular_momenta: Array
@@ -35,6 +42,7 @@ class ShellTable:
     primitive_offsets: Array
     exponents: Array
     coefficients: Array
+    n_contractions: Array | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -55,8 +63,21 @@ class ShellTable:
             raise InputError("a shell table needs one centre per shell")
         if self.primitive_offsets.shape != (n_shells + 1,):
             raise InputError("primitive offsets have one entry per shell plus one")
-        if self.exponents.shape != self.coefficients.shape:
-            raise InputError("exponents and coefficients have the same length")
+        counts = (
+            host_array([1] * n_shells, "int64")
+            if self.n_contractions is None
+            else _integers(self.n_contractions, "contraction counts")
+        )
+        object.__setattr__(self, "n_contractions", counts)
+        if counts.shape != (n_shells,) or bool((counts < 1).any()):
+            raise InputError("every shell has at least one contraction")
+        primitives = self.primitive_offsets[1:] - self.primitive_offsets[:-1]
+        if self.exponents.shape != (int(self.primitive_offsets[-1]),):
+            raise InputError("exponents cover exactly the primitives of the shells")
+        if self.coefficients.shape != (int((counts * primitives).sum()),):
+            raise InputError(
+                "coefficients hold one row per contraction, one entry per primitive"
+            )
 
     @classmethod
     def from_basis(cls, basis: BasisSet, positions: Array) -> ShellTable:
@@ -72,30 +93,40 @@ class ShellTable:
         offsets = [0]
         exponents: list[float] = []
         coefficients: list[float] = []
+        n_contractions: list[int] = []
         for shell, atom in zip(basis.shells, basis.shell_atoms, strict=True):
-            for row in shell.primitive_coefficients():
-                angular_momenta.append(shell.angular_momentum)
-                centers.append(positions[atom])
-                exponents.extend(shell.exponents)
+            rows = shell.primitive_coefficients()
+            angular_momenta.append(shell.angular_momentum)
+            centers.append(positions[atom])
+            exponents.extend(shell.exponents)
+            offsets.append(len(exponents))
+            for row in rows:
                 coefficients.extend(row)
-                offsets.append(len(exponents))
+            n_contractions.append(len(rows))
         return cls(
             host_array(angular_momenta, "int64"),
             host_array(centers),
             host_array(offsets, "int64"),
             host_array(exponents),
             host_array(coefficients),
+            host_array(n_contractions, "int64"),
         )
 
     @property
     def n_shells(self) -> int:
-        """Number of entries (contractions)."""
+        """Number of entries (shells)."""
         return int(self.angular_momenta.shape[0])
 
     @property
     def n_functions(self) -> int:
-        """Number of spherical basis functions."""
-        return int(sum(2 * int(l) + 1 for l in self.angular_momenta))
+        """Number of spherical basis functions, ``2l + 1`` per contraction."""
+        assert self.n_contractions is not None
+        return int(
+            sum(
+                int(k) * (2 * int(l) + 1)
+                for k, l in zip(self.n_contractions, self.angular_momenta, strict=True)
+            )
+        )
 
 
 def _integers(values: Array, name: str) -> Array:

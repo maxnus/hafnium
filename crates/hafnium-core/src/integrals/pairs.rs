@@ -1,5 +1,13 @@
 //! Primitive pairs of two shells and the Hermite expansion of their
 //! product, shared by every kernel.
+//!
+//! A shell may hold several contractions of the same primitives (a general
+//! contraction, ADR-0006). The expansion of a primitive pair does not
+//! depend on the contraction, so it is built once and every kernel
+//! accumulates the primitive values into all contraction combinations with
+//! [`PrimitivePairs::accumulate`].
+
+use std::ops::{AddAssign, Mul};
 
 use super::ShellRef;
 use super::hermite::ExpansionCoefficients;
@@ -13,8 +21,6 @@ pub(crate) struct PrimitivePair {
     pub exponent_b: f64,
     /// Product centre `P = (aA + bB) / p`.
     pub center: [f64; 3],
-    /// Product of the contraction coefficients.
-    pub coefficient: f64,
     /// `l_a + l_b`, the highest Hermite order of the product.
     pub order: usize,
     /// Expansion coefficients along x, y and z.
@@ -44,6 +50,57 @@ impl PrimitivePair {
     }
 }
 
+/// All primitive pairs of two shells with the contraction coefficients of
+/// every pair, `coefficients[pair][k_a][k_b]`.
+pub(crate) struct PrimitivePairs {
+    pub pairs: Vec<PrimitivePair>,
+    /// Number of contractions of the two shells.
+    pub contractions: [usize; 2],
+    coefficients: Vec<f64>,
+}
+
+impl PrimitivePairs {
+    /// Product of the coefficients of contraction `k_a` of the bra and
+    /// `k_b` of the ket in primitive pair `pair`.
+    #[inline]
+    pub(crate) fn coefficient(&self, pair: usize, k_a: usize, k_b: usize) -> f64 {
+        self.coefficients[(pair * self.contractions[0] + k_a) * self.contractions[1] + k_b]
+    }
+
+    /// Add `values[i_a][i_b]`, the contribution of primitive pair `pair` to
+    /// `n_a × n_b` Cartesian components, to `block` laid out
+    /// `[k_a][i_a][k_b][i_b]`, scaled by every contraction coefficient.
+    pub(crate) fn accumulate<T>(
+        &self,
+        pair: usize,
+        values: &[T],
+        n_a: usize,
+        n_b: usize,
+        block: &mut [T],
+    ) where
+        T: Copy + AddAssign + Mul<f64, Output = T>,
+    {
+        let [left_count, right_count] = self.contractions;
+        for k_a in 0..left_count {
+            for k_b in 0..right_count {
+                let coefficient = self.coefficient(pair, k_a, k_b);
+                for i_a in 0..n_a {
+                    let target = ((k_a * n_a + i_a) * right_count + k_b) * n_b;
+                    let source = i_a * n_b;
+                    for i_b in 0..n_b {
+                        block[target + i_b] += values[source + i_b] * coefficient;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Number of contracted function pairs, `k_a k_b`.
+    pub(crate) fn n_contracted(&self) -> usize {
+        self.contractions[0] * self.contractions[1]
+    }
+}
+
 /// All primitive pairs of two shells, with the ket centred at `b_center`.
 /// `extra_b` raises the ket order of the expansion, as kinetic integrals
 /// need.
@@ -52,10 +109,13 @@ pub(crate) fn primitive_pairs(
     b: &ShellRef<'_>,
     b_center: [f64; 3],
     extra_b: usize,
-) -> Vec<PrimitivePair> {
-    let mut pairs = Vec::with_capacity(a.exponents.len() * b.exponents.len());
-    for (&exponent_a, &coefficient_a) in a.exponents.iter().zip(a.coefficients) {
-        for (&exponent_b, &coefficient_b) in b.exponents.iter().zip(b.coefficients) {
+) -> PrimitivePairs {
+    let (n_a, n_b) = (a.exponents.len(), b.exponents.len());
+    let contractions = [a.n_contractions, b.n_contractions];
+    let mut pairs = Vec::with_capacity(n_a * n_b);
+    let mut coefficients = Vec::with_capacity(n_a * n_b * contractions[0] * contractions[1]);
+    for (i_a, &exponent_a) in a.exponents.iter().enumerate() {
+        for (i_b, &exponent_b) in b.exponents.iter().enumerate() {
             let p = exponent_a + exponent_b;
             let mu = exponent_a * exponent_b / p;
             let center: [f64; 3] = std::array::from_fn(|axis| {
@@ -76,23 +136,32 @@ pub(crate) fn primitive_pairs(
                 p,
                 exponent_b,
                 center,
-                coefficient: coefficient_a * coefficient_b,
                 order: a.angular_momentum + b.angular_momentum,
                 hermite,
             });
+            for k_a in 0..contractions[0] {
+                for k_b in 0..contractions[1] {
+                    coefficients.push(a.coefficient(k_a, i_a) * b.coefficient(k_b, i_b));
+                }
+            }
         }
     }
-    pairs
+    PrimitivePairs {
+        pairs,
+        contractions,
+        coefficients,
+    }
 }
 
 /// The primitives of one shell at `center` as pairs with a unit partner,
 /// so that a single Gaussian (an auxiliary function) can take the place of
 /// a product distribution in the Coulomb kernels.
-pub(crate) fn single_shell_pairs(a: &ShellRef<'_>, center: [f64; 3]) -> Vec<PrimitivePair> {
+pub(crate) fn single_shell_pairs(a: &ShellRef<'_>, center: [f64; 3]) -> PrimitivePairs {
     let unit = ShellRef {
         angular_momentum: 0,
         center,
         exponents: &[0.0],
+        n_contractions: 1,
         coefficients: &[1.0],
     };
     let shifted = ShellRef { center, ..*a };

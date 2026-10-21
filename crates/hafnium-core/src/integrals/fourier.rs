@@ -14,7 +14,7 @@ use rayon::prelude::*;
 
 use super::ShellTable;
 use super::cartesian::{n_cartesian, transform_index};
-use super::pairs::{PrimitivePair, primitive_pairs, single_shell_pairs};
+use super::pairs::{PrimitivePairs, primitive_pairs, single_shell_pairs};
 use super::two_electron::{Tables, check_finite};
 use crate::Error;
 
@@ -36,22 +36,28 @@ pub fn fourier_transform(
     let tables = Tables::new(table.max_angular_momentum());
     let (n_g, n) = (g_vectors.len(), table.n_functions());
     let offsets = table.function_offsets();
-    // One slab per shell, laid out `[g][m]`.
+    // One slab per shell, laid out `[g][f]` over the shell's functions.
     let slabs: Vec<Vec<Complex64>> = (0..table.n_shells())
         .into_par_iter()
         .map(|ia| {
             let a = table.shell(ia);
             let la = a.angular_momentum;
             let pairs = single_shell_pairs(&a, a.center);
-            let mut block = vec![Complex64::default(); n_g * n_cartesian(la)];
+            let mut block = vec![Complex64::default(); n_g * a.n_contractions * n_cartesian(la)];
             accumulate(&pairs, [la, 0], g_vectors, &tables, &mut block);
             // The unit partner is one untouched component on the right.
-            transform_index(&block, n_g, n_cartesian(la), 1, &tables.transforms[la])
+            transform_index(
+                &block,
+                n_g * a.n_contractions,
+                n_cartesian(la),
+                1,
+                &tables.transforms[la],
+            )
         })
         .collect();
     let mut out = vec![Complex64::default(); n_g * n];
     for (ia, slab) in slabs.iter().enumerate() {
-        let width = 2 * table.shell(ia).angular_momentum + 1;
+        let width = table.shell(ia).n_functions();
         for (ig, row) in slab.chunks(width).enumerate() {
             let start = ig * n + offsets[ia];
             out[start..start + width].copy_from_slice(row);
@@ -85,34 +91,37 @@ pub fn pair_fourier_transform(
     let ket_offsets = ket.function_offsets();
     let mut out = vec![Complex64::default(); translations.len() * n_g * n_bra * n_ket];
     for (it, translation) in translations.iter().enumerate() {
-        // One slab per bra shell, laid out `[g][ma][ν]`.
+        // One slab per bra shell, laid out `[g][f_a][ν]`.
         let slabs: Vec<Vec<Complex64>> = (0..bra.n_shells())
             .into_par_iter()
             .map(|ia| {
                 let a = bra.shell(ia);
                 let la = a.angular_momentum;
-                let (nsa, nca) = (2 * la + 1, n_cartesian(la));
-                let mut slab = vec![Complex64::default(); n_g * nsa * n_ket];
+                let (ka, nsa, nca) = (a.n_contractions, 2 * la + 1, n_cartesian(la));
+                let nfa = a.n_functions();
+                let mut slab = vec![Complex64::default(); n_g * nfa * n_ket];
                 for (ib, &ket_offset) in ket_offsets.iter().enumerate() {
                     let b = ket.shell(ib);
                     let lb = b.angular_momentum;
-                    let (nsb, ncb) = (2 * lb + 1, n_cartesian(lb));
+                    let (kb, ncb) = (b.n_contractions, n_cartesian(lb));
+                    let nfb = b.n_functions();
                     let b_center: [f64; 3] =
                         std::array::from_fn(|axis| b.center[axis] + translation[axis]);
                     let pairs = primitive_pairs(&a, &b, b_center, 0);
-                    let mut block = vec![Complex64::default(); n_g * nca * ncb];
+                    let mut block = vec![Complex64::default(); n_g * ka * nca * kb * ncb];
                     accumulate(&pairs, [la, lb], g_vectors, &tables, &mut block);
+                    // [g][k_a][cart_a][k_b][cart_b] → [g][f_a][f_b]
                     let spherical = transform_index(
-                        &transform_index(&block, n_g, nca, ncb, &tables.transforms[la]),
-                        n_g * nsa,
+                        &transform_index(&block, n_g * ka, nca, kb * ncb, &tables.transforms[la]),
+                        n_g * ka * nsa * kb,
                         ncb,
                         1,
                         &tables.transforms[lb],
                     );
-                    for (index, row) in spherical.chunks(nsb).enumerate() {
-                        let (ig, ma) = (index / nsa, index % nsa);
-                        let start = (ig * nsa + ma) * n_ket + ket_offset;
-                        slab[start..start + nsb].copy_from_slice(row);
+                    for (index, row) in spherical.chunks(nfb).enumerate() {
+                        let (ig, fa) = (index / nfa, index % nfa);
+                        let start = (ig * nfa + fa) * n_ket + ket_offset;
+                        slab[start..start + nfb].copy_from_slice(row);
                     }
                 }
                 slab
@@ -120,10 +129,10 @@ pub fn pair_fourier_transform(
             .collect();
         let image = &mut out[it * n_g * n_bra * n_ket..(it + 1) * n_g * n_bra * n_ket];
         for (ia, slab) in slabs.iter().enumerate() {
-            let nsa = 2 * bra.shell(ia).angular_momentum + 1;
+            let nfa = bra.shell(ia).n_functions();
             for (index, row) in slab.chunks(n_ket).enumerate() {
-                let (ig, ma) = (index / nsa, index % nsa);
-                let start = (ig * n_bra + bra_offsets[ia] + ma) * n_ket;
+                let (ig, fa) = (index / nfa, index % nfa);
+                let start = (ig * n_bra + bra_offsets[ia] + fa) * n_ket;
                 image[start..start + n_ket].copy_from_slice(row);
             }
         }
@@ -132,9 +141,9 @@ pub fn pair_fourier_transform(
 }
 
 /// Add the transform of every primitive pair to `block`, laid out
-/// `[g][cart_a][cart_b]`; `ls = [l_a, l_b]`.
+/// `[g][k_a][cart_a][k_b][cart_b]`; `ls = [l_a, l_b]`.
 fn accumulate(
-    pairs: &[PrimitivePair],
+    pairs: &PrimitivePairs,
     ls: [usize; 2],
     g_vectors: &[[f64; 3]],
     tables: &Tables,
@@ -143,12 +152,14 @@ fn accumulate(
     let (comp_a, comp_b) = (&tables.components[ls[0]], &tables.components[ls[1]]);
     let order = ls[0] + ls[1];
     let n_ab = comp_a.len() * comp_b.len();
+    let per_g = pairs.n_contracted() * n_ab;
     let (n_i, n_j) = (ls[0] + 1, ls[1] + 1);
     // sums[axis][i][j] = Σ_t E^{ij}_t (−i G_axis)^t
     let mut sums = vec![Complex64::default(); 3 * n_i * n_j];
     let mut powers = vec![Complex64::default(); order + 1];
-    for pair in pairs {
-        let scale = pair.coefficient * (PI / pair.p).powf(1.5);
+    let mut values = vec![Complex64::default(); n_ab];
+    for (index, pair) in pairs.pairs.iter().enumerate() {
+        let scale = (PI / pair.p).powf(1.5);
         for (ig, g) in g_vectors.iter().enumerate() {
             let g_squared: f64 = g.iter().map(|x| x * x).sum();
             let g_dot_p: f64 = (0..3).map(|axis| g[axis] * pair.center[axis]).sum();
@@ -174,9 +185,16 @@ fn accumulate(
                 .flat_map(|ca| comp_b.iter().map(move |cb| (ca, cb)))
                 .enumerate()
             {
-                block[ig * n_ab + iab] +=
+                values[iab] =
                     prefactor * at(0, ca[0], cb[0]) * at(1, ca[1], cb[1]) * at(2, ca[2], cb[2]);
             }
+            pairs.accumulate(
+                index,
+                &values,
+                comp_a.len(),
+                comp_b.len(),
+                &mut block[ig * per_g..(ig + 1) * per_g],
+            );
         }
     }
 }
@@ -185,7 +203,30 @@ fn accumulate(
 mod tests {
     use super::*;
     use crate::integrals::overlap;
-    use crate::integrals::test_tables::{s_shell, sp_table, sp_table_at};
+    use crate::integrals::test_tables::{
+        general_table, s_shell, sp_table, sp_table_at, split_table,
+    };
+
+    #[test]
+    fn general_contractions_match_split_shells() {
+        let (general, split) = (general_table(), split_table());
+        let g_vectors = [[0.0; 3], [0.4, -0.3, 0.2], [1.1, 0.5, -0.7]];
+        let single_general = fourier_transform(&general, &g_vectors).expect("valid");
+        let single_split = fourier_transform(&split, &g_vectors).expect("valid");
+        assert_eq!(single_general.len(), single_split.len());
+        for (g, s) in single_general.iter().zip(&single_split) {
+            assert!(close(*g, *s));
+        }
+        let translations = [ZERO, [0.2, 0.1, -0.4]];
+        let pair_general =
+            pair_fourier_transform(&general, &split, &translations, &g_vectors).expect("valid");
+        let pair_split =
+            pair_fourier_transform(&split, &split, &translations, &g_vectors).expect("valid");
+        assert_eq!(pair_general.len(), pair_split.len());
+        for (g, s) in pair_general.iter().zip(&pair_split) {
+            assert!(close(*g, *s));
+        }
+    }
 
     const ZERO: [f64; 3] = [0.0; 3];
 
@@ -212,8 +253,15 @@ mod tests {
         // sqrt(3/4π) and the phase of its centre.
         let (a, center) = (0.6, [0.2, 0.3, -0.1]);
         let g = [0.7, -0.4, 0.2];
-        let table =
-            ShellTable::new(vec![1], vec![center], vec![0, 1], vec![a], vec![1.0]).expect("valid");
+        let table = ShellTable::new(
+            vec![1],
+            vec![center],
+            vec![0, 1],
+            vec![a],
+            vec![1.0],
+            vec![1],
+        )
+        .expect("valid");
         let values = fourier_transform(&table, &[g]).expect("valid");
         let g_squared: f64 = g.iter().map(|x| x * x).sum();
         let phase = Complex64::new(0.0, -(0..3).map(|k| g[k] * center[k]).sum::<f64>()).exp();
@@ -321,6 +369,7 @@ mod tests {
                 0.5,
                 0.5,
             ],
+            vec![1; 5],
         )
         .expect("valid");
         let full = pair_fourier_transform(&combined, &combined, &[ZERO], &[g]).expect("valid");

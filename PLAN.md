@@ -696,7 +696,12 @@ libcint to 1e-12 up to g functions. Fourier transforms of functions and
 pairs done 2026-10-21, matching numerical quadrature and PySCF's analytical
 transforms. The kernel list of M2 is complete; derivative integrals follow
 with the gradients of M11, and the decision whether a libcint adapter is
-still worth building is open (see §12).
+still worth building is open (see §12). General contractions are evaluated
+once per shell since 2026-10-21 (ADR-0011), after benchmarks against PySCF
+showed the split representation costing fifteen times libcint's CPU time
+on cc-pVDZ; on segmented bases the four-centre kernel matches libcint's
+CPU cost. Remaining performance items: an AO-direct Coulomb and exchange
+build for exact integrals at scale, per-block allocations in the kernels.
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.

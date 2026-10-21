@@ -8,12 +8,14 @@ from hafnium.integrals.shell_table import ShellTable
 
 
 def _kernel_table(table: ShellTable) -> _kernels.ShellTable:
+    assert table.n_contractions is not None
     return _kernels.ShellTable(
         table.angular_momenta,
         table.centers,
         table.primitive_offsets,
         table.exponents,
         table.coefficients,
+        table.n_contractions,
     )
 
 

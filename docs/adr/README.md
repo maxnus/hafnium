@@ -17,3 +17,4 @@ ADR that supersedes it.
 | [0008](0008-mcmurchie-davidson-integrals.md) | McMurchie–Davidson for the native integral engine | accepted 2026-10-21 |
 | [0009](0009-p-shell-order-verified.md) | Spherical function conventions verified against libcint | accepted 2026-10-21 |
 | [0010](0010-scf-driver-over-structured-matrices.md) | One SCF driver over structured matrices | accepted 2026-10-21 |
+| [0011](0011-general-contractions-in-the-kernels.md) | General contractions are evaluated once per shell | accepted 2026-10-21 |
