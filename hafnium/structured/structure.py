@@ -93,6 +93,7 @@ class Structure:
     blocks: tuple[Block, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "blocks", tuple(self.blocks))
         if not self.blocks:
             raise StructureError("a structure needs at least one block")
         spins = [block.spin for block in self.blocks]
@@ -100,6 +101,8 @@ class Structure:
             raise StructureError("each spin sector may appear once")
         if set(spins) not in ({Spin.NONE}, {Spin.SPINOR}, {Spin.ALPHA, Spin.BETA}):
             raise StructureError(f"unsupported spin sectors {spins}")
+        if spins == [Spin.BETA, Spin.ALPHA]:
+            raise StructureError("the alpha block precedes the beta block")
         for index, block in enumerate(self.blocks):
             if block.derived_from is None:
                 continue

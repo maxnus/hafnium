@@ -241,6 +241,21 @@ def test_dtype_must_match_ring() -> None:
         BlockMatrix(Structure.spatial(Ring.COMPLEX), (np.zeros((2, 2)),))
     with pytest.raises(StructureError, match="floating"):
         BlockMatrix(Structure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=int),))
+    with pytest.raises(StructureError, match="float64"):
+        BlockMatrix(Structure.spatial(Ring.REAL), (np.zeros((2, 2), dtype=np.float32),))
+    with pytest.raises(StructureError, match="complex128"):
+        BlockMatrix(
+            Structure.spatial(Ring.COMPLEX), (np.zeros((2, 2), dtype=np.complex64),)
+        )
+
+
+def test_projection_casts_to_the_64_bit_dtypes() -> None:
+    dense = np.eye(4, dtype=np.float32)
+    assert (
+        BlockMatrix.from_dense(Structure.spatial(), dense).blocks[0].dtype == np.float64
+    )
+    complex_block = BlockMatrix.from_dense(Structure.generalized(Ring.COMPLEX), dense)
+    assert complex_block.blocks[0].dtype == np.complex128
 
 
 def test_block_count_and_shape_are_validated() -> None:
@@ -248,6 +263,79 @@ def test_block_count_and_shape_are_validated() -> None:
         BlockMatrix(Structure.unrestricted(), (np.zeros((2, 2)),))
     with pytest.raises(StructureError, match="even"):
         BlockMatrix(Structure.generalized(), (np.zeros((3, 3)),))
+    with pytest.raises(StructureError, match="row counts differ"):
+        BlockMatrix(Structure.unrestricted(), (np.eye(2), np.eye(3)))
+
+
+def test_elementwise_products_of_block_matrices_are_rejected() -> None:
+    a = BlockMatrix(Structure.spatial(), (np.eye(2),))
+    with pytest.raises(StructureError, match="use @"):
+        _ = a * a  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]
+    with pytest.raises(StructureError, match="use @"):
+        _ = a / a  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]
+    assert np.allclose((np.float64(2.0) * a).blocks[0], 2 * np.eye(2))
+    assert np.allclose((a.trace() * a).blocks[0], 4 * np.eye(2))
+
+
+def test_odd_column_count_points_at_column_split() -> None:
+    with pytest.raises(StructureError, match="column_split"):
+        BlockMatrix.from_dense(Structure.unrestricted(), np.zeros((4, 7)))
+
+
+def test_embedding_outside_the_hierarchy_uses_the_verified_dense_path() -> None:
+    block = np.diag([1.0, 2.0])
+    equal = BlockMatrix(Structure.unrestricted(), (block, block.copy()))
+    restricted = equal.embed(Structure.restricted())
+    assert np.allclose(restricted.blocks[0], block)
+    unequal = BlockMatrix(Structure.unrestricted(), (block, 2 * block))
+    with pytest.raises(StructureError, match="does not have the restricted"):
+        unequal.embed(Structure.restricted())
+
+
+@pytest.mark.parametrize("with_overlap", [False, True])
+def test_degenerate_clusters_are_split_into_kramers_pairs(with_overlap: bool) -> None:
+    rng = np.random.default_rng(5)
+    n = 3
+    paired = Structure.paired_generalized()
+    # the identity: one 2n-fold cluster; a block-diagonal matrix: a four-fold one
+    spatial = np.diag([1.0, 1.0, 2.0]).astype(complex)
+    four_fold = np.block(
+        [[spatial, np.zeros((n, n))], [np.zeros((n, n)), spatial.conj()]]
+    )
+    for f in (BlockMatrix.identity(paired, n), BlockMatrix(paired, (four_fold,))):
+        overlap = None
+        metric = np.eye(2 * n)
+        if with_overlap:
+            overlap = BlockMatrix(
+                Structure.spatial(), (random_positive_definite(rng, n),)
+            ).embed(paired)
+            metric = overlap.blocks[0]
+        values, vectors = f.eigh(overlap)
+        (w,), (c,) = values.blocks, vectors.blocks
+        assert c.shape == (2 * n, 2 * n)
+        assert np.allclose(f.blocks[0] @ c, metric @ c * w[None, :], atol=EIGEN_TOL)
+        assert np.allclose(adjoint(c) @ metric @ c, np.eye(2 * n), atol=EIGEN_TOL)
+        assert np.allclose(c[:, 1::2], time_reverse(c[:, 0::2]), atol=EIGEN_TOL)
+
+
+def test_quaternionic_blocks_must_be_kramers_symmetric_to_diagonalize() -> None:
+    rng = np.random.default_rng(6)
+    not_symmetric = BlockMatrix(
+        Structure.paired_generalized(), (random_hermitian(rng, 4),)
+    )
+    with pytest.raises(StructureError, match="Θ-symmetric"):
+        not_symmetric.eigh()
+
+
+def test_paired_occupations_must_respect_kramers_pairs() -> None:
+    paired = Structure.paired_generalized()
+    _, vectors = BlockMatrix.identity(paired, 2).eigh()
+    with pytest.raises(StructureError, match="Kramers pair"):
+        density_matrix(vectors, BlockVector(paired, (np.array([1.0, 0.0, 0.0, 0.0]),)))
+    density = density_matrix(
+        vectors, BlockVector(paired, (np.array([1.0, 1.0, 0.0, 0.0]),))
+    )
+    assert is_kramers_symmetric(density.blocks[0])
 
 
 def test_zeros_and_identity_have_the_right_block_shapes() -> None:

@@ -46,6 +46,17 @@ def test_invalid_blocks_are_rejected() -> None:
         Block(Spin.SPINOR, Ring.REAL, derived_from=0, partner=Partner.COPY)
 
 
+def test_blocks_are_normalized_to_a_tuple() -> None:
+    from_list = Structure([Block(Spin.NONE, Ring.REAL)])  # type: ignore[arg-type]
+    assert from_list == Structure.spatial()
+    assert hash(from_list) == hash(Structure.spatial())
+
+
+def test_beta_before_alpha_is_rejected() -> None:
+    with pytest.raises(StructureError, match="alpha block precedes"):
+        Structure((Block(Spin.BETA, Ring.REAL), Block(Spin.ALPHA, Ring.REAL)))
+
+
 def test_invalid_structures_are_rejected() -> None:
     with pytest.raises(StructureError, match="at least one"):
         Structure(())
@@ -56,8 +67,8 @@ def test_invalid_structures_are_rejected() -> None:
     with pytest.raises(StructureError, match="follow its source"):
         Structure(
             (
-                Block(Spin.BETA, Ring.REAL, derived_from=1, partner=Partner.COPY),
-                Block(Spin.ALPHA, Ring.REAL),
+                Block(Spin.ALPHA, Ring.REAL, derived_from=1, partner=Partner.COPY),
+                Block(Spin.BETA, Ring.REAL),
             )
         )
     with pytest.raises(StructureError, match="ring"):

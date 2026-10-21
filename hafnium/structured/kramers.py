@@ -12,17 +12,30 @@ from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.errors import StructureError
 
 
+def half_dimension(size: int, description: str) -> int:
+    """Return ``size // 2`` for an even ``size``.
+
+    Raises
+    ------
+    StructureError
+        If ``size`` is odd; ``description`` names the quantity in the message.
+    """
+    if size % 2:
+        raise StructureError(f"{description} must be even, got {size}")
+    return size // 2
+
+
 def time_reverse(x: Array) -> Array:
     """Apply Θ to each column of a ``(2n, k)`` spinor array."""
     xp = array_namespace(x)
-    n = _half(x.shape[0])
+    n = half_dimension(int(x.shape[0]), "the number of rows of a spinor array")
     return xp.concat([-xp.conj(x[n:, ...]), xp.conj(x[:n, ...])], axis=0)
 
 
 def time_reverse_operator(x: Array) -> Array:
     """Return ``Θ X Θ⁻¹`` for a square ``(2n, 2n)`` operator."""
     xp = array_namespace(x)
-    n = _half(x.shape[0])
+    n = half_dimension(int(x.shape[0]), "the number of rows of a spinor operator")
     if x.shape[1] != 2 * n:
         raise StructureError("time reversal of an operator needs a square matrix")
     a, b = x[:n, :n], x[:n, n:]
@@ -85,7 +98,13 @@ def kramers_adapt_eigenvectors(
             )
         columns.extend(_pair_cluster(eigenvectors[:, start:end], tolerance))
         start = end
-    return xp.concat(columns, axis=1)
+    paired = xp.concat(columns, axis=1)
+    if paired.shape[1] != count:
+        raise StructureError(
+            f"Kramers pairing produced {paired.shape[1]} columns for {count} "
+            "eigenvectors; a degenerate subspace is numerically ill-conditioned"
+        )
+    return paired
 
 
 def _pair_cluster(basis: Array, tolerance: float) -> list[Array]:
@@ -105,9 +124,3 @@ def _pair_cluster(basis: Array, tolerance: float) -> list[Array]:
         left, singular, _ = xp.linalg.svd(rest, full_matrices=False)
         remaining = left[:, singular > tolerance]
     return pairs
-
-
-def _half(dimension: int) -> int:
-    if dimension % 2:
-        raise StructureError("spinor arrays have an even number of rows")
-    return dimension // 2

@@ -8,12 +8,18 @@ import pytest
 from array_api_compat import is_numpy_namespace
 
 import hafnium
-from hafnium.backend import adjoint, array_namespace, generalized_eigh
+from hafnium.backend import (
+    adjoint,
+    array_namespace,
+    default_namespace,
+    generalized_eigh,
+)
 from hafnium.backend.allowed import ALLOWED
 from tests.tolerances import EIGEN_TOL
 
 NAMESPACE_CALL = re.compile(
-    r"\bxp\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?:\bxp|\barray_namespace\([^()]*\))"
+    r"\.([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
 )
 
 
@@ -36,6 +42,16 @@ def test_array_namespace_of_numpy_arrays_is_numpy() -> None:
     xp = array_namespace(np.zeros(2), np.ones(3))
     assert is_numpy_namespace(xp)
     assert xp.asarray([1.0]).dtype == np.float64
+
+
+def test_default_namespace_is_the_namespace_of_numpy_arrays() -> None:
+    assert default_namespace() is array_namespace(np.zeros(1))
+
+
+def test_namespace_call_pattern_catches_chained_calls() -> None:
+    assert NAMESPACE_CALL.findall("xp.linalg.eigh(a)") == ["linalg.eigh"]
+    assert NAMESPACE_CALL.findall("array_namespace(a, b).conj(a)") == ["conj"]
+    assert NAMESPACE_CALL.findall("array_namespace(*parts).concat(parts)") == ["concat"]
 
 
 def test_adjoint_conjugates_and_transposes() -> None:
