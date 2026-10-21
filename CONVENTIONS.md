@@ -9,8 +9,8 @@ authoritative and this file explains the intent.
 
 - Python ≥ 3.11, NumPy ≥ 2.0. Rust stable, edition 2021 or later.
 - Python: `ruff` formats and lints (line length 88, rule set in
-  `pyproject.toml`); `pyright --strict` (decision pending, see PLAN.md §12)
-  type-checks; `pytest` runs tests. All three gate merges.
+  `pyproject.toml`); `pyright` in strict mode type-checks (ADR-0004);
+  `pytest` runs tests. All three gate merges.
 - Rust: `rustfmt` default style; `cargo clippy -- -D warnings` with the
   `pedantic` group enabled; `cargo nextest` runs tests. All gate merges.
 - `pre-commit` runs the formatters and linters locally.

@@ -1,0 +1,54 @@
+site_name: Hafnium
+site_description: Symmetry-structured quantum chemistry
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Design plan: plan.md
+  - Conventions: conventions.md
+  - Decisions:
+      - Index: adr/README.md
+      - adr/0001-license-apache-2.0.md
+      - adr/0002-rust-for-compiled-layer.md
+      - adr/0003-package-name-hafnium.md
+      - adr/0004-python-toolchain-baseline.md
+  - API reference: api.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_source: false

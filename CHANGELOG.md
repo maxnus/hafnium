@@ -1,0 +1,14 @@
+# Changelog
+
+All notable changes to Hafnium are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
+uses [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+
+- Design plan, coding conventions and the first architecture decision records.
+- Repository bootstrap: Python package skeleton, Rust workspace with a
+  compiled kernel module built by maturin, tests, linting, type checking,
+  documentation site and CI.
