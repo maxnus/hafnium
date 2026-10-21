@@ -27,6 +27,10 @@ Until then the packages are documented directly.
 
 ::: hafnium.integrals
 
+## hafnium.scf
+
+::: hafnium.scf
+
 ## hafnium.backend
 
 ::: hafnium.backend

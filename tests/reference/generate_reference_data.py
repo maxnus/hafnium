@@ -4,8 +4,8 @@
 
 Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``density_fitting_<molecule>_<basis>.json``,
-``four_center_<molecule>_<basis>.json`` and
-``fourier_<molecule>_<basis>.json`` with the PySCF values and their
+``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``
+and ``scf_<molecule>_<basis>.json`` with the PySCF values and their
 provenance.
 """
 
@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from hafnium.basis import BasisSet
+from hafnium.molecule import Molecule
 from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
     density_fitting_reference,
@@ -26,6 +27,7 @@ from tests.reference.pyscf_oracle import (
     fourier_transform_reference,
     one_electron_reference,
     pyscf,
+    scf_reference,
 )
 from tests.reference.test_density_fitting_reference import AUXILIARY
 from tests.reference.test_density_fitting_reference import (
@@ -40,12 +42,15 @@ from tests.reference.test_one_electron_reference import (
     MOLECULES,
     STORED_CASES,
 )
+from tests.reference.test_scf_reference import MOLECULES as SCF_MOLECULES
+from tests.reference.test_scf_reference import STORED_CASES as SCF_CASES
 
 DIRECTORY = Path(__file__).parent / "data"
 
 
 def record(
     kind: str,
+    molecule: Molecule,
     name: str,
     basis_name: str,
     settings: str,
@@ -53,7 +58,6 @@ def record(
     **extra: Any,
 ) -> None:
     """Write ``<kind>_<name>_<basis>.json`` with provenance."""
-    molecule = MOLECULES[name]
     provenance = {
         "program": "pyscf",
         "version": pyscf.__version__,
@@ -78,6 +82,7 @@ def main() -> None:
         basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
         record(
             "one_electron",
+            molecule,
             name,
             basis_name,
             "int1e_ovlp, int1e_kin, int1e_nuc; cart=False; unit=Bohr",
@@ -89,6 +94,7 @@ def main() -> None:
         auxiliary = BasisSet.for_molecule(molecule, AUXILIARY, library=LIBRARY)
         record(
             "density_fitting",
+            molecule,
             name,
             basis_name,
             "int2c2e and int3c2e (df.incore.aux_e2); cart=False; Bohr",
@@ -100,6 +106,7 @@ def main() -> None:
         basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
         record(
             "four_center",
+            molecule,
             name,
             basis_name,
             "int2e; cart=False; unit=Bohr",
@@ -116,10 +123,26 @@ def main() -> None:
         }
         record(
             "fourier",
+            molecule,
             name,
             basis_name,
             "gto.ft_ao.ft_ao and ft_aopair with exp(-iG.r); cart=False; Bohr",
             {"g_vectors": G_VECTORS, **parts},
+        )
+    for name, basis_name, kind in SCF_CASES:
+        molecule = SCF_MOLECULES[name]
+        basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+        reference = scf_reference(molecule, basis, kind)
+        record(
+            "scf",
+            molecule,
+            name,
+            basis_name,
+            f"scf.{kind.upper()} with conv_tol=1e-12, conv_tol_grad=1e-8; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            charge=molecule.charge,
+            spin=molecule.spin,
         )
 
 

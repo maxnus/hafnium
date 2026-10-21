@@ -15,7 +15,7 @@ from hafnium.integrals import (
     overlap,
 )
 from hafnium.molecule import Molecule
-from tests.molecules import water
+from tests.molecules import hydrogen, water
 from tests.tolerances import (
     ATTENUATION_LIMIT_TOL,
     INTEGRAL_TOL,
@@ -32,9 +32,7 @@ def basis_for(molecule: Molecule, name: str) -> BasisSet:
 
 
 def hydrogen_molecule() -> tuple[Molecule, BasisSet]:
-    molecule = Molecule.from_atoms(
-        [("H", (0.0, 0.0, 0.0)), ("H", (0.0, 0.0, 1.4))], unit="bohr"
-    )
+    molecule = hydrogen()
     return molecule, basis_for(molecule, "sto-3g")
 
 

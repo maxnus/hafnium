@@ -24,3 +24,16 @@ def ammonia_tilted() -> Molecule:
             ("H", (-0.4, -0.7, 0.6)),
         ]
     )
+
+
+def water_cation() -> Molecule:
+    """The water radical cation, a doublet."""
+    molecule = water()
+    return Molecule(molecule.atoms, charge=1, spin=1)
+
+
+def hydrogen(distance_bohr: float = 1.4) -> Molecule:
+    """H2 along z at the given bond length in Bohr."""
+    return Molecule.from_atoms(
+        [("H", (0.0, 0.0, 0.0)), ("H", (0.0, 0.0, distance_bohr))], unit="bohr"
+    )

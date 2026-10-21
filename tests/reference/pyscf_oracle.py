@@ -20,19 +20,21 @@ gto: Any = pyscf.gto
 df: Any = pytest.importorskip("pyscf.df")
 
 
-def pyscf_molecule(molecule: Molecule, basis: BasisSet) -> Any:
-    """A ``pyscf.gto.Mole`` with the same atoms, order and shells."""
-    atoms: list[list[Any]] = []
-    basis_input: dict[str, list[Any]] = {}
-    for index, atom in enumerate(molecule.atoms):
-        label = f"{atom.symbol}{index}"
-        atoms.append([label, list(atom.position)])
+def atom_label(molecule: Molecule, index: int) -> str:
+    """The per-atom label PySCF keys basis input by, ``"O0"``, ``"H1"``, ..."""
+    return f"{molecule.atoms[index].symbol}{index}"
+
+
+def basis_input(molecule: Molecule, basis: BasisSet) -> dict[str, list[Any]]:
+    """``basis`` in PySCF's internal format, keyed by :func:`atom_label`."""
+    result: dict[str, list[Any]] = {}
+    for index in range(molecule.n_atoms):
         shells = [
             shell
             for shell, centre in zip(basis.shells, basis.shell_atoms, strict=True)
             if centre == index
         ]
-        basis_input[label] = [
+        result[atom_label(molecule, index)] = [
             [
                 shell.angular_momentum,
                 *[
@@ -42,9 +44,18 @@ def pyscf_molecule(molecule: Molecule, basis: BasisSet) -> Any:
             ]
             for shell in shells
         ]
+    return result
+
+
+def pyscf_molecule(molecule: Molecule, basis: BasisSet) -> Any:
+    """A ``pyscf.gto.Mole`` with the same atoms, order and shells."""
+    atoms = [
+        [atom_label(molecule, index), list(atom.position)]
+        for index, atom in enumerate(molecule.atoms)
+    ]
     return gto.M(
         atom=atoms,
-        basis=basis_input,
+        basis=basis_input(molecule, basis),
         unit="Bohr",
         charge=molecule.charge,
         spin=molecule.spin,
@@ -178,3 +189,36 @@ def mixed_fourier_transform_reference(
     slices = (0, mol_first.nbas, mol_first.nbas, joined.nbas)
     g = np.ascontiguousarray(g_vectors, dtype=float)
     return np.asarray(ft_ao.ft_aopair(joined, g, shls_slice=slices))
+
+
+def scf_reference(
+    molecule: Molecule,
+    basis: BasisSet,
+    kind: str,
+    *,
+    auxiliary: BasisSet | None = None,
+    guess: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Converged ``kind`` (``"rhf"``, ``"uhf"`` or ``"ghf"``) energy and orbitals.
+
+    With ``auxiliary`` the two-electron terms are density-fitted in that
+    basis, passed as basis input because a ``Mole`` assigned to
+    ``with_df.auxmol`` is replaced by the default auxiliary basis.
+    ``guess`` is a starting density in PySCF's layout (spin blocks stacked
+    for UHF, the spin-orbital matrix with alpha first for GHF).
+    """
+    scf: Any = pytest.importorskip("pyscf.scf")
+    mol = pyscf_molecule(molecule, basis)
+    mean_field = {"rhf": scf.RHF, "uhf": scf.UHF, "ghf": scf.GHF}[kind](mol)
+    if auxiliary is not None:
+        mean_field = mean_field.density_fit(auxbasis=basis_input(molecule, auxiliary))
+    mean_field.conv_tol = 1e-12
+    mean_field.conv_tol_grad = 1e-8
+    mean_field.max_cycle = 200
+    energy = float(mean_field.kernel(dm0=guess))
+    assert mean_field.converged
+    return {
+        "energy": energy,
+        "mo_energies": np.asarray(mean_field.mo_energy),
+        "mo_occupations": np.asarray(mean_field.mo_occ),
+    }
