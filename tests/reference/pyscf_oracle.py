@@ -149,3 +149,20 @@ def mixed_four_center_reference(
     ranges = {"a": (0, mol_first.nbas), "b": (mol_first.nbas, joined.nbas)}
     slices = tuple(bound for letter in pattern for bound in ranges[letter])
     return np.asarray(joined.intor("int2e", shls_slice=slices))
+
+
+def fourier_transform_reference(
+    molecule: Molecule, basis: BasisSet, g_vectors: np.ndarray
+) -> dict[str, np.ndarray]:
+    """Transforms ``[G, ao]`` of functions and ``[G, ao, ao]`` of pairs.
+
+    PySCF's ``gto.ft_ao`` evaluates them analytically with the kernel
+    ``exp(−iG·r)`` of CONVENTIONS.md §3.
+    """
+    ft_ao: Any = pytest.importorskip("pyscf.gto.ft_ao")
+    mol = pyscf_molecule(molecule, basis)
+    g = np.ascontiguousarray(g_vectors, dtype=float)
+    return {
+        "single": np.asarray(ft_ao.ft_ao(mol, g)),
+        "pair": np.asarray(ft_ao.ft_aopair(mol, g)),
+    }

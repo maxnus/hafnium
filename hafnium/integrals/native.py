@@ -117,3 +117,18 @@ class RustEngine:
         return _kernels.schwarz_bounds(
             _kernel_table(bra), _kernel_table(ket), to_host(translations), omega
         )
+
+    def fourier_transform(self, table: ShellTable, g_vectors: Array) -> Array:
+        """Transform every function, complex ``[G, ao]``."""
+        return _kernels.fourier_transform(_kernel_table(table), to_host(g_vectors))
+
+    def pair_fourier_transform(
+        self, bra: ShellTable, ket: ShellTable, translations: Array, g_vectors: Array
+    ) -> Array:
+        """Transform every pair, complex ``[image, G, ao, ao]``."""
+        return _kernels.pair_fourier_transform(
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            to_host(g_vectors),
+        )

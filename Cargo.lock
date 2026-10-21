@@ -44,6 +44,7 @@ name = "hafnium-core"
 version = "0.0.1"
 dependencies = [
  "libm",
+ "num-complex",
  "rayon",
  "thiserror",
 ]

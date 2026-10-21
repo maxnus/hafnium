@@ -692,8 +692,11 @@ Coulomb integrals with range separation and `DensityFitting` (metric,
 three-centre tensor, fitted `B`) done 2026-10-21, matching libcint and
 PySCF's fitted repulsion. Four-centre integrals with Schwarz screening,
 shell-pair bounds and permutational symmetry done 2026-10-21, matching
-libcint to 1e-12 up to g functions. Next: the pair Fourier transform, and
-the decision whether a libcint adapter is still worth building (see §12).
+libcint to 1e-12 up to g functions. Fourier transforms of functions and
+pairs done 2026-10-21, matching numerical quadrature and PySCF's analytical
+transforms. The kernel list of M2 is complete; derivative integrals follow
+with the gradients of M11, and the decision whether a libcint adapter is
+still worth building is open (see §12).
 
 **M3 Hartree–Fock.** SCF driver, guesses, DIIS, DF and in-core exact J/K,
 all eight Fukutome classes from one implementation, PySCF reference tests.

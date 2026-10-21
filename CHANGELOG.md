@@ -37,6 +37,12 @@ uses [Semantic Versioning](https://semver.org/).
   molecules; the three-centre kernel evaluates only `μ ≤ ν` for equal
   tables; reference tests against libcint up to g functions and for mixed
   basis sets.
+- Native Fourier transforms of basis functions and of basis-function pairs
+  with the kernel `exp(−iG·r)`, analytic in the Hermite basis, with ket
+  translations; the Cartesian-to-spherical transform accepts complex
+  values; tests against closed forms, numerical quadrature, the overlap at
+  `G = 0`, the Coulomb metric assembled in reciprocal space, and PySCF's
+  analytical transforms.
 - Repository bootstrap: Python package skeleton, Rust workspace with a
   compiled kernel module built by maturin, tests, linting, type checking,
   documentation site and CI.

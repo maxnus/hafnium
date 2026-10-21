@@ -11,6 +11,7 @@
 //! integrals and scales the prefactor by `sqrt(α' / α)` (ADR-0008).
 
 use std::f64::consts::PI;
+use std::ops::{AddAssign, Mul};
 
 use rayon::prelude::*;
 
@@ -587,7 +588,11 @@ impl Tables {
     /// Transform a row-major Cartesian block with index layout
     /// `[a, b, c, d]` to spherical functions. An index of `None` is a unit
     /// partner (see [`single_shell_pairs`]): one component, left untouched.
-    pub(crate) fn to_spherical(&self, block: &[f64], ls: [Option<usize>; 4]) -> Vec<f64> {
+    /// The values may be real or complex.
+    pub(crate) fn to_spherical<T>(&self, block: &[T], ls: [Option<usize>; 4]) -> Vec<T>
+    where
+        T: Copy + Default + AddAssign + Mul<f64, Output = T>,
+    {
         let mut data = block.to_vec();
         let mut shape: [usize; 4] = std::array::from_fn(|i| ls[i].map_or(1, n_cartesian));
         for (index, l) in ls.iter().enumerate() {
