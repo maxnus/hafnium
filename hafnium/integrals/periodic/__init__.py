@@ -1,8 +1,9 @@
-"""Lattice sums for cells: image lists, Bloch phases and the periodic kernels.
+"""Lattice sums for cells: image lists and Bloch sums (ADR-0016).
 
 The image lists and the real-space cutoffs are chosen here, in Python,
-from the Gaussian tails of the basis at a precision; the loops over the
-images run in the compiled layer (PLAN.md §7, ADR-0016).
+from the Gaussian tails of the basis at a precision, and the integrals over
+the images run in the compiled layer. The reciprocal-space kernels and the
+range-separated fitting of PLAN.md §7 join this package in M5.
 """
 
 from hafnium.integrals.periodic.bloch import (

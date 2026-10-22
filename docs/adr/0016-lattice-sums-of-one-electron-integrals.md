@@ -60,8 +60,9 @@ functions.
   prefactors of the integrals. Tightening the precision must not change a
   matrix beyond that, which the tests check together with the large-box
   test against the molecular matrices and the band-folding test of
-  PLAN.md §8, and PySCF's `pbc_intor` at its tightest precision agrees to
-  the integral tolerance in one, two and three dimensions.
+  PLAN.md §8, and PySCF's `pbc_intor` with its lattice sums cut off at a
+  precision of 1e-14 agrees to the integral tolerance in one, two and
+  three dimensions.
 - The image count grows with the diffuseness of the basis and falls with
   the cell size; for one-electron kernels it is cheap, but the same list
   will drive the three-centre sums of M5. Per-shell-pair image lists,

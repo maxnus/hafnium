@@ -14,6 +14,7 @@ radii, beyond which every function of an atom is below a precision.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 from hafnium.backend import Array, array_namespace, default_namespace
 from hafnium.basis import BasisSet, Shell
@@ -27,11 +28,8 @@ DEFAULT_LATTICE_SUM_PRECISION = 1e-12
 """Value below which a basis function counts as zero when the images of a
 lattice sum are chosen; a neglected image contributes at most of that order."""
 
-_RADIUS_STEPS = 64
-"""Bound on the iterations of the radius equation, which converge geometrically."""
-
-_RADIUS_TOLERANCE = 1e-12
-"""Relative change of the radius at which the iteration stops."""
+_RADIUS_BISECTIONS = 60
+"""Bisection steps of the radius equation, bringing the bracket to ``2^-60``."""
 
 
 def function_radius(shell: Shell, precision: float) -> float:
@@ -60,20 +58,29 @@ def function_radius(shell: Shell, precision: float) -> float:
 def _primitive_radius(alpha: float, l: int, ratio: float) -> float:
     """Return the largest ``r`` with ``ratio r^l exp(−α r²) = 1``, at least ``1/√α``.
 
-    The fixed-point iteration ``r ← sqrt(ln(ratio r^l) / α)`` contracts at
-    the outer root, where ``r^l exp(−α r²)`` decreases, so it starts at the
-    maximum of that function; the floor keeps the radius at the natural
-    scale of the primitive when the function never reaches the precision.
+    Beyond the maximum of ``r^l exp(−α r²)`` at ``sqrt(l / 2α)`` the
+    function decreases, so the outer root is bracketed by doubling from
+    there and found by bisection; the upper end of the bracket is returned.
+    The floor ``1/√α`` keeps the radius at the natural scale of the
+    primitive when the function never reaches the precision.
     """
-    radius = max(1.0 / math.sqrt(alpha), math.sqrt(l / (2.0 * alpha)))
-    for _ in range(_RADIUS_STEPS):
-        exponent = max(math.log(ratio) + l * math.log(radius), 1.0)
-        updated = math.sqrt(exponent / alpha)
-        converged = abs(updated - radius) <= _RADIUS_TOLERANCE * updated
-        radius = updated
-        if converged:
-            break
-    return radius
+
+    def excess(r: float) -> float:
+        return math.log(ratio) + l * math.log(r) - alpha * r * r
+
+    low = max(1.0 / math.sqrt(alpha), math.sqrt(l / (2.0 * alpha)))
+    if excess(low) <= 0.0:
+        return low
+    high = 2.0 * low
+    while excess(high) > 0.0:
+        high *= 2.0
+    for _ in range(_RADIUS_BISECTIONS):
+        middle = 0.5 * (low + high)
+        if excess(middle) > 0.0:
+            low = middle
+        else:
+            high = middle
+    return high
 
 
 def atom_radii(basis: BasisSet, precision: float) -> tuple[float, ...]:
@@ -123,8 +130,10 @@ def bloch_sum(
     engine returns them, and ``translations`` is ``[image, 3]`` in Bohr.
     """
     xp = array_namespace(images, translations)
-    if translations.ndim != 2 or images.shape[:1] != translations.shape[:1]:
-        raise InputError("a Bloch sum takes one image per translation [image, 3]")
+    if translations.ndim != 2 or translations.shape[1] != 3:
+        raise InputError("translations have shape [image, 3]")
+    if images.shape[:1] != translations.shape[:1]:
+        raise InputError("a Bloch sum takes one image per translation")
     kpts = xp.asarray(kpoints.cartesian(lattice))
     angles = kpts @ xp.linalg.matrix_transpose(translations)
     phases = xp.exp(1j * xp.astype(angles, xp.complex128))
@@ -139,11 +148,13 @@ def overlap_k(
     *,
     precision: float = DEFAULT_LATTICE_SUM_PRECISION,
 ) -> Array:
-    """Overlap matrices ``S(k)`` as complex ``[kpt, ao, ao]`` over ``kpoints``."""
-    table = ShellTable.from_basis(basis, cell)
-    translations = lattice_images(basis, cell, precision=precision)
-    images = engine.overlap(table, table, translations)
-    return bloch_sum(images, translations, kpoints, cell.lattice)
+    """Overlap matrices ``S(k)`` as complex ``[kpt, ao, ao]`` over ``kpoints``.
+
+    Code that needs several matrices of one cell calls
+    :func:`lattice_images` once and :func:`bloch_sum` on each engine
+    result, so that one image list serves them all.
+    """
+    return _lattice_sum(engine.overlap, basis, cell, kpoints, precision)
 
 
 def kinetic_k(
@@ -154,8 +165,23 @@ def kinetic_k(
     *,
     precision: float = DEFAULT_LATTICE_SUM_PRECISION,
 ) -> Array:
-    """Kinetic matrices ``T(k)`` as complex ``[kpt, ao, ao]`` over ``kpoints``."""
+    """Kinetic matrices ``T(k)`` as complex ``[kpt, ao, ao]`` over ``kpoints``.
+
+    See :func:`overlap_k` for sharing the image list between matrices.
+    """
+    return _lattice_sum(engine.kinetic, basis, cell, kpoints, precision)
+
+
+def _lattice_sum(
+    kernel: Callable[[ShellTable, ShellTable, Array], Array],
+    basis: BasisSet,
+    cell: Cell,
+    kpoints: KPoints,
+    precision: float,
+) -> Array:
+    """Bloch sums of a one-electron ``kernel`` over the images of ``cell``."""
     table = ShellTable.from_basis(basis, cell)
     translations = lattice_images(basis, cell, precision=precision)
-    images = engine.kinetic(table, table, translations)
-    return bloch_sum(images, translations, kpoints, cell.lattice)
+    return bloch_sum(
+        kernel(table, table, translations), translations, kpoints, cell.lattice
+    )

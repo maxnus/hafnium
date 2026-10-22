@@ -250,8 +250,9 @@ def padded_lattice_vectors(cell: Cell, vacuum: float) -> np.ndarray:
 def pyscf_cell(cell: Cell, basis: BasisSet, *, vacuum: float = 80.0) -> Any:
     """A ``pyscf.pbc.gto.Cell`` with the same atoms, order, shells and lattice.
 
-    The lattice sums are cut off at PySCF's tightest precision so that the
-    comparison is limited by the kernels, not by the images included.
+    PySCF's lattice sums are cut off at a precision of 1e-14, below the
+    integral tolerance, so that the comparison is limited by the kernels and
+    not by the images included.
     """
     pbc_gto: Any = pytest.importorskip("pyscf.pbc.gto")
     atoms = [

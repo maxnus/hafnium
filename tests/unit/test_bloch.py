@@ -23,6 +23,7 @@ from hafnium.molecule import Atom, AtomicSystem, Cell, Lattice, Molecule
 from hafnium.symmetry import KPoints
 from tests.cells import helium
 from tests.molecules import water
+from tests.spectra import generalized_eigenvalues
 from tests.tolerances import (
     ENERGY_TOL,
     INTEGRAL_TOL,
@@ -43,12 +44,6 @@ def box(molecule: Molecule, length: float, dimension: int) -> Cell:
     """``molecule`` repeated on an orthogonal lattice of side ``length`` in Bohr."""
     vectors = tuple(tuple(row) for row in (length * np.eye(3))[:dimension].tolist())
     return Cell.from_molecule(molecule, Lattice(vectors))
-
-
-def generalized_eigenvalues(a: np.ndarray, s: np.ndarray) -> np.ndarray:
-    """Eigenvalues of ``a c = ε s c`` for Hermitian ``a`` and positive ``s``."""
-    inverse = np.linalg.inv(np.linalg.cholesky(s))
-    return np.linalg.eigvalsh(inverse @ a @ inverse.conj().T)
 
 
 def bands(cell: Cell, basis: BasisSet, kpoints: KPoints) -> np.ndarray:
@@ -196,7 +191,25 @@ def test_function_radius_bounds_the_function_and_follows_the_precision() -> None
     assert function_radius(shell, 1e-4) < radius < function_radius(shell, 1e-12)
     # A function that never reaches the precision keeps its natural scale.
     tight = Shell(0, (50.0,), ((1.0,),))
-    assert function_radius(tight, 100.0) == pytest.approx(1.0 / math.sqrt(50.0))
+    assert function_radius(tight, 100.0) == pytest.approx(
+        1.0 / math.sqrt(50.0), abs=INTEGRAL_TOL
+    )
+    # The outer root is found even when the precision is close to the
+    # maximum of the function.
+    f_shell = Shell(3, (0.5,), ((1.0,),))
+    peak = math.sqrt(3.0 / (2.0 * 0.5))
+    coefficient = f_shell.primitive_coefficients()[0][0]
+    at_peak = (
+        math.sqrt(7.0 / (4.0 * math.pi))
+        * coefficient
+        * peak**3
+        * math.exp(-0.5 * peak**2)
+    )
+    near = function_radius(f_shell, 0.999 * at_peak)
+    assert peak < near < 1.2 * peak
+    assert function_radius(f_shell, 1.001 * at_peak) == pytest.approx(
+        peak, abs=INTEGRAL_TOL
+    )
     with pytest.raises(InputError, match="precision"):
         function_radius(shell, 0.0)
     cell = helium(3)
@@ -214,5 +227,7 @@ def test_inputs_are_validated() -> None:
         lattice_images(basis_for(water(), "sto-3g"), cell)
     with pytest.raises(InputError, match="one image per translation"):
         bloch_sum(np.zeros((2, 3, 3)), np.zeros((1, 3)), KPoints.gamma(2), cell.lattice)
+    with pytest.raises(InputError, match=r"\[image, 3\]"):
+        bloch_sum(np.zeros((2, 3, 3)), np.zeros((2, 2)), KPoints.gamma(2), cell.lattice)
     with pytest.raises(InputError, match="precision"):
         kinetic_k(ENGINE, basis, cell, KPoints.gamma(2), precision=-1.0)
