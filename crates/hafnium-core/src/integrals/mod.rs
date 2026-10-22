@@ -19,7 +19,7 @@ mod two_electron;
 
 pub use cartesian::{cartesian_components, n_cartesian, spherical_transformation, transform_index};
 pub use fourier::{fourier_transform, pair_fourier_transform};
-pub use one_electron::{kinetic, nuclear_attraction, overlap};
+pub use one_electron::{CoulombKernel, kinetic, nuclear_attraction, overlap};
 pub use two_electron::{
     coulomb_four_center, coulomb_three_center, coulomb_two_center, schwarz_bounds,
 };

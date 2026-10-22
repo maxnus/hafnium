@@ -56,10 +56,14 @@ def nuclear_attraction(
     charges: NDArray[np.float64],
     positions: NDArray[np.float64],
     omega: float | None = None,
+    short_range: bool = False,
+    threshold: float = 0.0,
 ) -> NDArray[np.float64]:
     """Return nuclear attraction integrals ``[image, bra, ket]`` of point charges.
 
-    ``omega`` selects the long-range kernel ``erf(ωr)/r`` instead of ``1/r``.
+    ``omega`` selects the long-range kernel ``erf(ωr)/r`` instead of ``1/r``,
+    or the short-range kernel ``erfc(ωr)/r`` with ``short_range``; terms
+    bounded below ``threshold`` are skipped.
     """
 
 def coulomb_two_center(
@@ -114,8 +118,12 @@ def pair_fourier_transform(
     ket: ShellTable,
     translations: NDArray[np.float64],
     g_vectors: NDArray[np.float64],
+    threshold: float = 0.0,
 ) -> NDArray[np.complex128]:
-    """Return ``∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr`` as ``[image, G, ao, ao]``."""
+    """Return ``∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr`` as ``[image, G, ao, ao]``.
+
+    Pairs bounded below ``threshold`` are skipped.
+    """
 
 def ewald_energy(
     vectors: NDArray[np.float64],

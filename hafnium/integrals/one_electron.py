@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from hafnium.backend import Array, host_array
 from hafnium.basis import BasisSet
-from hafnium.integrals.engine import IntegralEngine
+from hafnium.integrals.engine import CoulombKernel, IntegralEngine, PointCharges
 from hafnium.integrals.shell_table import ShellTable
 from hafnium.molecule import Molecule
 
@@ -52,9 +52,8 @@ def _attraction(
         table,
         table,
         _no_translation(),
-        host_array(molecule.nuclear_charges),
-        molecule.positions_array(),
-        omega=omega,
+        PointCharges.from_system(molecule),
+        kernel=CoulombKernel(omega),
     )[0]
 
 

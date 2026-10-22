@@ -15,13 +15,14 @@ from hafnium.integrals import (
     kinetic,
     kinetic_k,
     lattice_images,
+    nuclear_attraction_k,
     overlap,
     overlap_k,
 )
 from hafnium.integrals.periodic import atom_radii, function_radius
-from hafnium.molecule import Atom, AtomicSystem, Cell, Lattice, Molecule
+from hafnium.molecule import Atom, AtomicSystem, Cell
 from hafnium.symmetry import KPoints
-from tests.cells import helium
+from tests.cells import box, helium
 from tests.molecules import water
 from tests.spectra import generalized_eigenvalues
 from tests.tolerances import (
@@ -38,12 +39,6 @@ ENGINE = RustEngine()
 
 def basis_for(system: AtomicSystem, name: str) -> BasisSet:
     return BasisSet.for_atoms(system, name, library=LIBRARY)
-
-
-def box(molecule: Molecule, length: float, dimension: int) -> Cell:
-    """``molecule`` repeated on an orthogonal lattice of side ``length`` in Bohr."""
-    vectors = tuple(tuple(row) for row in (length * np.eye(3))[:dimension].tolist())
-    return Cell.from_molecule(molecule, Lattice(vectors))
 
 
 def bands(cell: Cell, basis: BasisSet, kpoints: KPoints) -> np.ndarray:
@@ -166,7 +161,7 @@ def test_moving_an_atom_by_a_lattice_vector_changes_phases_only() -> None:
     on_moved = np.asarray([label.atom == 1 for label in basis.function_labels()])
     phase = np.exp(-1j * (mesh.cartesian(cell.lattice) @ shift))
     scale = np.where(on_moved[np.newaxis, :], phase[:, np.newaxis], 1.0)
-    for function in (overlap_k, kinetic_k):
+    for function in (overlap_k, kinetic_k, nuclear_attraction_k):
         before = function(ENGINE, basis, cell, mesh)
         after = function(ENGINE, basis, moved, mesh)
         expected = np.conj(scale)[:, :, np.newaxis] * before * scale[:, np.newaxis, :]

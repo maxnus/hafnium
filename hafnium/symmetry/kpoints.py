@@ -153,6 +153,48 @@ class KPoints:
         xp = default_namespace()
         return self.fractional_array(xp) @ lattice.reciprocal_vectors_array(xp)
 
+    def mesh_size(self) -> tuple[int, ...]:
+        """Return the sizes ``n_i`` of the uniform mesh the set forms.
+
+        A uniform mesh holds the points ``(m_i + s_i) / n_i`` of :meth:`mesh`
+        with equal weights; ``n_i`` is the number of distinct coordinates
+        along direction ``i``.
+
+        Raises
+        ------
+        InputError
+            If the set is not a uniform mesh with equal weights.
+        """
+        sizes: list[int] = []
+        shifts: list[float] = []
+        for axis in range(self.dimension):
+            values = sorted(point[axis] for point in self.fractional)
+            distinct = 1 + sum(
+                1
+                for previous, value in itertools.pairwise(values)
+                if value - previous > PARTNER_TOLERANCE
+            )
+            sizes.append(distinct)
+            shifts.append(values[0] * distinct)
+        if any(min(abs(s), abs(s - 0.5)) > PARTNER_TOLERANCE for s in shifts):
+            raise InputError("the k-point set is not a uniform mesh")
+        indices: set[tuple[int, ...]] = set()
+        for point in self.fractional:
+            index = tuple(
+                round(k * n - s) for k, n, s in zip(point, sizes, shifts, strict=True)
+            )
+            if any(
+                not 0 <= m < n or abs(k - (m + s) / n) > PARTNER_TOLERANCE
+                for k, m, n, s in zip(point, index, sizes, shifts, strict=True)
+            ):
+                raise InputError("the k-point set is not a uniform mesh")
+            indices.add(index)
+        if len(indices) != self.n_kpt or math.prod(sizes) != self.n_kpt:
+            raise InputError("the k-point set is not a uniform mesh")
+        if any(abs(w - 1.0 / self.n_kpt) > WEIGHT_TOLERANCE for w in self.weights):
+            raise InputError("a uniform mesh has equal weights")
+        return tuple(sizes)
+
     @property
     def is_time_reversal_invariant(self) -> tuple[bool, ...]:
         """Whether each point equals its own partner, ``k ≡ −k``."""

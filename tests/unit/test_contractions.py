@@ -5,7 +5,7 @@ import pytest
 
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
-from hafnium.integrals import RustEngine, ShellTable
+from hafnium.integrals import CoulombKernel, PointCharges, RustEngine, ShellTable
 from hafnium.molecule import Molecule
 from tests.molecules import water
 from tests.shell_tables import LIBRARY, split_table, table_for
@@ -13,6 +13,7 @@ from tests.tolerances import INTEGRAL_TOL
 
 ENGINE = RustEngine()
 ZERO = np.zeros((1, 3))
+ATTENUATED = CoulombKernel(0.5)
 
 
 def test_from_basis_keeps_general_contractions_together() -> None:
@@ -43,10 +44,10 @@ def test_every_kernel_matches_the_split_table() -> None:
         (ENGINE.kinetic(table, split, ZERO), ENGINE.kinetic(split, split, ZERO)),
         (
             ENGINE.nuclear_attraction(
-                table, table, ZERO, charges, positions, omega=0.5
+                table, table, ZERO, PointCharges(charges, positions), kernel=ATTENUATED
             ),
             ENGINE.nuclear_attraction(
-                split, split, ZERO, charges, positions, omega=0.5
+                split, split, ZERO, PointCharges(charges, positions), kernel=ATTENUATED
             ),
         ),
         (

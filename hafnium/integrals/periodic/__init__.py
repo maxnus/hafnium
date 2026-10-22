@@ -1,9 +1,12 @@
-"""Lattice sums for cells: image lists and Bloch sums (ADR-0016).
+"""Lattice sums for cells: image lists, Bloch sums and the Coulomb split.
 
 The image lists and the real-space cutoffs are chosen here, in Python,
-from the Gaussian tails of the basis at a precision, and the integrals over
-the images run in the compiled layer. The reciprocal-space kernels and the
-range-separated fitting of PLAN.md §7 join this package in M5.
+from the Gaussian tails of the basis at a precision, and the integrals
+over the images run in the compiled layer with the screening of ADR-0018
+(ADR-0016). The range separation of the Coulomb kernel and its
+reciprocal-space part serve the nuclear attraction and, in the rest of M5,
+the density fitting; the probe-charge correction of the exchange
+divergence is ADR-0017.
 """
 
 from hafnium.integrals.periodic.bloch import (
@@ -14,14 +17,28 @@ from hafnium.integrals.periodic.bloch import (
     kinetic_k,
     lattice_images,
     overlap_k,
+    reaching_images,
+)
+from hafnium.integrals.periodic.coulomb import RangeSeparation
+from hafnium.integrals.periodic.exchange import madelung_constant
+from hafnium.integrals.periodic.nuclear import (
+    core_hamiltonian_k,
+    nuclear_attraction_images,
+    nuclear_attraction_k,
 )
 
 __all__ = [
     "DEFAULT_LATTICE_SUM_PRECISION",
+    "RangeSeparation",
     "atom_radii",
     "bloch_sum",
+    "core_hamiltonian_k",
     "function_radius",
     "kinetic_k",
     "lattice_images",
+    "madelung_constant",
+    "nuclear_attraction_images",
+    "nuclear_attraction_k",
     "overlap_k",
+    "reaching_images",
 ]

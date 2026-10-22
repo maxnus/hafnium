@@ -316,3 +316,28 @@ def ewald_reference(cell: Cell, *, vacuum: float = 80.0) -> float:
     )
     reference.build()
     return float(reference.energy_nuc())
+
+
+def periodic_nuclear_attraction_reference(
+    cell: Cell, basis: BasisSet, kpoints: KPoints
+) -> np.ndarray:
+    """Nuclear attraction ``[kpt, ao, ao]`` from PySCF's density-fitted potential.
+
+    ``GDF.get_nuc`` splits every nucleus into a compensating Gaussian
+    charge, summed with the point charge in real space, and the smooth
+    remainder in reciprocal space, and keeps the finite part
+    ``π Z_tot / (ω² Ω)`` times the overlap at ``G = 0``: the regularization
+    of ADR-0012, so the matrices compare directly in three dimensions.
+    """
+    pbc_df: Any = pytest.importorskip("pyscf.pbc.df")
+    reference = pyscf_cell(cell, basis)
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    return np.asarray(pbc_df.GDF(reference, kpts=kpts).get_nuc(kpts))
+
+
+def madelung_reference(cell: Cell, basis: BasisSet, kpoints: KPoints) -> float:
+    """The probe-charge Madelung constant of the mesh from PySCF's Ewald sum."""
+    tools: Any = pytest.importorskip("pyscf.pbc.tools")
+    reference = pyscf_cell(cell, basis)
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    return float(tools.pbc.madelung(reference, kpts))

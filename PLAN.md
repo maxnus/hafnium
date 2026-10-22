@@ -729,7 +729,11 @@ module. No printing from library code.
   against PySCF for every Fukutome class that PySCF can produce (RHF,
   UHF, GHF, their complex variants via perturbed guesses, RKS, UKS,
   DF-MP2, CCSD, CCSD(T)). PySCF is a development dependency only, and
-  these tests carry a `reference` marker.
+  these tests carry a `reference` marker. PySCF is the oracle, not the
+  truth: it has bugs and conventions of its own, so a discrepancy is
+  located on both sides before a tolerance is loosened or Hafnium is
+  changed, the independent checks below carry equal weight, and any
+  oddity found in PySCF is recorded with the test that works around it.
 - Integral tests compare every integral type against libcint, and every
   derivative integral against finite differences of the undifferentiated
   integral.
@@ -919,7 +923,16 @@ the M3 driver; three dimensions first, then the two- and one-dimensional
 reciprocal-space kernels. Exit: the band-folding and
 half-zone tests of §8 pass to `ENERGY_TOL`, the range-separation and
 large-box tests pass to their stated tolerances, and KRHF/KUHF/KGHF agree
-with PySCF's `pbc` module within the recorded fitting residual.
+with PySCF's `pbc` module within the recorded fitting residual. Status:
+the probe-charge Ewald correction chosen (ADR-0017), with
+`madelung_constant` matching PySCF, and the regularized nuclear attraction
+of three-dimensional cells done 2026-10-22 (ADR-0018): native short-range
+kernel with rigorous screening, independent of the range separation,
+converging to the molecular matrix in a large box with the expected power
+law, folding across supercells and matching PySCF's density-fitted
+potential. Next: the range-separated density fitting with momentum
+transfer, k-point J and K with the correction, occupations across k, and
+the reduced-dimension reciprocal-space kernels.
 
 **M6 Spatial symmetry.** Molecular point groups: detection and
 orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.
