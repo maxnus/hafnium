@@ -140,5 +140,5 @@ uses [Semantic Versioning](https://semver.org/).
   `integer_coordinates` and `function_absolute_integral` (ADR-0019); the Bloch
   three-centre kernel `coulomb_three_center_bloch` with `BlochImages`,
   `CoulombKernel` and a screening threshold on every Coulomb kernel and
-  the Schwarz bounds, and `searchsorted` in the allowed array operations.
+  the Schwarz bounds.
 

@@ -87,6 +87,14 @@ its C driver for the same reason.
   swap of its k-points and functions, and a large box at Γ reproduces the
   molecular fitting with the Madelung terms of the charged auxiliary
   functions and pair densities and an inverse-cube residual.
+- The agreement with PySCF is limited by the conditioning of the metric,
+  not by the integrals: the universal JKFIT basis of LiH in a 4 Bohr cell
+  has metric eigenvalues at 1e-14 of the largest, the fitted integrals
+  move by 1e-5 with the eigenvalue cutoff, and the two codes agree to
+  1e-6, the fitting residual of a near-linearly dependent auxiliary
+  basis. The reference test chooses its tolerance from the metric's
+  conditioning and records the case; a fitting basis built for the cell
+  would remove the dependence.
 - Version 1 holds the whole tensor in memory, `n_kpt² × n_aux × n_ao²`
   complex numbers; the pair `(k2, k1)` is the conjugate transpose of
   `(k1, k2)`, which halves the kernel work and the storage once the

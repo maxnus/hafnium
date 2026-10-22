@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 from hafnium.basis import BasisLibrary, BasisSet
-from hafnium.integrals import PeriodicDensityFitting, RustEngine, density_fitting_k
+from hafnium.integrals import (
+    DEFAULT_LATTICE_SUM_PRECISION,
+    PeriodicDensityFitting,
+    RustEngine,
+    density_fitting_k,
+)
 from hafnium.integrals.periodic import RangeSeparation
 from hafnium.molecule import Cell
 from hafnium.symmetry import KPoints
@@ -59,7 +64,7 @@ def compute(
     auxiliary = BasisSet.for_atoms(cell, AUXILIARY, library=LIBRARY)
     mesh = MESHES[name]
     separation = RangeSeparation.for_lattice(
-        cell.lattice, precision=PRECISIONS.get(name, 1e-12)
+        cell.lattice, precision=PRECISIONS.get(name, DEFAULT_LATTICE_SUM_PRECISION)
     )
     fit = density_fitting_k(ENGINE, basis, auxiliary, cell, mesh, separation=separation)
     return cell, basis, auxiliary, mesh, fit

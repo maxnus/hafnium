@@ -273,7 +273,9 @@ impl BlochSum<'_> {
         Ok(n_k)
     }
 
-    /// The image index of every lattice coordinate.
+    /// The image index of every lattice coordinate, after checking that the
+    /// coordinates agree with the vectors: for every step that reaches an
+    /// image, the first pair found satisfies `T_j = T_i + step`.
     fn lookup(&self) -> Result<HashMap<[i64; 3], usize>, Error> {
         let mut lookup = HashMap::with_capacity(self.images.len());
         for (index, coordinates) in self.image_coordinates.iter().enumerate() {
@@ -283,9 +285,37 @@ impl BlochSum<'_> {
                 ));
             }
         }
+        for (step, coordinates) in self.step_coordinates.iter().enumerate() {
+            let found = self
+                .image_coordinates
+                .iter()
+                .enumerate()
+                .find_map(|(i, origin)| {
+                    let target: [i64; 3] =
+                        std::array::from_fn(|axis| origin[axis] + coordinates[axis]);
+                    lookup.get(&target).map(|&j| (i, j))
+                });
+            if let Some((i, j)) = found {
+                let mismatch = (0..3)
+                    .map(|axis| {
+                        (self.images[j][axis] - self.images[i][axis] - self.steps[step][axis]).abs()
+                    })
+                    .fold(0.0_f64, f64::max);
+                if mismatch > COORDINATE_TOLERANCE {
+                    return Err(Error::InvalidArgument(
+                        "the lattice coordinates of the images and steps disagree with their vectors"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         Ok(lookup)
     }
 }
+
+/// Largest difference in Bohr between an image vector and the one its
+/// lattice coordinates predict.
+const COORDINATE_TOLERANCE: f64 = 1e-8;
 
 /// The tables shared by every image of a Bloch-summed three-centre call.
 struct BlochSetup<'a> {
@@ -311,9 +341,10 @@ struct BlochSetup<'a> {
     n_k: usize,
 }
 
-/// The zero-distance bounds `[step, a, b, P]` and decay rates `[a, b, P]`
-/// of [`BlochSetup`], in parallel over the steps.
-fn triple_bound_tables(
+/// The Schwarz bounds `[step, a, b]` and zero-distance bounds
+/// `[step, a, b, P]` of [`BlochSetup`], from one pass over the shell pairs
+/// of every step in parallel.
+fn step_tables(
     tables: [&ShellTable; 3],
     aux_pairs: &[PrimitivePairs],
     steps: &[[f64; 3]],
@@ -321,46 +352,52 @@ fn triple_bound_tables(
     cache: &Tables,
 ) -> (Vec<f64>, Vec<f64>) {
     let [aux, bra, ket] = tables;
-    let (n_a, n_b, n_p) = (bra.n_shells(), ket.n_shells(), aux.n_shells());
-    let rows: Vec<Vec<f64>> = steps
+    let rows: Vec<(Vec<f64>, Vec<f64>)> = steps
         .par_iter()
         .map(|step| {
-            let mut bounds = Vec::with_capacity(n_a * n_b * n_p);
-            for ia in 0..n_a {
-                let a = bra.shell(ia);
-                for ib in 0..n_b {
-                    let b = ket.shell(ib);
-                    let b_center: [f64; 3] =
-                        std::array::from_fn(|axis| b.center[axis] + step[axis]);
-                    let pairs = primitive_pairs(&a, &b, b_center, 0);
-                    let (la, lb) = (a.angular_momentum, b.angular_momentum);
-                    for (ip, aux_pair) in aux_pairs.iter().enumerate() {
-                        let lp = aux.shell(ip).angular_momentum;
-                        let components: [&[[usize; 3]]; 4] = [
-                            &cache.components[la],
-                            &cache.components[lb],
-                            &cache.components[lp],
-                            &cache.components[0],
-                        ];
-                        let scale = cache.row_norms[la] * cache.row_norms[lb] * cache.row_norms[lp];
-                        let mut total = 0.0;
-                        for (index_bra, pair_bra) in pairs.pairs.iter().enumerate() {
-                            for (index_ket, pair_ket) in aux_pair.pairs.iter().enumerate() {
-                                total += scale
-                                    * pairs.coefficient_max(index_bra)
-                                    * aux_pair.coefficient_max(index_ket)
-                                    * quartet_bound_at_zero(
-                                        pair_bra, pair_ket, components, context,
-                                    );
-                            }
+            let pairs = shell_pairs([bra, ket], [ZERO, *step], false, context.kernel, cache);
+            let mut schwarz = Vec::with_capacity(pairs.len());
+            let mut zero = Vec::with_capacity(pairs.len() * aux_pairs.len());
+            for pair in &pairs {
+                schwarz.push(pair.bound);
+                let [la, lb] = pair.ls;
+                for (ip, aux_pair) in aux_pairs.iter().enumerate() {
+                    let lp = aux.shell(ip).angular_momentum;
+                    let components: [&[[usize; 3]]; 4] = [
+                        &cache.components[la],
+                        &cache.components[lb],
+                        &cache.components[lp],
+                        &cache.components[0],
+                    ];
+                    let scale = cache.row_norms[la] * cache.row_norms[lb] * cache.row_norms[lp];
+                    let mut total = 0.0;
+                    for (index_bra, pair_bra) in pair.primitives.pairs.iter().enumerate() {
+                        for (index_ket, pair_ket) in aux_pair.pairs.iter().enumerate() {
+                            total += scale
+                                * pair.primitives.coefficient_max(index_bra)
+                                * aux_pair.coefficient_max(index_ket)
+                                * quartet_bound_at_zero(pair_bra, pair_ket, components, context);
                         }
-                        bounds.push(total);
                     }
+                    zero.push(total);
                 }
             }
-            bounds
+            (schwarz, zero)
         })
         .collect();
+    let mut schwarz = Vec::new();
+    let mut zero = Vec::new();
+    for (row_schwarz, row_zero) in rows {
+        schwarz.extend(row_schwarz);
+        zero.extend(row_zero);
+    }
+    (schwarz, zero)
+}
+
+/// The decay rates `(1 − ε) s_lo²` `[a, b, P]` of the slowest primitive
+/// quartet of every shell triple, from the smallest exponents.
+fn triple_decays(tables: [&ShellTable; 3], kernel: CoulombKernel) -> Vec<f64> {
+    let [aux, bra, ket] = tables;
     let smallest = |shell: &ShellRef<'_>| {
         shell
             .exponents
@@ -368,19 +405,19 @@ fn triple_bound_tables(
             .copied()
             .fold(f64::INFINITY, f64::min)
     };
-    let mut decays = Vec::with_capacity(n_a * n_b * n_p);
-    for ia in 0..n_a {
-        for ib in 0..n_b {
+    let mut decays = Vec::with_capacity(bra.n_shells() * ket.n_shells() * aux.n_shells());
+    for ia in 0..bra.n_shells() {
+        for ib in 0..ket.n_shells() {
             let p_min = smallest(&bra.shell(ia)) + smallest(&ket.shell(ib));
-            for ip in 0..n_p {
+            for ip in 0..aux.n_shells() {
                 let q_min = smallest(&aux.shell(ip));
                 let alpha = p_min * q_min / (p_min + q_min);
-                let (low, _) = context.kernel.exponent_range(alpha);
+                let (low, _) = kernel.exponent_range(alpha);
                 decays.push((1.0 - ENVELOPE_EPSILON) * low * low);
             }
         }
     }
-    (rows.into_iter().flatten().collect(), decays)
+    decays
 }
 
 /// The quartet bound of [`quartet_bound`] without its distance factor.
@@ -469,7 +506,6 @@ pub fn coulomb_three_center_bloch(
             single_shell_pairs(&p_shell, p_shell.center)
         })
         .collect();
-    let step_bounds = step_schwarz_bounds(bra, ket, sum.steps, kernel, &tables);
     let aux_bounds: Vec<f64> = aux_pairs
         .iter()
         .enumerate()
@@ -484,8 +520,9 @@ pub fn coulomb_three_center_bloch(
             )
         })
         .collect();
-    let (zero_bounds, decays) =
-        triple_bound_tables([aux, bra, ket], &aux_pairs, sum.steps, &context, &tables);
+    let (step_bounds, zero_bounds) =
+        step_tables([aux, bra, ket], &aux_pairs, sum.steps, &context, &tables);
+    let decays = triple_decays([aux, bra, ket], kernel);
     let setup = BlochSetup {
         aux,
         bra,
@@ -531,38 +568,6 @@ pub fn coulomb_three_center_bloch(
                 left
             },
         ))
-}
-
-/// Schwarz bounds `max sqrt((ab|ab))` of every shell pair of `bra` and
-/// `ket` at every step, `[step, a, b]`, in parallel over the steps.
-fn step_schwarz_bounds(
-    bra: &ShellTable,
-    ket: &ShellTable,
-    steps: &[[f64; 3]],
-    kernel: CoulombKernel,
-    tables: &Tables,
-) -> Vec<f64> {
-    let (n_a, n_b) = (bra.n_shells(), ket.n_shells());
-    let rows: Vec<Vec<f64>> = steps
-        .par_iter()
-        .map(|step| {
-            let mut workspace = HermiteWorkspace::default();
-            let mut bounds = Vec::with_capacity(n_a * n_b);
-            for ia in 0..n_a {
-                let a = bra.shell(ia);
-                for ib in 0..n_b {
-                    let b = ket.shell(ib);
-                    let b_center: [f64; 3] =
-                        std::array::from_fn(|axis| b.center[axis] + step[axis]);
-                    let pairs = primitive_pairs(&a, &b, b_center, 0);
-                    let ls = [a.angular_momentum, b.angular_momentum];
-                    bounds.push(schwarz_bound(&pairs, ls, kernel, tables, &mut workspace));
-                }
-            }
-            bounds
-        })
-        .collect();
-    rows.into_iter().flatten().collect()
 }
 
 /// `buffer[k2][P][μ][ν] = Σ_j c[k2, j] (P | μ(T_i) ν(T_j))` over the ket
@@ -2479,5 +2484,14 @@ mod tests {
             ..case.sum()
         };
         assert!(coulomb_three_center_bloch(&aux, &table, &table, fewer, short, 0.0).is_err());
+        let mut stretched = case.steps.clone();
+        stretched[1][0] += 0.5;
+        let inconsistent = BlochSum {
+            steps: &stretched,
+            ..case.sum()
+        };
+        assert!(
+            coulomb_three_center_bloch(&aux, &table, &table, inconsistent, short, 0.0).is_err()
+        );
     }
 }

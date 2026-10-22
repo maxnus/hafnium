@@ -84,7 +84,11 @@ class PeriodicDensityFitting:
         if self.metric.shape != (n_q, n_aux, n_aux):
             raise InputError("the metric has shape [q, aux, aux]")
         shape = self.three_center.shape
-        if self.three_center.ndim != 5 or shape[:3] != (n_kpt, n_kpt, n_aux):
+        if (
+            self.three_center.ndim != 5
+            or shape[:3] != (n_kpt, n_kpt, n_aux)
+            or shape[3] != shape[4]
+        ):
             raise InputError(
                 "three-centre integrals have shape [kpt, kpt, aux, ao, ao]"
             )

@@ -21,7 +21,7 @@ from hafnium.integrals.periodic import (
     function_absolute_integral,
     integer_coordinates,
 )
-from hafnium.molecule import AtomicSystem, Molecule, default_omega
+from hafnium.molecule import AtomicSystem, Cell, Molecule, default_omega
 from hafnium.symmetry import KPoints
 from tests.cells import CUBIC, box, helium, helium_atom
 from tests.molecules import water
@@ -44,15 +44,14 @@ def basis_for(system: AtomicSystem, name: str) -> BasisSet:
 
 
 def fitting_for(
-    cell: AtomicSystem, basis_name: str, mesh: KPoints, **keywords: float
+    cell: Cell, basis_name: str, mesh: KPoints, **keywords: float
 ) -> PeriodicDensityFitting:
-    assert hasattr(cell, "lattice")
-    separation = RangeSeparation.for_lattice(cell.lattice, **keywords)  # type: ignore[attr-defined]
+    separation = RangeSeparation.for_lattice(cell.lattice, **keywords)
     return density_fitting_k(
         ENGINE,
         basis_for(cell, basis_name),
         basis_for(cell, AUXILIARY),
-        cell,  # type: ignore[arg-type]
+        cell,
         mesh,
         separation=separation,
     )
