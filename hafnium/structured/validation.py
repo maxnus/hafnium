@@ -7,11 +7,11 @@ from typing import Any
 
 from hafnium.backend import Array, Namespace
 from hafnium.errors import StructureError
-from hafnium.structured.structure import BlockStructure, Ring
+from hafnium.structured.structure import Block, BlockStructure, Ring
 
 
 def dtype_for(xp: Namespace, ring: Ring) -> Any:
-    """Return the one dtype a block of ``ring`` may have (CONVENTIONS.md §5)."""
+    """Return the one dtype a block stored over ``ring`` may have (CONVENTIONS §5)."""
     return xp.float64 if ring is Ring.REAL else xp.complex128
 
 
@@ -24,18 +24,36 @@ def check_block_count(structure: BlockStructure, blocks: Sequence[Array]) -> Non
         )
 
 
-def check_ring(xp: Namespace, array: Array, ring: Ring) -> None:
-    """Raise unless ``array`` has exactly the dtype of ``ring``."""
+def check_k_count(structure: BlockStructure, block: Block, array: Array) -> None:
+    """Raise unless the leading axis of ``array`` holds the k-points of ``block``."""
+    stored = structure.stored_kpoints(block)
+    if stored is not None and int(array.shape[0]) != len(stored):
+        raise StructureError(
+            f"the {block.spin.value} block of a {structure.describe()} structure "
+            f"stores {len(stored)} k-points, got {int(array.shape[0])}"
+        )
+
+
+def check_ring(
+    xp: Namespace, array: Array, structure: BlockStructure, block: Block
+) -> None:
+    """Raise unless ``array`` has exactly the dtype ``block`` is stored with."""
     if not xp.isdtype(array.dtype, ("real floating", "complex floating")):
         raise StructureError(f"blocks must be floating point, got {array.dtype}")
     is_complex = bool(xp.isdtype(array.dtype, "complex floating"))
-    if ring is Ring.REAL and is_complex:
+    storage = structure.storage_ring(block)
+    if storage is Ring.REAL and is_complex:
         raise StructureError(
             "a real block has complex entries; embed into a complex structure"
         )
-    if ring is not Ring.REAL and not is_complex:
-        raise StructureError(f"a {ring.value} block has real entries; cast explicitly")
-    expected = dtype_for(xp, ring)
+    if storage is not Ring.REAL and not is_complex:
+        reason = (
+            "is complex away from the time-reversal invariant k-points"
+            if block.ring is Ring.REAL
+            else "has real entries; cast explicitly"
+        )
+        raise StructureError(f"a {block.ring.value} block {reason}")
+    expected = dtype_for(xp, storage)
     if array.dtype != expected:
         raise StructureError(f"blocks must be {expected}, got {array.dtype}")
 

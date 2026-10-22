@@ -179,6 +179,12 @@ Spin never appears as an explicit index in method code; it is part of the
   "Monkhorst–Pack" is reserved for that original definition. k-point
   weights sum to one, so traces and energies are per cell; a stored
   half-zone point carries the weight of its time-reversal pair.
+  Structured matrices with a k axis (ADR-0015) store blocks as
+  `[kpt, ao, ao]` over the stored k-points: blocks over the real and
+  quaternionic rings store the lower-index member of every `{k, −k}` pair
+  in ascending index order and derive the partner, blocks over the
+  complex ring store every point. A real block is `float64` only when
+  every point of the set is time-reversal invariant.
 - Bloch sums: `φ_μ^k(r) = Σ_T exp(i k·T) φ_μ(r − T)` without a `1/√N_k`
   factor, so `S(k) = Σ_T exp(i k·T) S_T` where `S_T` is the overlap
   between the cell at the origin and the cell at `T`, and
@@ -225,7 +231,10 @@ Spin never appears as an explicit index in method code; it is part of the
 - Arrays inside structured objects are never modified in place. Use
   functional updates (`x.replace(block=...)`).
 - `BlockMatrix` and `BlockTensor` are pytrees: arrays are leaves,
-  everything else is static metadata.
+  everything else is static metadata. A structure without a k axis holds
+  `[ao, mo]` blocks, one with a k axis `[kpt, ao, mo]` blocks; operations
+  are written for either rank and never branch on the presence of the
+  axis.
 
 ## 5. Backend rules
 

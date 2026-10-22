@@ -45,6 +45,10 @@ def spin_expectation(density: BlockMatrix, overlap: Array) -> SpinExpectation:
         Structured density; any class, taken through its spin-orbital form.
     overlap : Array[ao, ao]
     """
+    if density.structure.k_axis is not None:
+        raise InputError(
+            "spin expectation values across k-points are not implemented yet"
+        )
     dense = density.to_dense()
     xp = array_namespace(dense, overlap)
     n = int(overlap.shape[0])

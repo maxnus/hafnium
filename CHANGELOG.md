@@ -78,6 +78,19 @@ uses [Semantic Versioning](https://semver.org/).
   independence of the range-separation parameter. `ShellTable.from_basis`
   takes the system and rejects a basis built for other atoms. Decided: no
   libcint adapter (ADR-0014).
+- Periodic foundations (M4, part two): the k axis on the structured
+  matrices (ADR-0015). `KAxis` holds the partner map and weights of a
+  k-point set, `BlockStructure.with_k_axis` attaches it, and blocks
+  become batches `[kpt, ao, ao]` over the stored k-points: the half zone
+  for the real and paired classes, with the block at `−k` derived by
+  conjugation or the Kramers map and paired UHF's
+  `beta(k) = conj(alpha(−k))`, every point for the complex classes. Traces
+  apply the weights, `eigh` runs per k-point with Kramers pairing at the
+  invariant points, and embedding, projection and the dense form work
+  across the hierarchy at k; `KPoints.axis()` and
+  `SymmetrySpec.structure(kpoints)` build the structures. The property
+  tests run for all eight classes over k-point sets, and the half-zone
+  storage is checked against the full-zone storage.
 - SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
   the result, level shifting and density damping options, and canonical
   orthogonalization that removes linearly dependent basis combinations.
