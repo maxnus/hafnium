@@ -162,4 +162,13 @@ uses [Semantic Versioning](https://semver.org/).
   `KPointDensityFittedCoulombExchange`); the nuclear attraction, the
   density fitting and the Hartree–Fock classes of cells in one to three
   dimensions, with a slab KRHF reference against PySCF (ADR-0021).
+- Spatial symmetry (M6, part one): the Abelian point groups as sign
+  operations and parity irreps (`Operation`, `PointGroup`, `Irrep`,
+  `solid_harmonic_parity`), detection of the full point group of a
+  molecule with the standard frame of its Abelian subgroup
+  (`detect_point_group`, `PointGroupDetection.orient`), and the
+  signed-permutation representation of the group on a basis with its
+  SALCs, irrep blocks of operators, orbital irrep weights and labels, and
+  the symmetrization of degenerate orbitals (`SymmetryAdaptation`);
+  `SymmetryError`; tests against PySCF for twenty molecules (ADR-0022).
 

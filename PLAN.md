@@ -962,6 +962,15 @@ Crystal space groups through spglib: the irreducible wedge with weights
 and rotated partner blocks. Exit: symmetry-constrained results equal
 unconstrained results for symmetric molecules and crystals; irreps of
 orbitals agree with PySCF; wedge-reduced results equal full-zone results.
+Status: part one done 2026-10-22 (ADR-0022): the Abelian groups as sign
+operations with parity irreps, detection of the full point group with
+the standard frame of the Abelian subgroup following PySCF's frame
+rules, orientation as an explicit step, the signed-permutation
+representation on the basis with SALCs, irrep blocks, orbital labels and
+the symmetrization of degenerate sets; full groups, frames, SALC counts
+and labels match PySCF for twenty molecules. Part two adds the irrep
+sectors to `BlockStructure`, the blocked SCF and per-irrep occupations;
+part three the space groups.
 
 **M7 DFT.** Grids and basis-on-grid in Rust, libxc binding, RKS and UKS
 with LDA/GGA/meta-GGA/hybrid/range-separated functionals, then periodic

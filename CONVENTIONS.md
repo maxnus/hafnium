@@ -167,9 +167,17 @@ Spin never appears as an explicit index in method code; it is part of the
   parameters `z`, the gradient returned is `∂E/∂conj(z)` scaled so that
   the real case reduces to the ordinary gradient. Tested against finite
   differences in both real and imaginary directions.
-- Point-group orientation: the standard orientation puts the principal
-  axis along z and follows the Cotton ordering of irreps; irrep labels use
-  Mulliken symbols (`A1`, `B2`, `Ag`, ...).
+- Point groups (ADR-0022): version 1 imposes D2h and its subgroups. In
+  the standard frame their operations are diagonal sign matrices, named
+  by Cotton's symbols with reflections named by their plane (`σ(xy)` is
+  `z → −z`); the principal axis is `z`, the mirror plane of Cs is `xy`,
+  the planes of C2v are `xz` and `yz`. Irreps are listed in Cotton's
+  order with Mulliken labels (`A1`, `B2`, `Ag`, ...) and represented by
+  parity vectors under the three coordinate reflections, so characters
+  are products of signs and direct products are sums of parities modulo
+  two. A molecule is oriented into the standard frame explicitly
+  (`PointGroupDetection.orient`); the frame rules follow PySCF so that
+  labels agree, and symmetric results refer to that frame.
 - Periodic systems (ADR-0007): `Lattice.vectors[i]` is the i-th
   translation vector, shape `[d, 3]` in Bohr with `d` in {1, 2, 3} and no
   vacuum padding of open directions. Reciprocal vectors obey

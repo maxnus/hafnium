@@ -441,3 +441,79 @@ def kscf_reference(
         "mo_energies": np.asarray(mean_field.mo_energy),
         "spin_square_supercell": spin_square,
     }
+
+
+def symmetric_basis_input(molecule: Molecule, basis: BasisSet) -> dict[str, list[Any]]:
+    """``basis`` keyed by element, as PySCF's symmetry detection needs it.
+
+    PySCF treats atoms with different basis keys as different elements, so
+    the per-atom keys of :func:`basis_input` would hide the symmetry.
+    """
+    per_atom = basis_input(molecule, basis)
+    by_element: dict[str, list[Any]] = {}
+    for index, atom in enumerate(molecule.atoms):
+        shells = per_atom[atom_label(molecule, index)]
+        if by_element.setdefault(atom.symbol, shells) != shells:
+            raise ValueError(f"atoms of {atom.symbol} carry different shells")
+    return by_element
+
+
+def plain_atoms(molecule: Molecule) -> list[list[Any]]:
+    return [[atom.symbol, list(atom.position)] for atom in molecule.atoms]
+
+
+def pyscf_symmetric_molecule(
+    molecule: Molecule, basis: BasisSet, *, subgroup: str | None = None
+) -> Any:
+    """A ``pyscf.gto.Mole`` with symmetry detected, in ``molecule``'s own frame."""
+    return gto.M(
+        atom=plain_atoms(molecule),
+        basis=symmetric_basis_input(molecule, basis),
+        unit="Bohr",
+        charge=molecule.charge,
+        spin=molecule.spin,
+        symmetry=True,
+        symmetry_subgroup=subgroup,
+        verbose=0,
+    )
+
+
+def point_group_reference(molecule: Molecule) -> tuple[str, str, np.ndarray]:
+    """PySCF's full group, its Abelian subgroup and that subgroup's axes."""
+    symm: Any = pytest.importorskip("pyscf.symm")
+    top, _, axes = symm.detect_symm(plain_atoms(molecule))
+    sub, sub_axes = symm.subgroup(top, axes)
+    return str(top), str(sub), np.asarray(sub_axes)
+
+
+def orbital_label_reference(
+    molecule: Molecule, basis: BasisSet, kind: str, *, subgroup: str | None = None
+) -> dict[str, Any]:
+    """PySCF's symmetry-adapted RHF or UHF: energy, irrep dimensions and labels."""
+    symm: Any = pytest.importorskip("pyscf.symm")
+    scf: Any = pytest.importorskip("pyscf.scf")
+    mol = pyscf_symmetric_molecule(molecule, basis, subgroup=subgroup)
+    mf = scf.RHF(mol) if kind == "rhf" else scf.UHF(mol)
+    mf.conv_tol = 1e-12
+    energy = float(mf.kernel())
+    coefficients = [mf.mo_coeff] if kind == "rhf" else list(mf.mo_coeff)
+    energies = [mf.mo_energy] if kind == "rhf" else list(mf.mo_energy)
+    spins = [
+        (
+            [
+                str(label)
+                for label in symm.label_orb_symm(mol, mol.irrep_name, mol.symm_orb, c)
+            ],
+            np.asarray(e),
+        )
+        for c, e in zip(coefficients, energies, strict=True)
+    ]
+    return {
+        "group": str(mol.groupname),
+        "energy": energy,
+        "dimensions": {
+            str(name): int(block.shape[1])
+            for name, block in zip(mol.irrep_name, mol.symm_orb, strict=True)
+        },
+        "spins": spins,
+    }
