@@ -44,3 +44,15 @@ SPIN_TOL = 1e-7
 # precision bounds the neglected images up to their Gaussian prefactors.
 LATTICE_SUM_LOOSE_PRECISION = 1e-4
 LATTICE_SUM_LOOSE_TOL = 1e-3
+# Screened lattice sums against the unscreened ones: every neglected term is
+# below the threshold, and a few terms per element sit near it.
+SCREENING_THRESHOLD = 1e-10
+SCREENING_TOL = 1e-9
+# The regularized nuclear attraction of a cell against PySCF's density-fitted
+# potential at its precision of 1e-14: for diffuse bases (STO-3G lithium) the
+# two lattice sums agree to about this level, PySCF's own convergence.
+PERIODIC_ATTRACTION_TOL = 1e-10
+# The residual of a cell's nuclear attraction in a 40 Bohr box after the
+# Madelung term: the quadrupole term (2π/3L³) Σ_A Z_A <μ|(r − A)²|ν> of the
+# regularized potential, which the inverse-cube law of the test tracks.
+LARGE_BOX_RESIDUAL_TOL = 1e-2

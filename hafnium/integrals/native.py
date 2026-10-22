@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from hafnium import _kernels
 from hafnium.backend import Array, to_host
+from hafnium.integrals.engine import COULOMB, CoulombKernel, PointCharges
 from hafnium.integrals.shell_table import ShellTable
 
 
@@ -42,19 +43,21 @@ class RustEngine:
         bra: ShellTable,
         ket: ShellTable,
         translations: Array,
-        charges: Array,
-        positions: Array,
+        charges: PointCharges,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
     ) -> Array:
-        """Attraction ``[image, ao, ao]`` to point ``charges`` at ``positions``."""
+        """Attraction ``[image, ao, ao]`` to the point ``charges``."""
         return _kernels.nuclear_attraction(
             _kernel_table(bra),
             _kernel_table(ket),
             to_host(translations),
-            to_host(charges),
-            to_host(positions),
-            omega,
+            to_host(charges.charges),
+            to_host(charges.positions),
+            kernel.omega,
+            kernel.short_range,
+            threshold,
         )
 
     def coulomb_two_center(
@@ -124,7 +127,13 @@ class RustEngine:
         return _kernels.fourier_transform(_kernel_table(table), to_host(g_vectors))
 
     def pair_fourier_transform(
-        self, bra: ShellTable, ket: ShellTable, translations: Array, g_vectors: Array
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        g_vectors: Array,
+        *,
+        threshold: float = 0.0,
     ) -> Array:
         """Transform every pair, complex ``[image, G, ao, ao]``."""
         return _kernels.pair_fourier_transform(
@@ -132,4 +141,5 @@ class RustEngine:
             _kernel_table(ket),
             to_host(translations),
             to_host(g_vectors),
+            threshold,
         )

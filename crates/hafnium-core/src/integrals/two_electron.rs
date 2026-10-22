@@ -701,13 +701,28 @@ fn assemble_parallel<T: Sync>(
 pub(crate) struct Tables {
     pub components: Vec<Vec<[usize; 3]>>,
     pub transforms: Vec<Vec<f64>>,
+    /// The largest absolute row sum of each transform: a spherical function
+    /// is at most this multiple of the largest Cartesian component.
+    pub row_norms: Vec<f64>,
 }
 
 impl Tables {
     pub(crate) fn new(max_l: usize) -> Self {
+        let transforms: Vec<Vec<f64>> = (0..=max_l).map(spherical_transformation).collect();
+        let row_norms = transforms
+            .iter()
+            .enumerate()
+            .map(|(l, transform)| {
+                transform
+                    .chunks(n_cartesian(l))
+                    .map(|row| row.iter().map(|x| x.abs()).sum::<f64>())
+                    .fold(0.0_f64, f64::max)
+            })
+            .collect();
         Self {
             components: (0..=max_l).map(cartesian_components).collect(),
-            transforms: (0..=max_l).map(spherical_transformation).collect(),
+            transforms,
+            row_norms,
         }
     }
 
@@ -1125,7 +1140,8 @@ mod tests {
             &[[0.0; 3]],
             &[1.0],
             &[[0.3, -0.2, 0.5]],
-            Some(q.sqrt()),
+            crate::integrals::CoulombKernel::LongRange(q.sqrt()),
+            0.0,
         )
         .expect("valid")[0];
         let expected = -attraction / (q / (2.0 * PI)).powf(0.75);

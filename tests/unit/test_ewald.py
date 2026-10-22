@@ -9,8 +9,10 @@ from numpy.typing import NDArray
 from hafnium.errors import InputError
 from hafnium.molecule import (
     Lattice,
+    default_omega,
     ewald_energy,
     ewald_parameters,
+    reciprocal_cutoff,
 )
 from tests.tolerances import ENERGY_TOL, LITERATURE_TOL
 
@@ -174,3 +176,27 @@ def test_malformed_input_is_rejected() -> None:
         ewald_energy(lattice, charges, positions, precision=0.0)
     with pytest.raises(ValueError, match="coincide"):
         ewald_energy(lattice, charges[:2], np.zeros((2, 3)))
+
+
+def test_reciprocal_cutoff_follows_the_charge_product() -> None:
+    lattice, charges, _ = random_system(3)
+    parameters = ewald_parameters(lattice, charges)
+    assert parameters.omega == default_omega(lattice)
+    total = float(np.sum(np.abs(charges)))
+    assert reciprocal_cutoff(
+        lattice, parameters.omega, charge_product=total**2, precision=1e-12
+    ) == pytest.approx(parameters.reciprocal_cutoff)
+    larger = reciprocal_cutoff(
+        lattice, parameters.omega, charge_product=1e6 * total**2, precision=1e-12
+    )
+    assert larger > parameters.reciprocal_cutoff
+    assert (
+        reciprocal_cutoff(
+            lattice, 2.0 * parameters.omega, charge_product=total**2, precision=1e-12
+        )
+        > parameters.reciprocal_cutoff
+    )
+    with pytest.raises(InputError, match="charge product"):
+        reciprocal_cutoff(lattice, 1.0, charge_product=-1.0, precision=1e-12)
+    with pytest.raises(InputError, match="omega is positive"):
+        reciprocal_cutoff(lattice, 0.0, charge_product=1.0, precision=1e-12)

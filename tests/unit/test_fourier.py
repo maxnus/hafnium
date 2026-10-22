@@ -10,7 +10,13 @@ from hafnium.molecule import Molecule
 from tests.molecules import water
 from tests.reciprocal_vectors import G_VECTORS
 from tests.shell_tables import table_for
-from tests.tolerances import INTEGRAL_TOL, QUADRATURE_TOL, RECIPROCAL_SPACE_TOL
+from tests.tolerances import (
+    INTEGRAL_TOL,
+    QUADRATURE_TOL,
+    RECIPROCAL_SPACE_TOL,
+    SCREENING_THRESHOLD,
+    SCREENING_TOL,
+)
 
 ENGINE = RustEngine()
 ZERO = np.zeros((1, 3))
@@ -187,3 +193,18 @@ def test_fourier_transform_rejects_bad_arguments() -> None:
         ENGINE.pair_fourier_transform(
             table, table, ZERO, np.array([[np.nan, 0.0, 0.0]])
         )
+
+
+def test_pair_transform_screening_neglects_only_pairs_below_the_threshold() -> None:
+    table = table_for(water(), "def2-svp")
+    translations = np.array([[0.0, 0.0, 0.0], [4.0, -1.0, 2.0], [60.0, 0.0, 0.0]])
+    exact = ENGINE.pair_fourier_transform(table, table, translations, G_VECTORS)
+    screened = ENGINE.pair_fourier_transform(
+        table, table, translations, G_VECTORS, threshold=SCREENING_THRESHOLD
+    )
+    np.testing.assert_allclose(screened, exact, atol=SCREENING_TOL)
+    assert np.all(screened[2] == 0.0)
+    assert np.max(np.abs(exact[2])) > 0.0
+    assert np.any(np.abs(exact[1] - screened[1]) > 0.0)
+    with pytest.raises(ValueError, match="threshold"):
+        ENGINE.pair_fourier_transform(table, table, ZERO, G_VECTORS, threshold=-1.0)

@@ -5,8 +5,10 @@ from hafnium.molecule.elements import atomic_number, element_symbol
 from hafnium.molecule.ewald import (
     DEFAULT_EWALD_PRECISION,
     EwaldParameters,
+    default_omega,
     ewald_energy,
     ewald_parameters,
+    reciprocal_cutoff,
 )
 from hafnium.molecule.lattice import Lattice
 from hafnium.molecule.molecule import Molecule
@@ -41,8 +43,10 @@ __all__ = [
     "atoms_in_bohr",
     "bohr_per_unit",
     "bohr_to_angstrom",
+    "default_omega",
     "element_symbol",
     "ewald_energy",
     "ewald_parameters",
     "parse_xyz",
+    "reciprocal_cutoff",
 ]

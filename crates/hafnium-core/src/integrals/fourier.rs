@@ -14,7 +14,8 @@ use rayon::prelude::*;
 
 use super::ShellTable;
 use super::cartesian::{n_cartesian, transform_index};
-use super::pairs::{PrimitivePairs, primitive_pairs, single_shell_pairs};
+use super::one_electron::check_threshold;
+use super::pairs::{PrimitivePairs, primitive_pairs, single_shell_pairs, transform_weights};
 use super::two_electron::{Tables, check_finite};
 use crate::Error;
 
@@ -44,7 +45,11 @@ pub fn fourier_transform(
             let la = a.angular_momentum;
             let pairs = single_shell_pairs(&a, a.center);
             let mut block = vec![Complex64::default(); n_g * a.n_contractions * n_cartesian(la)];
-            accumulate(&pairs, [la, 0], g_vectors, &tables, &mut block);
+            let unscreened = Screen {
+                threshold: 0.0,
+                row_norms: 1.0,
+            };
+            accumulate(&pairs, [la, 0], g_vectors, &tables, unscreened, &mut block);
             // The unit partner is one untouched component on the right.
             transform_index(
                 &block,
@@ -72,18 +77,23 @@ pub fn fourier_transform(
 ///
 /// At `G = 0` the transform is the overlap matrix of the same translation.
 ///
+/// A pair whose transform is bounded below `threshold` at every `G` is
+/// left at zero (ADR-0018); a threshold of zero evaluates everything.
+///
 /// # Errors
 ///
 /// Returns [`Error::InvalidArgument`] if a translation or a vector is not
-/// finite.
+/// finite, or `threshold` is negative or not finite.
 pub fn pair_fourier_transform(
     bra: &ShellTable,
     ket: &ShellTable,
     translations: &[[f64; 3]],
     g_vectors: &[[f64; 3]],
+    threshold: f64,
 ) -> Result<Vec<Complex64>, Error> {
     check_finite(translations, "translations")?;
     check_finite(g_vectors, "G vectors")?;
+    check_threshold(threshold)?;
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
     let tables = Tables::new(max_l);
     let (n_g, n_bra, n_ket) = (g_vectors.len(), bra.n_functions(), ket.n_functions());
@@ -109,7 +119,11 @@ pub fn pair_fourier_transform(
                         std::array::from_fn(|axis| b.center[axis] + translation[axis]);
                     let pairs = primitive_pairs(&a, &b, b_center, 0);
                     let mut block = vec![Complex64::default(); n_g * ka * nca * kb * ncb];
-                    accumulate(&pairs, [la, lb], g_vectors, &tables, &mut block);
+                    let screen = Screen {
+                        threshold,
+                        row_norms: tables.row_norms[la] * tables.row_norms[lb],
+                    };
+                    accumulate(&pairs, [la, lb], g_vectors, &tables, screen, &mut block);
                     // [g][k_a][cart_a][k_b][cart_b] → [g][f_a][f_b]
                     let spherical = transform_index(
                         &transform_index(&block, n_g * ka, nca, kb * ncb, &tables.transforms[la]),
@@ -140,13 +154,25 @@ pub fn pair_fourier_transform(
     Ok(out)
 }
 
+/// The screening of a shell pair: the threshold and the amplification of
+/// a Cartesian primitive value by the spherical transformations.
+#[derive(Clone, Copy)]
+struct Screen {
+    threshold: f64,
+    row_norms: f64,
+}
+
 /// Add the transform of every primitive pair to `block`, laid out
-/// `[g][k_a][cart_a][k_b][cart_b]`; `ls = [l_a, l_b]`.
+/// `[g][k_a][cart_a][k_b][cart_b]`; `ls = [l_a, l_b]`. A pair whose
+/// transform is bounded below the threshold at every `G` is skipped: the
+/// transform of a Cartesian pair is at most `∫ |φ_a φ_b| dr`, which the
+/// weights of [`transform_weights`] bound (ADR-0018).
 fn accumulate(
     pairs: &PrimitivePairs,
     ls: [usize; 2],
     g_vectors: &[[f64; 3]],
     tables: &Tables,
+    screen: Screen,
     block: &mut [Complex64],
 ) {
     let (comp_a, comp_b) = (&tables.components[ls[0]], &tables.components[ls[1]]);
@@ -160,6 +186,16 @@ fn accumulate(
     let mut values = vec![Complex64::default(); n_ab];
     for (index, pair) in pairs.pairs.iter().enumerate() {
         let scale = (PI / pair.p).powf(1.5);
+        if screen.threshold > 0.0 {
+            let weights = transform_weights(order, pair.p);
+            let bound = scale
+                * screen.row_norms
+                * pairs.coefficient_max(index)
+                * pair.envelope(comp_a, comp_b, &weights);
+            if bound < screen.threshold {
+                continue;
+            }
+        }
         for (ig, g) in g_vectors.iter().enumerate() {
             let g_squared: f64 = g.iter().map(|x| x * x).sum();
             let g_dot_p: f64 = (0..3).map(|axis| g[axis] * pair.center[axis]).sum();
@@ -218,10 +254,10 @@ mod tests {
             assert!(close(*g, *s));
         }
         let translations = [ZERO, [0.2, 0.1, -0.4]];
-        let pair_general =
-            pair_fourier_transform(&general, &split, &translations, &g_vectors).expect("valid");
+        let pair_general = pair_fourier_transform(&general, &split, &translations, &g_vectors, 0.0)
+            .expect("valid");
         let pair_split =
-            pair_fourier_transform(&split, &split, &translations, &g_vectors).expect("valid");
+            pair_fourier_transform(&split, &split, &translations, &g_vectors, 0.0).expect("valid");
         assert_eq!(pair_general.len(), pair_split.len());
         for (g, s) in pair_general.iter().zip(&pair_split) {
             assert!(close(*g, *s));
@@ -281,8 +317,8 @@ mod tests {
     fn transforms_at_zero_are_overlaps_and_integrals() {
         let table = sp_table();
         let translation = [0.3, -0.5, 0.2];
-        let pair =
-            pair_fourier_transform(&table, &table, &[ZERO, translation], &[ZERO]).expect("valid");
+        let pair = pair_fourier_transform(&table, &table, &[ZERO, translation], &[ZERO], 0.0)
+            .expect("valid");
         let s = overlap(&table, &table, &[ZERO, translation]);
         for (p, s) in pair.iter().zip(&s) {
             assert!(close(*p, Complex64::new(*s, 0.0)));
@@ -307,7 +343,7 @@ mod tests {
         let minus_g = [-0.4, -0.9, 0.3];
         let translation = [0.6, -0.2, 0.5];
         // Two images and two vectors: `[image][g][u][v]`.
-        let both = pair_fourier_transform(&table, &table, &[ZERO, translation], &[g, minus_g])
+        let both = pair_fourier_transform(&table, &table, &[ZERO, translation], &[g, minus_g], 0.0)
             .expect("valid");
         let at =
             |image: usize, ig: usize, u: usize, v: usize| both[((image * 2 + ig) * n + u) * n + v];
@@ -322,13 +358,14 @@ mod tests {
         }
         // The ket translated by T is the ket table moved by T.
         let moved = sp_table_at(translation);
-        let direct = pair_fourier_transform(&table, &moved, &[ZERO], &[g, minus_g]).expect("valid");
+        let direct =
+            pair_fourier_transform(&table, &moved, &[ZERO], &[g, minus_g], 0.0).expect("valid");
         for (b, d) in both[2 * n * n..].iter().zip(&direct) {
             assert!(close(*b, *d));
         }
         // Swapping the pair: ρ̃_{a b_T}(G) = exp(−i G·T) ρ̃_{b a_{−T}}(G).
         let minus_t: [f64; 3] = std::array::from_fn(|k| -translation[k]);
-        let swapped = pair_fourier_transform(&table, &table, &[minus_t], &[g]).expect("valid");
+        let swapped = pair_fourier_transform(&table, &table, &[minus_t], &[g], 0.0).expect("valid");
         let phase = Complex64::cis(-(0..3).map(|k| g[k] * translation[k]).sum::<f64>());
         for u in 0..n {
             for v in 0..n {
@@ -344,7 +381,7 @@ mod tests {
         let table = sp_table();
         let n = table.n_functions();
         let g = [0.4, 0.9, -0.3];
-        let mixed = pair_fourier_transform(&single, &table, &[ZERO], &[g]).expect("valid");
+        let mixed = pair_fourier_transform(&single, &table, &[ZERO], &[g], 0.0).expect("valid");
         assert_eq!(mixed.len(), n);
         // The same s function as the first entry of a combined table.
         let combined = ShellTable::new(
@@ -372,7 +409,7 @@ mod tests {
             vec![1; 5],
         )
         .expect("valid");
-        let full = pair_fourier_transform(&combined, &combined, &[ZERO], &[g]).expect("valid");
+        let full = pair_fourier_transform(&combined, &combined, &[ZERO], &[g], 0.0).expect("valid");
         for v in 0..n {
             assert!(close(mixed[v], full[v + 1]));
         }
@@ -382,7 +419,34 @@ mod tests {
     fn rejects_non_finite_vectors() {
         let table = sp_table();
         assert!(fourier_transform(&table, &[[f64::NAN; 3]]).is_err());
-        assert!(pair_fourier_transform(&table, &table, &[ZERO], &[[f64::INFINITY; 3]]).is_err());
-        assert!(pair_fourier_transform(&table, &table, &[[f64::NAN; 3]], &[ZERO]).is_err());
+        assert!(
+            pair_fourier_transform(&table, &table, &[ZERO], &[[f64::INFINITY; 3]], 0.0).is_err()
+        );
+        assert!(pair_fourier_transform(&table, &table, &[[f64::NAN; 3]], &[ZERO], 0.0).is_err());
+        assert!(pair_fourier_transform(&table, &table, &[ZERO], &[ZERO], -1.0).is_err());
+    }
+
+    #[test]
+    fn screening_neglects_only_pairs_below_the_threshold() {
+        let table = general_table();
+        let translations = [[0.0; 3], [6.0, -2.0, 1.0], [60.0, 0.0, 0.0]];
+        let g_vectors = [[0.0; 3], [0.4, -0.3, 0.2], [2.0, 1.0, -1.5]];
+        let threshold = 1e-10;
+        let exact =
+            pair_fourier_transform(&table, &table, &translations, &g_vectors, 0.0).expect("valid");
+        let screened = pair_fourier_transform(&table, &table, &translations, &g_vectors, threshold)
+            .expect("valid");
+        let largest = exact
+            .iter()
+            .zip(&screened)
+            .map(|(e, s)| (e - s).norm())
+            .fold(0.0_f64, f64::max);
+        assert!(largest < 10.0 * threshold, "{largest}");
+        let per_image = g_vectors.len() * table.n_functions() * table.n_functions();
+        assert!(screened[2 * per_image..].iter().all(|v| v.norm() == 0.0));
+        assert!(exact[2 * per_image..].iter().any(|v| v.norm() > 0.0));
+        let nothing =
+            pair_fourier_transform(&table, &table, &translations, &g_vectors, 1e6).expect("valid");
+        assert!(nothing.iter().all(|v| v.norm() == 0.0));
     }
 }

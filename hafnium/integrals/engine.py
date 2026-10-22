@@ -2,10 +2,48 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
-from hafnium.backend import Array
+from hafnium.backend import Array, host_array
+from hafnium.errors import InputError
 from hafnium.integrals.shell_table import ShellTable
+from hafnium.molecule import AtomicSystem
+
+
+@dataclass(frozen=True, slots=True)
+class CoulombKernel:
+    """The Coulomb kernel of an attraction integral (CONVENTIONS.md §3).
+
+    ``1 / r`` by default, its long-range part ``erf(ω r) / r`` with
+    ``omega``, and its short-range part ``erfc(ω r) / r`` with ``omega``
+    and ``short_range``; the engine validates the combination.
+    """
+
+    omega: float | None = None
+    short_range: bool = False
+
+
+COULOMB = CoulombKernel()
+"""The bare Coulomb kernel ``1 / r``."""
+
+
+@dataclass(frozen=True, slots=True)
+class PointCharges:
+    """Point charges ``charges[n]`` at ``positions[n, 3]`` in Bohr."""
+
+    charges: Array
+    positions: Array
+
+    def __post_init__(self) -> None:
+        n = self.charges.shape[0] if self.charges.ndim == 1 else -1
+        if self.positions.shape != (n, 3):
+            raise InputError("charges have shape [n] and positions shape [n, 3]")
+
+    @classmethod
+    def from_system(cls, system: AtomicSystem) -> PointCharges:
+        """Build from the nuclei of ``system``."""
+        return cls(host_array(system.nuclear_charges), system.positions_array())
 
 
 class IntegralEngine(Protocol):
@@ -31,16 +69,19 @@ class IntegralEngine(Protocol):
         bra: ShellTable,
         ket: ShellTable,
         translations: Array,
-        charges: Array,
-        positions: Array,
+        charges: PointCharges,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
     ) -> Array:
-        """Attraction ``[image, ao, ao]`` to point ``charges`` at ``positions``.
+        """Attraction ``[image, ao, ao]`` to the point ``charges``.
 
-        The potential of each charge is ``-Z / r``, or ``-Z erf(ω r) / r``
-        when ``omega`` is given (the long-range part of a range-separated
-        kernel).
+        The potential of each charge is ``-Z v(r)`` with the Coulomb
+        ``kernel`` ``v``. Every term of the sum over charges and primitive
+        pairs whose bound is below ``threshold`` is left out, so each
+        neglected term is smaller than ``threshold`` (ADR-0018); with the
+        short-range kernel the terms fall off with the distance between a
+        charge and a pair, so far charges cost nothing.
         """
         ...
 
@@ -121,12 +162,20 @@ class IntegralEngine(Protocol):
         ...
 
     def pair_fourier_transform(
-        self, bra: ShellTable, ket: ShellTable, translations: Array, g_vectors: Array
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        g_vectors: Array,
+        *,
+        threshold: float = 0.0,
     ) -> Array:
         """Transform every pair: ``∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr``.
 
         Complex ``[image, G, ao, ao]`` for the translations ``T`` of the ket
         and the ``g_vectors`` ``[G, 3]`` in inverse Bohr. At ``G = 0`` the
-        transform is the overlap matrix of the same translation.
+        transform is the overlap matrix of the same translation. Primitive
+        pairs whose transform is bounded below ``threshold`` at every ``G``
+        are left at zero (ADR-0018).
         """
         ...

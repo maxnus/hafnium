@@ -120,3 +120,25 @@ def test_cartesian_coordinates_use_the_reciprocal_lattice() -> None:
     )
     with pytest.raises(InputError, match="do not fit"):
         KPoints.gamma(3).cartesian(lattice)
+
+
+def test_mesh_size_recovers_meshes_and_rejects_other_sets() -> None:
+    for size, shift in [((2, 3), None), ((3,), (0.5,)), ((2, 1, 2), (0.5, 0.0, 0.5))]:
+        mesh = KPoints.mesh(size, shift=shift)
+        assert mesh.mesh_size() == size
+        rng = np.random.default_rng(len(size))
+        order = [int(i) for i in rng.permutation(mesh.n_kpt)]
+        shuffled = KPoints.from_fractional([mesh.fractional[i] for i in order])
+        assert shuffled.mesh_size() == size
+    assert KPoints.gamma().mesh_size() == (1, 1, 1)
+    assert KPoints.from_fractional([(0.25,), (0.75,)]).mesh_size() == (2,)
+    not_meshes: list[list[tuple[float, ...]]] = [
+        [(0.0, 0.0), (0.3, 0.0), (0.7, 0.0)],
+        [(0.0, 0.0), (0.5, 0.0), (0.0, 0.5)],
+        [(0.0,), (0.25,), (0.5,)],
+    ]
+    for points in not_meshes:
+        with pytest.raises(InputError, match="uniform mesh"):
+            KPoints.from_fractional(points).mesh_size()
+    with pytest.raises(InputError, match="equal weights"):
+        KPoints.from_fractional([(0.0,), (0.5,)], weights=(0.25, 0.75)).mesh_size()

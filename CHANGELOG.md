@@ -120,3 +120,17 @@ uses [Semantic Versioning](https://semver.org/).
 - `Shell`, `BasisSet` and `BasisLibrary`: contraction normalization, the
   Basis Set Exchange client with a per-element cache, and bundled STO-3G,
   def2-SVP, cc-pVDZ and def2-universal-JKFIT data for H through Ar.
+- Periodic Hartree–Fock (M5, part one): the probe-charge Ewald correction
+  chosen for the exchange divergence, with `madelung_constant` of a k-point
+  mesh in every dimension and `KPoints.mesh_size` (ADR-0017); the
+  regularized nuclear attraction of three-dimensional cells,
+  `nuclear_attraction_k` and `core_hamiltonian_k`, from the screened
+  short-range kernel over nuclear images and the reciprocal-space sum of
+  the pair transforms with the `G = 0` finite part of ADR-0012 (ADR-0018);
+  `RangeSeparation` with the cutoffs, `reaching_images`, and the public
+  `reciprocal_cutoff` and `default_omega` of the Ewald module.
+- Native short-range `erfc(ωr)/r` nuclear attraction, rigorous screening
+  of the nuclear attraction and the pair Fourier transform against a
+  threshold, and parallel images in the one-electron kernels (ADR-0018);
+  `CoulombKernel` and `PointCharges` on the engine protocol.
+

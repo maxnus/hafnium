@@ -15,6 +15,7 @@ from hafnium.integrals import (
     kinetic,
     kinetic_k,
     lattice_images,
+    nuclear_attraction_k,
     overlap,
     overlap_k,
 )
@@ -166,7 +167,7 @@ def test_moving_an_atom_by_a_lattice_vector_changes_phases_only() -> None:
     on_moved = np.asarray([label.atom == 1 for label in basis.function_labels()])
     phase = np.exp(-1j * (mesh.cartesian(cell.lattice) @ shift))
     scale = np.where(on_moved[np.newaxis, :], phase[:, np.newaxis], 1.0)
-    for function in (overlap_k, kinetic_k):
+    for function in (overlap_k, kinetic_k, nuclear_attraction_k):
         before = function(ENGINE, basis, cell, mesh)
         after = function(ENGINE, basis, moved, mesh)
         expected = np.conj(scale)[:, :, np.newaxis] * before * scale[:, np.newaxis, :]

@@ -64,19 +64,37 @@ def ewald_parameters(
     a factor of two on top. ``omega`` defaults to ``sqrt(π) / V^(1/d)`` for
     the d-dimensional cell measure ``V``, which balances the two sums.
     """
-    if not (math.isfinite(precision) and precision > 0.0):
-        raise InputError("the Ewald precision is a positive number")
-    if omega is None:
-        omega = math.sqrt(math.pi) / math.pow(lattice.volume, 1.0 / lattice.dimension)
-    if not (math.isfinite(omega) and omega > 0.0):
-        raise InputError("the range-separation parameter omega is positive")
+    _check_precision(precision)
+    omega = default_omega(lattice) if omega is None else omega
+    _check_omega(omega)
     xp = array_namespace(charges)
-    scale = _TAIL_MARGIN * float(xp.sum(xp.abs(charges))) ** 2
+    charge_product = float(xp.sum(xp.abs(charges))) ** 2
     return EwaldParameters(
         omega,
-        _real_space_cutoff(lattice, omega, scale, precision),
-        _reciprocal_cutoff(lattice, omega, scale, precision),
+        _real_space_cutoff(lattice, omega, _TAIL_MARGIN * charge_product, precision),
+        reciprocal_cutoff(
+            lattice, omega, charge_product=charge_product, precision=precision
+        ),
     )
+
+
+def default_omega(lattice: Lattice) -> float:
+    """Return ``sqrt(π) / V^(1/d)`` for the d-dimensional cell measure ``V``.
+
+    This range-separation parameter balances the real-space and the
+    reciprocal-space sums of point charges on ``lattice``.
+    """
+    return math.sqrt(math.pi) / math.pow(lattice.volume, 1.0 / lattice.dimension)
+
+
+def _check_precision(precision: float) -> None:
+    if not (math.isfinite(precision) and precision > 0.0):
+        raise InputError("the Ewald precision is a positive number")
+
+
+def _check_omega(omega: float) -> None:
+    if not (math.isfinite(omega) and omega > 0.0):
+        raise InputError("the range-separation parameter omega is positive")
 
 
 def _solve_tail(prefactor: Callable[[float], float], precision: float) -> float:
@@ -113,16 +131,25 @@ def _real_space_cutoff(
     return _solve_tail(prefactor, precision) / omega
 
 
-def _reciprocal_cutoff(
-    lattice: Lattice, omega: float, scale: float, precision: float
+def reciprocal_cutoff(
+    lattice: Lattice, omega: float, *, charge_product: float, precision: float
 ) -> float:
     """Length beyond which the reciprocal-space tail is below ``precision``.
 
-    The kernels are bounded by ``4π exp(−G²/4ω²)/G²``, ``3π exp(−G²/4ω²)/G``
-    and ``4ω² exp(−G²/4ω²)/G²`` by dimension; integrated over the vectors
+    ``charge_product`` is the product of the total absolute charges of the
+    two distributions that interact through the long-range kernel, ``Q²``
+    for point charges ``Q = Σ|Z_i|`` among themselves. The kernels are
+    bounded by ``4π exp(−G²/4ω²)/G²``, ``3π exp(−G²/4ω²)/G`` and
+    ``4ω² exp(−G²/4ω²)/G²`` by dimension; integrated over the vectors
     longer than ``G = 2ωy`` the tails are at most ``Q²ω exp(−y²) / (πy)``,
-    ``3Q²ω exp(−y²) / (4y)`` and ``Q²ω exp(−y²) / (2πy³)``.
+    ``3Q²ω exp(−y²) / (4y)`` and ``Q²ω exp(−y²) / (2πy³)``, and a factor of
+    two covers a lattice sum exceeding the continuum estimate.
     """
+    _check_precision(precision)
+    _check_omega(omega)
+    if not (math.isfinite(charge_product) and charge_product >= 0.0):
+        raise InputError("the charge product is a non-negative number")
+    scale = _TAIL_MARGIN * charge_product
 
     def prefactor(y: float) -> float:
         if lattice.dimension == 3:

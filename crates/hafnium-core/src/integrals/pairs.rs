@@ -99,6 +99,101 @@ impl PrimitivePairs {
     pub(crate) fn n_contracted(&self) -> usize {
         self.contractions[0] * self.contractions[1]
     }
+
+    /// The largest magnitude among the contraction coefficients of
+    /// primitive pair `pair`, which bounds its weight in any contraction.
+    pub(crate) fn coefficient_max(&self, pair: usize) -> f64 {
+        let n = self.contractions[0] * self.contractions[1];
+        self.coefficients[pair * n..(pair + 1) * n]
+            .iter()
+            .fold(0.0_f64, |acc, c| acc.max(c.abs()))
+    }
+}
+
+/// Screening bounds on the integrals of a primitive pair.
+///
+/// Every kernel writes the product of two Cartesian primitives as
+/// `Σ_tuv E_tuv Λ_tuv` and the integral of a Hermite Gaussian `Λ_tuv`
+/// against a kernel is bounded by a weight `w_t w_u w_v` that depends on
+/// the orders alone, so `max_ab Π_axis Σ_t |E^axis_t(a, b)| w_t` bounds
+/// every Cartesian component of the pair's integrals. The weights of the
+/// Fourier and the Coulomb kernels come from the Hermite polynomials:
+/// `d^t/dx^t exp(−s² x²) = (−s)^t H_t(s x) exp(−s² x²)` with the physicists'
+/// polynomials `H_t`.
+impl PrimitivePair {
+    /// `max_ab Π_axis Σ_{t ≤ i + j} |E^axis_t(i, j)| weights[t]` over the
+    /// Cartesian components `a` of the bra and `b` of the ket.
+    pub(crate) fn envelope(
+        &self,
+        components_a: &[[usize; 3]],
+        components_b: &[[usize; 3]],
+        weights: &[f64],
+    ) -> f64 {
+        let mut largest = 0.0_f64;
+        for ca in components_a {
+            for cb in components_b {
+                let mut product = 1.0;
+                for axis in 0..3 {
+                    let (ia, ib) = (ca[axis], cb[axis]);
+                    let expansion = &self.hermite[axis];
+                    product *= (0..=ia + ib)
+                        .map(|order| expansion.get(ia, ib, order).abs() * weights[order])
+                        .sum::<f64>();
+                }
+                largest = largest.max(product);
+            }
+        }
+        largest
+    }
+}
+
+/// `ε` in the envelope `|H_t(y)| exp(−ε y²) ≤ h_t(ε)` of the Hermite
+/// polynomials, which leaves `exp(−(1 − ε) y²)` of the Gaussian for the
+/// distance screening of the Coulomb kernels. A smaller value keeps more of
+/// the decay and makes the constants `h_t` larger; both enter the screening
+/// radius logarithmically.
+pub(crate) const ENVELOPE_EPSILON: f64 = 0.1;
+
+/// `h_t(ε) ≥ max_y |H_t(y)| exp(−ε y²)` for `t ≤ max_order`, from the
+/// coefficients of `H_t(y) = Σ_k (−1)^k t! / (k! (t − 2k)!) (2y)^{t − 2k}` and
+/// `|y|^m exp(−ε y²) ≤ (m / 2eε)^{m/2}`.
+pub(crate) fn hermite_envelopes(max_order: usize, epsilon: f64) -> Vec<f64> {
+    (0..=max_order)
+        .map(|t| {
+            (0..=t / 2)
+                .map(|k| {
+                    let m = t - 2 * k;
+                    let combinatorial = factorial(t) / (factorial(k) * factorial(m));
+                    let moment = if m == 0 {
+                        1.0
+                    } else {
+                        (to_f64(m) / (2.0 * std::f64::consts::E * epsilon)).powf(0.5 * to_f64(m))
+                    };
+                    combinatorial
+                        * 2.0_f64.powi(i32::try_from(m).expect("order fits in i32"))
+                        * moment
+                })
+                .sum()
+        })
+        .collect()
+}
+
+/// `∫ |d^t/dx^t exp(−p x²)| dx ≤ p^{(t − 1) / 2} sqrt(π 2^t t!)` for
+/// `t ≤ max_order`, by the Cauchy–Schwarz inequality on
+/// `∫ |H_t(y)| exp(−y²) dy` with `∫ H_t² exp(−y²) dy = sqrt(π) 2^t t!`. The
+/// weights returned are `p^{t/2} sqrt(2^t t!)`; the caller supplies
+/// `(π / p)^{3/2}`.
+pub(crate) fn transform_weights(max_order: usize, p: f64) -> Vec<f64> {
+    (0..=max_order)
+        .map(|t| {
+            p.powf(0.5 * to_f64(t))
+                * (2.0_f64.powi(i32::try_from(t).expect("order fits in i32")) * factorial(t)).sqrt()
+        })
+        .collect()
+}
+
+fn factorial(n: usize) -> f64 {
+    (1..=n).map(to_f64).product()
 }
 
 /// All primitive pairs of two shells, with the ket centred at `b_center`.

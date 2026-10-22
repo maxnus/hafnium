@@ -4,9 +4,12 @@ import numpy as np
 import pytest
 
 from hafnium import _kernels
+from hafnium.backend import Array
 from hafnium.basis import BasisLibrary, BasisSet, Shell
 from hafnium.errors import InputError
 from hafnium.integrals import (
+    CoulombKernel,
+    PointCharges,
     RustEngine,
     ShellTable,
     core_hamiltonian,
@@ -21,6 +24,8 @@ from tests.tolerances import (
     ATTENUATION_LIMIT_TOL,
     INTEGRAL_TOL,
     LITERATURE_TOL,
+    SCREENING_THRESHOLD,
+    SCREENING_TOL,
     SPECTRUM_TOL,
 )
 
@@ -172,7 +177,10 @@ def test_binding_rejects_malformed_input() -> None:
         ENGINE.overlap(table, table, np.array([[np.nan, 0.0, 0.0]]))
     with pytest.raises(ValueError, match="finite"):
         ENGINE.nuclear_attraction(
-            table, table, np.zeros((1, 3)), np.array([1.0]), np.array([[np.inf, 0, 0]])
+            table,
+            table,
+            np.zeros((1, 3)),
+            PointCharges(np.array([1.0]), np.array([[np.inf, 0.0, 0.0]])),
         )
     too_high = ShellTable(
         np.array([17]), np.zeros((1, 3)), np.array([0, 1]), np.ones(1), np.ones(1)
@@ -183,3 +191,33 @@ def test_binding_rejects_malformed_input() -> None:
         ShellTable(
             np.array([1.5]), np.zeros((1, 3)), np.array([0, 1]), np.ones(1), np.ones(1)
         )
+
+
+def test_short_range_kernel_is_the_full_minus_the_long_range_kernel() -> None:
+    molecule = water()
+    basis = basis_for(molecule, "def2-svp")
+    table = ShellTable.from_basis(basis, molecule)
+    translations = np.array([[0.0, 0.0, 0.0], [1.5, -0.5, 2.0]])
+    charges = PointCharges.from_system(molecule)
+
+    def attraction(kernel: CoulombKernel, threshold: float = 0.0) -> Array:
+        return ENGINE.nuclear_attraction(
+            table, table, translations, charges, kernel=kernel, threshold=threshold
+        )
+
+    full = attraction(CoulombKernel())
+    long_range = attraction(CoulombKernel(0.6))
+    short_range = attraction(CoulombKernel(0.6, short_range=True))
+    np.testing.assert_allclose(short_range, full - long_range, atol=INTEGRAL_TOL)
+    np.testing.assert_allclose(full[0], nuclear_attraction(ENGINE, basis, molecule))
+    # Screening leaves every element within a few thresholds of the full sum.
+    for kernel in (CoulombKernel(), CoulombKernel(0.6, short_range=True)):
+        screened = attraction(kernel, SCREENING_THRESHOLD)
+        np.testing.assert_allclose(screened, attraction(kernel), atol=SCREENING_TOL)
+    assert np.all(attraction(CoulombKernel(), 1e6) == 0.0)
+    with pytest.raises(ValueError, match="needs the range-separation"):
+        attraction(CoulombKernel(short_range=True))
+    with pytest.raises(ValueError, match="threshold"):
+        attraction(CoulombKernel(), -1.0)
+    with pytest.raises(InputError, match="shape"):
+        PointCharges(np.ones(2), np.zeros((3, 3)))

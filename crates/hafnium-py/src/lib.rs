@@ -141,12 +141,18 @@ fn kinetic<'py>(
 }
 
 /// Nuclear attraction integrals of point charges for each translation of
-/// the ket, `[image, bra, ket]`; `omega` selects the `erf(ωr)/r` kernel.
+/// the ket, `[image, bra, ket]`; `omega` selects the `erf(ωr)/r` kernel,
+/// or `erfc(ωr)/r` with `short_range`, and terms bounded below
+/// `threshold` are skipped.
 #[pyfunction]
-#[pyo3(signature = (bra, ket, translations, charges, positions, omega=None))]
+#[pyo3(signature = (bra, ket, translations, charges, positions, omega=None, short_range=false, threshold=0.0))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the binding mirrors the kernel's arguments"
 )]
 fn nuclear_attraction<'py>(
     py: Python<'py>,
@@ -156,16 +162,21 @@ fn nuclear_attraction<'py>(
     charges: PyReadonlyArray1<'py, f64>,
     positions: PyReadonlyArray2<'py, f64>,
     omega: Option<f64>,
+    short_range: bool,
+    threshold: f64,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let translations = to_vectors(&translations, "translations")?;
     let positions = to_vectors(&positions, "positions")?;
+    let kernel =
+        integrals::CoulombKernel::new(omega, short_range).map_err(|error| value_error(&error))?;
     let values = integrals::nuclear_attraction(
         &bra.inner,
         &ket.inner,
         &translations,
         charges.as_slice()?,
         &positions,
-        omega,
+        kernel,
+        threshold,
     )
     .map_err(|error| value_error(&error))?;
     to_image_matrices(py, values, translations.len(), bra, ket)
@@ -305,8 +316,10 @@ fn fourier_transform<'py>(
 }
 
 /// Pair transforms `∫ φ_u(r) φ_v(r − T) exp(−i G·r) dr` for each
-/// translation `T` of the ket, complex `[image, G, ao, ao]`.
+/// translation `T` of the ket, complex `[image, G, ao, ao]`; pairs bounded
+/// below `threshold` are skipped.
 #[pyfunction]
+#[pyo3(signature = (bra, ket, translations, g_vectors, threshold=0.0))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
@@ -317,12 +330,18 @@ fn pair_fourier_transform<'py>(
     ket: &PyShellTable,
     translations: PyReadonlyArray2<'py, f64>,
     g_vectors: PyReadonlyArray2<'py, f64>,
+    threshold: f64,
 ) -> PyResult<Bound<'py, PyArray4<Complex64>>> {
     let translations = to_vectors(&translations, "translations")?;
     let g_vectors = to_vectors(&g_vectors, "G vectors")?;
-    let values =
-        integrals::pair_fourier_transform(&bra.inner, &ket.inner, &translations, &g_vectors)
-            .map_err(|error| value_error(&error))?;
+    let values = integrals::pair_fourier_transform(
+        &bra.inner,
+        &ket.inner,
+        &translations,
+        &g_vectors,
+        threshold,
+    )
+    .map_err(|error| value_error(&error))?;
     let shape = [
         translations.len(),
         g_vectors.len(),

@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 
-from hafnium.backend import Array, array_namespace, default_namespace
+from hafnium.backend import Array, array_namespace
 from hafnium.basis import BasisSet, Shell
 from hafnium.errors import InputError
 from hafnium.integrals.engine import IntegralEngine
@@ -104,20 +104,47 @@ def lattice_images(
     with ``T``, so Bloch sums over the result are Hermitian.
     """
     require_basis_for_atoms(basis, cell)
-    xp = default_namespace()
-    radii = xp.asarray(atom_radii(basis, precision), dtype=xp.float64)
-    positions = cell.positions_array(xp)
-    separations = xp.expand_dims(positions, 1) - xp.expand_dims(positions, 0)
-    diameter = float(xp.max(xp.linalg.vector_norm(separations, axis=-1)))
-    candidates = cell.lattice.translations(2.0 * float(xp.max(radii)) + diameter)
-    reach = xp.expand_dims(radii, 1) + xp.expand_dims(radii, 0)
+    positions = cell.positions_array()
+    radii = atom_radii(basis, precision)
+    return reaching_images(cell.lattice, positions, radii, positions, radii)
+
+
+def reaching_images(
+    lattice: Lattice,
+    positions: Array,
+    radii: tuple[float, ...],
+    targets: Array,
+    target_radii: tuple[float, ...],
+) -> Array:
+    """Return the translations ``T`` ``[image, 3]`` at which the sets touch.
+
+    ``T`` is kept when some position ``p_i`` and some target ``q_j`` satisfy
+    ``|p_i − q_j − T| ≤ r_i + s_j`` for their radii ``r`` and ``s``, both
+    sets given as ``[n, 3]`` in Bohr. The zero translation comes first when
+    it is kept, the rest follow by length, and ``−T`` is kept with ``T``
+    whenever the two sets and their radii coincide.
+    """
+    xp = array_namespace(positions, targets)
+    reach_a = xp.asarray(radii, dtype=xp.float64)
+    reach_b = xp.asarray(target_radii, dtype=xp.float64)
+    if positions.shape != (reach_a.shape[0], 3) or targets.shape != (
+        reach_b.shape[0],
+        3,
+    ):
+        raise InputError("positions have shape [n, 3] with one radius each")
+    separations = xp.expand_dims(positions, 1) - xp.expand_dims(targets, 0)
+    extent = float(xp.max(xp.linalg.vector_norm(separations, axis=-1)))
+    candidates = lattice.translations(
+        float(xp.max(reach_a)) + float(xp.max(reach_b)) + extent
+    )
+    reach = xp.expand_dims(reach_a, 1) + xp.expand_dims(reach_b, 0)
     keep = xp.zeros(candidates.shape[0], dtype=xp.bool)
-    for atom in range(cell.n_atoms):
+    for index in range(int(positions.shape[0])):
         distance = xp.linalg.vector_norm(
-            xp.expand_dims(separations[atom], 0) - xp.expand_dims(candidates, 1),
+            xp.expand_dims(separations[index], 0) - xp.expand_dims(candidates, 1),
             axis=-1,
         )
-        keep = keep | xp.any(distance <= xp.expand_dims(reach[atom], 0), axis=1)
+        keep = keep | xp.any(distance <= xp.expand_dims(reach[index], 0), axis=1)
     return candidates[keep]
 
 

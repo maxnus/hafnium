@@ -8,7 +8,13 @@ import pytest
 
 from hafnium import _kernels
 from hafnium.basis import BasisLibrary, BasisSet, Shell
-from hafnium.integrals import DensityFitting, RustEngine, ShellTable
+from hafnium.integrals import (
+    CoulombKernel,
+    DensityFitting,
+    PointCharges,
+    RustEngine,
+    ShellTable,
+)
 from hafnium.molecule import Molecule
 from tests.molecules import water
 from tests.shell_tables import reversed_table
@@ -113,9 +119,8 @@ def test_three_center_with_s_auxiliary_is_an_attenuated_attraction() -> None:
         orbital,
         orbital,
         ZERO,
-        np.array([1.0]),
-        probe.positions_array(),
-        omega=float(np.sqrt(q)),
+        PointCharges(np.array([1.0]), probe.positions_array()),
+        kernel=CoulombKernel(float(np.sqrt(q))),
     )[0]
     np.testing.assert_allclose(
         three, -attraction / (q / (2 * np.pi)) ** 0.75, atol=INTEGRAL_TOL

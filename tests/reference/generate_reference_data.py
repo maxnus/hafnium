@@ -5,8 +5,9 @@
 Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``density_fitting_<molecule>_<basis>.json``,
 ``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
-``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json`` and
-``bloch_<cell>_<basis>.json`` with the PySCF values and their provenance.
+``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json``,
+``bloch_<cell>_<basis>.json`` and ``nuclear_<cell>_<basis>.json`` with the
+PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -27,7 +28,9 @@ from tests.reference.pyscf_oracle import (
     ewald_reference,
     four_center_reference,
     fourier_transform_reference,
+    madelung_reference,
     one_electron_reference,
+    periodic_nuclear_attraction_reference,
     pyscf,
     scf_reference,
 )
@@ -44,6 +47,9 @@ from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
 from tests.reference.test_fourier_reference import STORED_CASES as FOURIER_CASES
+from tests.reference.test_nuclear_reference import CELLS as NUCLEAR_CELLS
+from tests.reference.test_nuclear_reference import MESHES as NUCLEAR_MESHES
+from tests.reference.test_nuclear_reference import STORED_CASES as NUCLEAR_CASES
 from tests.reference.test_one_electron_reference import (
     LIBRARY,
     MOLECULES,
@@ -84,6 +90,12 @@ def record(
 def main() -> None:
     """Write one JSON file per case."""
     DIRECTORY.mkdir(exist_ok=True)
+    record_molecules()
+    record_cells()
+
+
+def record_molecules() -> None:
+    """Write the molecular cases."""
     for name, basis_name in STORED_CASES:
         molecule = MOLECULES[name]
         basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
@@ -151,6 +163,10 @@ def main() -> None:
             charge=molecule.charge,
             spin=molecule.spin,
         )
+
+
+def record_cells() -> None:
+    """Write the periodic cases."""
     for name in EWALD_CASES:
         cell = CELLS[name]()
         record(
@@ -181,6 +197,27 @@ def main() -> None:
             "pbc_intor int1e_ovlp and int1e_kin at Cartesian kpts; precision=1e-14; "
             "low_dim_ft_type=inf_vacuum; cart=False; Bohr",
             parts,
+            dimension=cell.dimension,
+            lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
+            kpoints_fractional=[list(point) for point in mesh.fractional],
+        )
+    for name, basis_name in NUCLEAR_CASES:
+        cell = NUCLEAR_CELLS[name]()
+        basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
+        mesh = NUCLEAR_MESHES[name]
+        matrix = periodic_nuclear_attraction_reference(cell, basis, mesh)
+        record(
+            "nuclear",
+            cell,
+            name,
+            basis_name,
+            "df.GDF.get_nuc at Cartesian kpts and tools.pbc.madelung; "
+            "precision=1e-14; cart=False; Bohr",
+            {
+                "nuclear_attraction_real": np.real(matrix),
+                "nuclear_attraction_imag": np.imag(matrix),
+                "madelung": np.asarray(madelung_reference(cell, basis, mesh)),
+            },
             dimension=cell.dimension,
             lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
             kpoints_fractional=[list(point) for point in mesh.fractional],
