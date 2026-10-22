@@ -200,3 +200,20 @@ def test_reciprocal_cutoff_follows_the_charge_product() -> None:
         reciprocal_cutoff(lattice, 1.0, charge_product=-1.0, precision=1e-12)
     with pytest.raises(InputError, match="omega is positive"):
         reciprocal_cutoff(lattice, 0.0, charge_product=1.0, precision=1e-12)
+
+
+def test_reciprocal_cutoff_takes_the_bound_of_another_dimension() -> None:
+    slab = Lattice(((4.0, 0.0, 0.0), (0.0, 4.0, 0.0)))
+    cubic = Lattice(((4.0, 0.0, 0.0), (0.0, 4.0, 0.0), (0.0, 0.0, 4.0)))
+    own = reciprocal_cutoff(slab, 0.5, charge_product=4.0, precision=1e-12)
+    # The three-dimensional bound does not depend on the lattice.
+    assert reciprocal_cutoff(
+        slab, 0.5, charge_product=4.0, precision=1e-12, dimension=3
+    ) == pytest.approx(
+        reciprocal_cutoff(cubic, 0.5, charge_product=4.0, precision=1e-12)
+    )
+    assert reciprocal_cutoff(
+        slab, 0.5, charge_product=4.0, precision=1e-12, dimension=2
+    ) == pytest.approx(own)
+    with pytest.raises(InputError, match="one to three"):
+        reciprocal_cutoff(slab, 0.5, charge_product=4.0, precision=1e-12, dimension=4)

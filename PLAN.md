@@ -939,8 +939,15 @@ PySCF's fitted integrals. The k-point Hartree–Fock done 2026-10-22
 (ADR-0020): Coulomb and exchange matrices over the full k set with the
 exchange correction, occupations across k, spin expectation values per
 cell, the periodic Hamiltonian and the eight classes over k; KRHF, KUHF
-and KGHF match PySCF. Remaining in M5: the two- and one-dimensional
-reciprocal-space kernels. Known limitations: the universal JKFIT basis
+and KGHF match PySCF. The two- and one-dimensional reciprocal-space
+kernels done 2026-10-22 (ADR-0021): the perpendicular components of the
+three-dimensional transform integrated by quadrature with the finite part
+of ADR-0012 on the `G_∥ = 0` line, the fitting metric signed along the
+charge, the nuclear attraction, fitted integrals and energies of slabs and
+chains independent of the range separation, folding, reproducing the
+analytic Ewald sums for point charges and a box with growing vacuum, and
+KRHF of a slab matching PySCF's two-dimensional treatment. M5 is complete.
+Known limitations: the universal JKFIT basis
 can be near-linearly dependent in a small cell (LiH in 4 Bohr), where the
 fitted integrals agree with PySCF only to the fitting residual of 1e-6
 and the reference tests choose their tolerance from the metric's

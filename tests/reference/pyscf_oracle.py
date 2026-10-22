@@ -252,7 +252,13 @@ def pyscf_cell(cell: Cell, basis: BasisSet, *, vacuum: float = 80.0) -> Any:
 
     PySCF's lattice sums are cut off at a precision of 1e-14, below the
     integral tolerance, so that the comparison is limited by the kernels and
-    not by the images included.
+    not by the images included. A slab takes PySCF's analytic
+    two-dimensional Coulomb kernel (``low_dim_ft_type=None``, the truncated
+    kernel of Ismail-Beigi), which converges exponentially with the vacuum
+    and needs the slab in the ``xy`` plane for the Coulomb terms; a chain
+    takes ``"inf_vacuum"``, PySCF's only option, which sums the open
+    directions over the reciprocal mesh of the padded cell and is not exact
+    (with it a slab's ``energy_nuc`` is also wrong by millions of Hartree).
     """
     pbc_gto: Any = pytest.importorskip("pyscf.pbc.gto")
     atoms = [
@@ -265,7 +271,7 @@ def pyscf_cell(cell: Cell, basis: BasisSet, *, vacuum: float = 80.0) -> Any:
         basis=basis_input(cell, basis),
         unit="Bohr",
         dimension=cell.dimension,
-        low_dim_ft_type="inf_vacuum",
+        low_dim_ft_type="inf_vacuum" if cell.dimension == 1 else None,
         precision=1e-14,
         verbose=0,
     )
@@ -386,7 +392,9 @@ def kscf_reference(
     The two-electron terms are density-fitted in ``auxiliary`` with the
     Ewald exchange correction (PySCF's default ``exxdiv``), the same
     construction as ADR-0017 and ADR-0019, so the energy per cell and the
-    orbital energies at every k-point compare directly.
+    orbital energies at every k-point compare directly; for a slab PySCF's
+    two-dimensional kernels differ from those of ADR-0021 by constants that
+    cancel in the energy of a neutral cell.
 
     PySCF's k-point classes take ``cell.spin`` as ``n_alpha − n_beta`` over
     the whole mesh, the spin per cell times the number of k-points, and

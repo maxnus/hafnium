@@ -351,3 +351,53 @@ def test_k_point_inputs_are_validated(
         )
     lattice = Lattice(((3.0, 0.0, 0.0),))
     assert lattice.dimension == 1
+
+
+LOW_DIMENSION_MESHES = {2: KPoints.mesh((2, 2)), 1: KPoints.mesh((3,))}
+LOW_DIMENSION_MULTIPLES = {2: (2, 1), 1: (3,)}
+LOW_DIMENSION_FOLDED = {2: KPoints.mesh((1, 2)), 1: KPoints.gamma(1)}
+
+
+@pytest.mark.parametrize("dimension", [2, 1])
+def test_slab_and_chain_energies_are_range_separation_independent_and_fold(
+    dimension: int,
+) -> None:
+    cell = helium(dimension)
+    mesh = LOW_DIMENSION_MESHES[dimension]
+    _, hamiltonian = hamiltonian_for(cell, "cc-pvdz", mesh)
+    spec = SymmetrySpec.from_name("RHF").with_kpoints(mesh)
+    reference = solve_scf(hamiltonian, spec)
+    check_state(reference, hamiltonian)
+    _, other = hamiltonian_for(
+        cell, "cc-pvdz", mesh, omega=0.5 * default_omega(cell.lattice)
+    )
+    assert solve_scf(other, spec).energy == pytest.approx(
+        reference.energy, abs=ENERGY_TOL
+    )
+    multiples = LOW_DIMENSION_MULTIPLES[dimension]
+    folded_mesh = LOW_DIMENSION_FOLDED[dimension]
+    _, folded_hamiltonian = hamiltonian_for(
+        cell.supercell(multiples), "cc-pvdz", folded_mesh
+    )
+    folded = solve_scf(
+        folded_hamiltonian, SymmetrySpec.from_name("RHF").with_kpoints(folded_mesh)
+    )
+    assert folded.energy / np.prod(multiples) == pytest.approx(
+        reference.energy, abs=ENERGY_TOL
+    )
+
+
+def test_fitted_builder_requires_a_matching_signature(
+    helium_pair: tuple[BasisSet, Hamiltonian, KPoints],
+) -> None:
+    _, hamiltonian, _ = helium_pair
+    two_body = hamiltonian.two_body
+    assert isinstance(two_body, KPointDensityFittedCoulombExchange)
+    with pytest.raises(InputError, match=r"\[kpt, kpt, aux\]"):
+        KPointDensityFittedCoulombExchange(
+            two_body.df_tensor,
+            two_body.signature[0],
+            two_body.weights,
+            two_body.overlap,
+            two_body.madelung,
+        )

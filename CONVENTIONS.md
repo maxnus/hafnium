@@ -144,7 +144,11 @@ Spin never appears as an explicit index in method code; it is part of the
   antisymmetrized physicists' integrals `<pq||rs>` stored as
   `eri_antisym[p, q, r, s]`. The name says which.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
-  `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`.
+  `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`. Over k-points the tensor lives in
+  the eigenbasis of the metric of each momentum transfer and carries the
+  `signature` of its eigenvalues, `(uv|wx) ≈ Σ_P s_P B[P, u, v]
+  conj(B[P, x, w])`, since the metric of a slab or a chain at zero
+  transfer has one negative eigenvalue along the charge (ADR-0021).
 - Integral screening: a kernel receives a threshold and leaves every shell
   block whose Schwarz bound `Q_uv Q_wx` lies below it at zero, where
   `Q_uv = max sqrt((uv|uv))` over the functions of the shell pair, so every
@@ -192,8 +196,11 @@ Spin never appears as an explicit index in method code; it is part of the
   charged cell carries a neutralizing uniform background.
 - Periodic Coulomb terms use range separation: the short-range part is a
   real-space lattice sum of erfc-attenuated integrals, the long-range part
-  is evaluated in reciprocal space with the `G = 0` term removed; the
-  exchange energy carries the probe-charge Ewald (Madelung) correction.
+  is evaluated in reciprocal space with the `G = 0` term replaced by the
+  finite part of ADR-0012, over the reciprocal lattice of the periodic
+  directions and a quadrature over the open directions of a slab or a
+  chain (ADR-0021); the exchange energy carries the probe-charge Ewald
+  (Madelung) correction.
   Fourier transforms use the kernel `exp(−i G·r)` in the forward
   direction; reciprocal vectors are `[G, 3]` arrays in inverse Bohr, the
   transform of a function is `[G, ao]` and that of a pair

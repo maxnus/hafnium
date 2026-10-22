@@ -29,12 +29,14 @@ ALLOWED: frozenset[str] = frozenset(
         "squeeze",
         "stack",
         "take",
+        "tile",
         "tril",
         "triu",
         # elementwise
         "abs",
         "clip",
         "conj",
+        "cos",
         "exp",
         "floor",
         "imag",
@@ -46,6 +48,7 @@ ALLOWED: frozenset[str] = frozenset(
         "minimum",
         "real",
         "sign",
+        "sin",
         "sqrt",
         "where",
         # reductions

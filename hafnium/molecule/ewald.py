@@ -132,7 +132,12 @@ def _real_space_cutoff(
 
 
 def reciprocal_cutoff(
-    lattice: Lattice, omega: float, *, charge_product: float, precision: float
+    lattice: Lattice,
+    omega: float,
+    *,
+    charge_product: float,
+    precision: float,
+    dimension: int | None = None,
 ) -> float:
     """Length beyond which the reciprocal-space tail is below ``precision``.
 
@@ -143,18 +148,25 @@ def reciprocal_cutoff(
     ``4ω² exp(−G²/4ω²)/G²`` by dimension; integrated over the vectors
     longer than ``G = 2ωy`` the tails are at most ``Q²ω exp(−y²) / (πy)``,
     ``3Q²ω exp(−y²) / (4y)`` and ``Q²ω exp(−y²) / (2πy³)``, and a factor of
-    two covers a lattice sum exceeding the continuum estimate.
+    two covers a lattice sum exceeding the continuum estimate. ``dimension``
+    selects the bound, the lattice's by default; the sums of a slab or a
+    chain that integrate the three-dimensional kernel over the open
+    directions take ``dimension=3``, the continuum estimate they approximate
+    (ADR-0021).
     """
     _check_precision(precision)
     _check_omega(omega)
     if not (math.isfinite(charge_product) and charge_product >= 0.0):
         raise InputError("the charge product is a non-negative number")
+    dimension = lattice.dimension if dimension is None else dimension
+    if dimension not in (1, 2, 3):
+        raise InputError("the dimension of the reciprocal bound is one to three")
     scale = _TAIL_MARGIN * charge_product
 
     def prefactor(y: float) -> float:
-        if lattice.dimension == 3:
+        if dimension == 3:
             return scale * omega / (math.pi * y)
-        if lattice.dimension == 2:
+        if dimension == 2:
             return 3.0 * scale * omega / (4.0 * y)
         return scale * omega / (2.0 * math.pi * y**3)
 
