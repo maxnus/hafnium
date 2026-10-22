@@ -105,13 +105,11 @@ def materialize_at(
             source = stored[positions[index]]
             arrays.append(expand_k(structure, block, source, wanted, matrix=matrix))
             continue
+        if block.partner is Partner.COPY:
+            arrays.append(arrays[block.derived_from])
+            continue
         source_block = structure.blocks[block.derived_from]
         source = stored[positions[block.derived_from]]
-        if block.partner is Partner.COPY:
-            arrays.append(
-                expand_k(structure, source_block, source, wanted, matrix=matrix)
-            )
-            continue
         flipped = wanted
         if axis is not None and wanted is not None:
             flipped = [axis.partners[k] for k in wanted]

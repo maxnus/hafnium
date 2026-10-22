@@ -20,6 +20,7 @@ from hafnium.structured import (
     BlockVector,
     KAxis,
     Ring,
+    Spin,
     density_matrix,
     is_kramers_symmetric,
     time_reverse,
@@ -238,7 +239,7 @@ def even_occupations(n: int, vectors: BlockMatrix) -> BlockVector:
     blocks: list[np.ndarray] = []
     for block, c in zip(vectors.structure.stored_blocks, vectors.blocks, strict=True):
         m = int(c.shape[-1])
-        count = 2 * ((n + 1) // 2) if block.spin.value == "spinor" else (n + 1) // 2
+        count = 2 * ((n + 1) // 2) if block.spin is Spin.SPINOR else (n + 1) // 2
         occupation = np.zeros(m)
         occupation[:count] = 1.0
         blocks.append(np.broadcast_to(occupation, (*c.shape[:-2], m)).copy())
@@ -306,10 +307,12 @@ def test_half_zone_storage_agrees_with_full_zone_storage(
 ) -> None:
     """ADR-0007: storing the half zone and the full zone give the same results."""
     rng = np.random.default_rng(seed)
+    k_axis = AXES[axis]
+    assert k_axis is not None
     half = member(name, n, rng, axis)
     full_structure = structure(FULL_ZONE[name], axis)
     full = half.embed(full_structure)
-    assert full.blocks[0].shape[0] == AXES[axis].n_kpt  # type: ignore[union-attr]
+    assert full.blocks[0].shape[0] == k_axis.n_kpt
     other = member(name, n, rng, axis)
     assert np.allclose(half.trace(), full.trace(), atol=STRUCTURE_TOL)
     assert np.allclose(

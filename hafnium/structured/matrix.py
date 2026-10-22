@@ -131,7 +131,7 @@ class BlockMatrix:
             eye = xp.eye(size, dtype=dtype_for(xp, structure.storage_ring(block)))
             stored = structure.stored_kpoints(block)
             if stored is not None:
-                eye = xp.broadcast_to(eye, (len(stored), size, size))
+                eye = xp.stack([eye] * len(stored), axis=0)
             blocks.append(eye)
         return cls(structure, tuple(blocks))
 

@@ -4,9 +4,11 @@ A symmetry constraint turns each one-body quantity (overlap, core
 Hamiltonian, Fock matrix, density, orbital coefficients) into a direct sum
 of independent dense blocks over the real, complex or quaternionic ring,
 possibly with partner blocks derived by copying or complex conjugation
-(PLAN.md §5). :class:`BlockStructure` describes that decomposition,
-:class:`BlockMatrix` and :class:`BlockVector` hold data in it, and
-algorithms are written once against their operations.
+(PLAN.md §5). For a periodic system every block is a batch over the
+k-points of a :class:`KAxis`, the real and paired classes storing a half
+zone and deriving the block at ``−k`` (ADR-0015). :class:`BlockStructure`
+describes that decomposition, :class:`BlockMatrix` and :class:`BlockVector`
+hold data in it, and algorithms are written once against their operations.
 """
 
 from hafnium.structured.density import density_matrix
