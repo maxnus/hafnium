@@ -11,7 +11,7 @@ import logging
 import math
 from dataclasses import dataclass
 
-from hafnium.backend import Array, array_namespace, eigh
+from hafnium.backend import array_namespace
 from hafnium.errors import ConvergenceError, InputError, StructureError
 from hafnium.scf.diis import Diis
 from hafnium.scf.hamiltonian import EnergyTerms, Hamiltonian
@@ -20,14 +20,12 @@ from hafnium.scf.occupation import (
     AveragedOccupation,
     OccupationPolicy,
 )
+from hafnium.scf.orthogonalization import DEFAULT_OVERLAP_THRESHOLD
 from hafnium.scf.spin import SpinExpectation, spin_expectation
 from hafnium.structured import BlockMatrix, BlockStructure, BlockVector, density_matrix
 from hafnium.symmetry import SymmetrySpec
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_OVERLAP_THRESHOLD = 1e-10
-"""Overlap eigenvalues below this are removed by canonical orthogonalization."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +153,11 @@ def solve_scf(
         After ``max_iterations`` Fock builds; ``last`` holds the result.
     """
     options = ScfOptions() if options is None else options
+    if symmetry.kpoints != hamiltonian.kpoints:
+        raise InputError(
+            "the symmetry specification and the Hamiltonian carry different "
+            "k-point sets; use SymmetrySpec.with_kpoints with the Hamiltonian's"
+        )
     structure = symmetry.structure()
     if occupation is None:
         symmetry.validate_electrons(hamiltonian.n_alpha, hamiltonian.n_beta)
@@ -228,32 +231,6 @@ def orbital_gradient(
     return orthogonalizer.adjoint() @ commutator @ orthogonalizer
 
 
-def canonical_orthogonalizer(
-    overlap: Array, threshold: float = DEFAULT_OVERLAP_THRESHOLD
-) -> Array:
-    """``X[ao, mo] = V s^{-1/2}`` over the eigenpairs of ``S`` with ``s > threshold``.
-
-    ``X† S X`` is the identity on the retained space; the number of removed
-    eigenvalues is logged, which reads the count on the host.
-    """
-    xp = array_namespace(overlap)
-    eigenvalues, eigenvectors = eigh(overlap)
-    keep = eigenvalues > threshold
-    n = int(overlap.shape[0])
-    dropped = n - int(xp.sum(keep))
-    if dropped == n:
-        raise InputError(
-            f"no eigenvalue of the overlap exceeds the threshold {threshold:g}; "
-            "the overlap is not positive definite or the threshold is too large"
-        )
-    if dropped:
-        logger.info(
-            "canonical orthogonalization removed %d of %d basis functions", dropped, n
-        )
-    retained = eigenvectors[:, keep]
-    return retained / xp.sqrt(eigenvalues[keep])
-
-
 @dataclass(frozen=True, slots=True, eq=False)
 class _Setup:
     """Per-structure matrices and policies the loop reuses."""
@@ -273,17 +250,13 @@ class _Setup:
         occupation: OccupationPolicy,
         options: ScfOptions,
     ) -> _Setup:
-        spatial = BlockMatrix(
-            BlockStructure.spatial(),
-            (canonical_orthogonalizer(hamiltonian.overlap, options.overlap_threshold),),
-        )
         return cls(
             hamiltonian,
             structure,
             occupation,
             options,
             hamiltonian.metric(structure),
-            spatial.embed(structure),
+            hamiltonian.orthogonalizer(structure, options.overlap_threshold),
         )
 
     def checked(self, guess: BlockMatrix) -> BlockMatrix:

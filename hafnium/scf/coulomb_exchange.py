@@ -9,6 +9,13 @@ spin blocks of a spinor matrix in turn. A :class:`CoulombExchange`
 implementation provides the two contractions from its representation of
 the two-electron integrals, and :func:`coulomb_exchange_matrices` assembles
 the structured matrices from them.
+
+With a k axis the contractions run over the full set of k-points
+(ADR-0020): the builder takes ``[kpt, ao, ao]`` arrays, the assembly
+materializes the partners the structure derives, and the results are
+stored back at the stored k-points in the ring of each block. The Bloch
+integrals conjugate the first function of each pair, so
+``J[u, v](k) = Σ_k' w_k' Σ_wx (u k v k | w k' x k') D[x, w](k')``.
 """
 
 from __future__ import annotations
@@ -16,17 +23,33 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from hafnium.backend import Array, array_namespace
+from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
-from hafnium.integrals import DensityFitting, IntegralEngine, eri
+from hafnium.integrals import (
+    DensityFitting,
+    IntegralEngine,
+    PeriodicDensityFitting,
+    density_fitting_k,
+    eri,
+    madelung_constant,
+    overlap_k,
+)
+from hafnium.integrals.periodic import RangeSeparation
 from hafnium.integrals.two_electron import DEFAULT_SCHWARZ_THRESHOLD
-from hafnium.molecule import Molecule
-from hafnium.structured import BlockMatrix, BlockStructure
+from hafnium.molecule import Cell, Molecule
+from hafnium.structured import BlockMatrix, BlockStructure, Ring
+from hafnium.structured.dense import expand_k
+from hafnium.structured.validation import cast_to_ring
+from hafnium.symmetry import KPoints
 
 
 class CoulombExchange(Protocol):
-    """Spatial Coulomb and exchange contractions of the two-electron integrals."""
+    """Spatial Coulomb and exchange contractions of the two-electron integrals.
+
+    The arrays are ``[ao, ao]`` for a molecular Hamiltonian and
+    ``[kpt, ao, ao]`` over the full k set for a periodic one.
+    """
 
     @property
     def n_ao(self) -> int:
@@ -34,11 +57,11 @@ class CoulombExchange(Protocol):
         ...
 
     def coulomb(self, density: Array) -> Array:
-        """``J[u, v] = Σ_wx (uv|wx) D[w, x]`` for a spatial ``density[ao, ao]``."""
+        """``J[u, v] = Σ_wx (uv|wx) D[w, x]`` for a spatial ``density``."""
         ...
 
     def exchange(self, density: Array) -> Array:
-        """``K[u, v] = Σ_wx (uw|xv) D[w, x]`` for a spatial ``density[ao, ao]``."""
+        """``K[u, v] = Σ_wx (uw|xv) D[w, x]`` for a spatial ``density``."""
         ...
 
 
@@ -149,42 +172,181 @@ class DensityFittedCoulombExchange:
         return left @ xp.reshape(self.df_tensor, (self.n_aux * n, n))
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class KPointDensityFittedCoulombExchange:
+    """Contractions with the fitted tensor over k-points and the exchange correction.
+
+    With ``B = df_tensor[k1, k2]`` of momentum transfer ``k2 − k1``
+    (ADR-0019) and the weights ``w`` of the k-points,
+    ``J(k) = Σ_P B[k, k, P] Σ_k' w_k' ⟨B[k', k', P], D(k')⟩`` with the
+    Frobenius inner product ``⟨A, D⟩ = Σ_xw conj(A[x, w]) D[x, w]``, and
+    ``K(k) = Σ_k' w_k' Σ_P B[k, k', P] D(k') B[k, k', P]† + ξ S(k) D(k) S(k)``,
+    the last term the probe-charge correction of the exchange divergence
+    with the Madelung constant ``ξ`` (ADR-0017).
+
+    Parameters
+    ----------
+    df_tensor : Array[kpt, kpt, aux, ao, ao]
+        The fitted tensor of
+        :meth:`hafnium.integrals.PeriodicDensityFitting.df_tensor`.
+    weights : Array[kpt]
+        The k-point weights, summing to one.
+    overlap : Array[kpt, ao, ao]
+        The overlap matrices ``S(k)``.
+    madelung
+        The Madelung constant of the mesh, :func:`hafnium.integrals.madelung_constant`.
+    """
+
+    df_tensor: Array
+    weights: Array
+    overlap: Array
+    madelung: float
+
+    def __post_init__(self) -> None:
+        shape = self.df_tensor.shape
+        n_kpt = shape[0] if self.df_tensor.ndim == 5 else -1
+        n_ao = shape[3] if self.df_tensor.ndim == 5 else -1
+        if self.df_tensor.ndim != 5 or shape[1] != n_kpt or shape[4] != n_ao:
+            raise InputError("the fitted tensor has shape [kpt, kpt, aux, ao, ao]")
+        if self.weights.shape != (n_kpt,) or self.overlap.shape != (n_kpt, n_ao, n_ao):
+            raise InputError("weights have shape [kpt] and the overlap [kpt, ao, ao]")
+
+    @classmethod
+    def from_cell(
+        cls,
+        engine: IntegralEngine,
+        basis: BasisSet,
+        auxiliary: BasisSet,
+        cell: Cell,
+        kpoints: KPoints,
+        *,
+        separation: RangeSeparation | None = None,
+    ) -> KPointDensityFittedCoulombExchange:
+        """Fit the integrals of ``cell`` over ``kpoints`` in the auxiliary basis."""
+        fitting = density_fitting_k(
+            engine, basis, auxiliary, cell, kpoints, separation=separation
+        )
+        return cls.from_fitting(
+            fitting,
+            overlap_k(engine, basis, cell, kpoints),
+            madelung_constant(cell.lattice, kpoints),
+        )
+
+    @classmethod
+    def from_fitting(
+        cls, fitting: PeriodicDensityFitting, overlap: Array, madelung: float
+    ) -> KPointDensityFittedCoulombExchange:
+        """Build from a periodic fitting, the overlaps and the Madelung constant."""
+        xp = array_namespace(overlap)
+        return cls(
+            fitting.df_tensor(), fitting.kpoints.weights_array(xp), overlap, madelung
+        )
+
+    @property
+    def n_kpt(self) -> int:
+        """Number of k-points."""
+        return int(self.df_tensor.shape[0])
+
+    @property
+    def n_aux(self) -> int:
+        """Number of auxiliary functions."""
+        return int(self.df_tensor.shape[2])
+
+    @property
+    def n_ao(self) -> int:
+        """Number of atomic orbitals."""
+        return int(self.df_tensor.shape[3])
+
+    def coulomb(self, density: Array) -> Array:
+        """``J(k)`` for the total ``density[kpt, ao, ao]`` over the full k set."""
+        xp = array_namespace(self.df_tensor, density)
+        diagonal = xp.stack([self.df_tensor[k, k] for k in range(self.n_kpt)])
+        inner = xp.sum(
+            xp.conj(diagonal) * xp.expand_dims(density, axis=1), axis=(-2, -1)
+        )
+        charges = xp.sum(inner * xp.expand_dims(self.weights, axis=1), axis=0)
+        return xp.sum(diagonal * charges[None, :, None, None], axis=1)
+
+    def exchange(self, density: Array) -> Array:
+        """``K(k)`` for one spin block ``density[kpt, ao, ao]`` over the full k set."""
+        xp = array_namespace(self.df_tensor, density)
+        half = self.df_tensor @ density[None, :, None, :, :]
+        product = xp.sum(half @ adjoint(self.df_tensor), axis=2)
+        weighted = xp.sum(product * self.weights[None, :, None, None], axis=1)
+        return weighted + self.madelung * (self.overlap @ density @ self.overlap)
+
+
 def coulomb_exchange_matrices(
     two_body: CoulombExchange, density: BlockMatrix
 ) -> tuple[BlockMatrix, BlockMatrix]:
     """Return ``(J, K)`` in the structure of a Hermitian ``density``.
 
-    The Coulomb matrix is built from the real part of the total density: for
-    a Hermitian density the imaginary part is antisymmetric and drops out of
-    the contraction with the symmetric integrals, so ``J`` is real in every
-    class and embeds into the structure without a cast. The exchange matrix
-    of a stored block is the contraction of each of its spin sub-blocks.
+    The Coulomb matrix is built from the total density: for a molecule its
+    real part, since for a Hermitian density the imaginary part is
+    antisymmetric and drops out of the contraction with the symmetric
+    integrals; over k-points the full set of the spin trace. The exchange
+    matrix of a stored block is the contraction of each of its spin
+    sub-blocks, over the full k set when there is a k axis, stored back at
+    the block's k-points in its ring.
     """
     n = density.n_spatial
     if n != two_body.n_ao:
         raise InputError(
             f"the density has {n} atomic orbitals, the integrals {two_body.n_ao}"
         )
-    total = density.spin_trace().blocks[0]
-    xp = array_namespace(total)
-    coulomb = two_body.coulomb(xp.astype(xp.real(total), xp.float64))
-    spatial = BlockMatrix(BlockStructure.spatial(), (coulomb,))
-    exchange = tuple(_exchange_block(two_body, block, n) for block in density.blocks)
-    return spatial.embed(density.structure), BlockMatrix(density.structure, exchange)
+    if density.structure.k_axis is None:
+        total = density.spin_trace().blocks[0]
+        xp = array_namespace(total)
+        coulomb = two_body.coulomb(xp.astype(xp.real(total), xp.float64))
+        spatial = BlockMatrix(BlockStructure.spatial(), (coulomb,))
+        exchange = tuple(
+            _exchange_block(two_body, block, n) for block in density.blocks
+        )
+        return spatial.embed(density.structure), BlockMatrix(
+            density.structure, exchange
+        )
+    return _periodic_matrices(two_body, density)
+
+
+def _periodic_matrices(
+    two_body: CoulombExchange, density: BlockMatrix
+) -> tuple[BlockMatrix, BlockMatrix]:
+    """Contract over the full k set and store the results at the stored points."""
+    structure = density.structure
+    axis, wanted, n = structure.k_axis, structure.all_kpoints, density.n_spatial
+    total = density.spin_trace()
+    (total_block,) = total.structure.stored_blocks
+    total_full = expand_k(total.structure, total_block, total.blocks[0], wanted)
+    xp = array_namespace(total_full)
+    coulomb_full = two_body.coulomb(xp.astype(total_full, xp.complex128))
+    ring = (
+        Ring.COMPLEX
+        if any(block.ring is Ring.COMPLEX for block in structure.stored_blocks)
+        else Ring.REAL
+    )
+    coulomb = BlockMatrix.from_spatial(coulomb_full, axis, ring=ring).embed(structure)
+    exchange: list[Array] = []
+    for block, array in zip(structure.stored_blocks, density.blocks, strict=True):
+        full = _exchange_block(two_body, expand_k(structure, block, array, wanted), n)
+        stored = structure.stored_kpoints(block)
+        assert stored is not None
+        kept = xp.take(full, xp.asarray(stored, dtype=xp.int64), axis=0)
+        exchange.append(cast_to_ring(xp, kept, structure.storage_ring(block)))
+    return coulomb, BlockMatrix(structure, tuple(exchange))
 
 
 def _exchange_block(two_body: CoulombExchange, block: Array, n: int) -> Array:
-    """Exchange of one stored block, spin sub-block by spin sub-block."""
+    """Exchange of one block, spin sub-block by spin sub-block, for either rank."""
     xp = array_namespace(block)
-    m = int(block.shape[0]) // n
+    m = int(block.shape[-1]) // n
     if m == 1:
         return two_body.exchange(block)
 
     def sub_block(s: int, t: int) -> Array:
-        return block[s * n : (s + 1) * n, t * n : (t + 1) * n]
+        return block[..., s * n : (s + 1) * n, t * n : (t + 1) * n]
 
     rows = [
-        xp.concat([two_body.exchange(sub_block(s, t)) for t in range(m)], axis=1)
+        xp.concat([two_body.exchange(sub_block(s, t)) for t in range(m)], axis=-1)
         for s in range(m)
     ]
-    return xp.concat(rows, axis=0)
+    return xp.concat(rows, axis=-2)

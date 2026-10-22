@@ -6,8 +6,9 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``density_fitting_<molecule>_<basis>.json``,
 ``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
 ``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json``,
-``bloch_<cell>_<basis>.json``, ``nuclear_<cell>_<basis>.json`` and
-``fitting_<cell>_<basis>.json`` with the PySCF values and their provenance.
+``bloch_<cell>_<basis>.json``, ``nuclear_<cell>_<basis>.json``,
+``fitting_<cell>_<basis>.json`` and ``kscf_<cell>_<basis>.json`` with the
+PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from tests.reference.pyscf_oracle import (
     ewald_reference,
     four_center_reference,
     fourier_transform_reference,
+    kscf_reference,
     madelung_reference,
     one_electron_reference,
     periodic_fitted_eri_reference,
@@ -53,6 +55,10 @@ from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
 from tests.reference.test_fourier_reference import STORED_CASES as FOURIER_CASES
+from tests.reference.test_kscf_reference import AUXILIARY as KSCF_AUXILIARY
+from tests.reference.test_kscf_reference import CELLS as KSCF_CELLS
+from tests.reference.test_kscf_reference import MESHES as KSCF_MESHES
+from tests.reference.test_kscf_reference import STORED_CASES as KSCF_CASES
 from tests.reference.test_nuclear_reference import CELLS as NUCLEAR_CELLS
 from tests.reference.test_nuclear_reference import MESHES as NUCLEAR_MESHES
 from tests.reference.test_nuclear_reference import STORED_CASES as NUCLEAR_CASES
@@ -250,6 +256,29 @@ def record_cells() -> None:
             "precision=1e-14; cart=False; Bohr",
             parts,
             auxiliary_basis=FITTING_AUXILIARY,
+            dimension=cell.dimension,
+            lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
+            kpoints_fractional=[list(point) for point in mesh.fractional],
+        )
+    for name, basis_name, kind in KSCF_CASES:
+        cell = KSCF_CELLS[name]()
+        basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(cell, KSCF_AUXILIARY, library=LIBRARY)
+        mesh = KSCF_MESHES[name]
+        reference = kscf_reference(cell, basis, auxiliary, mesh, kind)
+        record(
+            "kscf",
+            cell,
+            name,
+            basis_name,
+            f"pbc.scf.{kind.upper()} with density fitting in the same auxiliary "
+            "basis, exxdiv=ewald, conv_tol=1e-12, conv_tol_grad=1e-8; KGHF from "
+            "the KUHF density; spin_square of the supercell of the mesh; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            auxiliary_basis=KSCF_AUXILIARY,
+            charge=cell.charge,
+            spin=cell.spin,
             dimension=cell.dimension,
             lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
             kpoints_fractional=[list(point) for point in mesh.fractional],

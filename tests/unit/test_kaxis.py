@@ -111,7 +111,7 @@ def test_storage_follows_the_ring(
 
 def test_symmetry_spec_attaches_the_axis_of_a_k_point_set() -> None:
     mesh = KPoints.mesh((3,))
-    structure = SymmetrySpec.from_name("paired GHF").structure(mesh)
+    structure = SymmetrySpec.from_name("paired GHF").with_kpoints(mesh).structure()
     assert structure.k_axis == mesh.axis()
     assert (
         structure.with_k_axis(None) == SymmetrySpec.from_name("paired GHF").structure()

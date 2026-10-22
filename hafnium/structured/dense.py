@@ -269,7 +269,7 @@ def blocks_from_dense(
         for part, block in zip(parts, structure.stored_blocks, strict=True)
     )
     if check:
-        _require_close(
+        require_close(
             xp,
             to_dense(structure, cast),
             dense,
@@ -390,9 +390,14 @@ def _reduce_k(
     return (own + mirrored) / 2
 
 
-def _require_close(
+def require_close(
     xp: Namespace, actual: Array, expected: Array, tolerance: float, what: str
 ) -> None:
+    """Raise :class:`StructureError` unless ``actual`` matches ``expected``.
+
+    The deviation is measured relative to the largest entry of ``expected``,
+    at least one.
+    """
     scale = max(1.0, float(xp.max(xp.abs(expected))))
     deviation = float(xp.max(xp.abs(actual - expected)))
     if deviation > tolerance * scale:

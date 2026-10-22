@@ -17,6 +17,7 @@ from hafnium.backend import (
 )
 from hafnium.errors import StructureError
 from hafnium.structured import dense, embedding
+from hafnium.structured.kaxis import KAxis
 from hafnium.structured.kramers import (
     half_dimension,
     is_kramers_symmetric,
@@ -134,6 +135,63 @@ class BlockMatrix:
                 eye = xp.stack([eye] * len(stored), axis=0)
             blocks.append(eye)
         return cls(structure, tuple(blocks))
+
+    @classmethod
+    def from_spatial(
+        cls,
+        matrix: Array,
+        k_axis: KAxis | None = None,
+        *,
+        ring: Ring = Ring.REAL,
+        tolerance: float = 1e-10,
+    ) -> BlockMatrix:
+        """Build a spatial operator from its matrix, ``[n, m]`` or ``[kpt, n, m]``.
+
+        With ``k_axis`` the matrix runs over the full k set. The structure
+        is :meth:`BlockStructure.spatial` over ``ring`` with the axis. A
+        real ring stores the half zone (ADR-0015) and requires the matrix at
+        ``−k`` to be the complex conjugate of the matrix at ``k`` to within
+        ``tolerance``, relative to the largest entry, which makes it real at
+        the time-reversal invariant points; the overlap, the core
+        Hamiltonian and the Coulomb matrix of a time-reversal symmetric
+        density have that property.
+
+        Raises
+        ------
+        StructureError
+            If the shape does not fit the axis, or a real ring is requested
+            for a matrix that is not time-reversal symmetric.
+        """
+        structure = BlockStructure.spatial(ring).with_k_axis(k_axis)
+        (block,) = structure.stored_blocks
+        xp = array_namespace(matrix)
+        if k_axis is None:
+            if matrix.ndim != 2:
+                raise StructureError(
+                    "a spatial matrix without a k axis is two-dimensional, [n, m]"
+                )
+            kept, mirrored = matrix, xp.conj(matrix)
+        else:
+            if matrix.ndim != 3 or int(matrix.shape[0]) != k_axis.n_kpt:
+                raise StructureError(
+                    "a spatial matrix over a k axis is [kpt, n, m] with "
+                    f"{k_axis.n_kpt} k-points"
+                )
+            stored = structure.stored_kpoints(block)
+            assert stored is not None
+            kept = xp.take(matrix, xp.asarray(stored, dtype=xp.int64), axis=0)
+            partners = xp.asarray([k_axis.partners[k] for k in stored], dtype=xp.int64)
+            mirrored = xp.conj(xp.take(matrix, partners, axis=0))
+        if ring is Ring.REAL:
+            dense.require_close(
+                xp,
+                mirrored,
+                kept,
+                tolerance,
+                "the matrix is not time-reversal symmetric, so it is not a real "
+                "spatial operator; use the complex ring",
+            )
+        return cls(structure, (cast_to_ring(xp, kept, structure.storage_ring(block)),))
 
     def map_blocks(self, function: Callable[[Array], Array]) -> BlockMatrix:
         """Apply ``function`` to every stored block."""

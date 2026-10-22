@@ -39,36 +39,50 @@ class SpinExpectation:
 def spin_expectation(density: BlockMatrix, overlap: Array) -> SpinExpectation:
     """Spin expectation values of the determinant with ``density``.
 
+    Over k-points the traces are weighted sums over the full k set, so the
+    values are per cell; orbitals at different k-points are orthogonal, so
+    the two-body term of ``⟨S²⟩`` has no cross terms between k-points. The
+    supercell of a mesh of ``n_kpt`` points, which PySCF's k-point classes
+    report, has ``n_kpt (⟨S²⟩ − |⟨S⟩|²) + n_kpt² |⟨S⟩|²``.
+
     Parameters
     ----------
     density
         Structured density; any class, taken through its spin-orbital form.
     overlap : Array[ao, ao]
+        ``[kpt, ao, ao]`` over the full k set with a k axis.
     """
-    if density.structure.k_axis is not None:
-        raise InputError(
-            "spin expectation values across k-points are not implemented yet"
-        )
     dense = density.to_dense()
     xp = array_namespace(dense, overlap)
-    n = int(overlap.shape[0])
-    if dense.shape != (2 * n, 2 * n):
+    axis = density.structure.k_axis
+    if axis is None:
+        dense, overlap = xp.expand_dims(dense, axis=0), xp.expand_dims(overlap, axis=0)
+    weights = xp.asarray((1.0,) if axis is None else axis.weights, dtype=xp.float64)
+    n = int(overlap.shape[-1])
+    if dense.shape[-2:] != (2 * n, 2 * n) or int(overlap.shape[0]) != int(
+        dense.shape[0]
+    ):
         raise InputError("the density and the overlap act on different bases")
     q = dense @ block_diag(overlap, overlap)
-    trace_aa, trace_bb = xp.linalg.trace(q[:n, :n]), xp.linalg.trace(q[n:, n:])
+
+    def weighted(values: Array) -> Array:
+        return xp.sum(weights * values)
+
+    trace_aa = weighted(xp.linalg.trace(q[:, :n, :n]))
+    trace_bb = weighted(xp.linalg.trace(q[:, n:, n:]))
     n_electrons = _real(xp, trace_aa + trace_bb)
-    s_plus = xp.linalg.trace(q[n:, :n])
+    s_plus = weighted(xp.linalg.trace(q[:, n:, :n]))
     vector = (
         _real(xp, s_plus),
         float(xp.imag(s_plus)),
         _real(xp, trace_aa - trace_bb) / 2,
     )
-    q_total = q[:n, :n] + q[n:, n:]
+    q_total = q[:, :n, :n] + q[:, n:, n:]
     square = (
         0.75 * n_electrons
         + sum(component**2 for component in vector)
-        - _real(xp, xp.linalg.trace(q_total @ q_total)) / 2
-        + _real(xp, xp.linalg.trace(q @ q)) / 4
+        - _real(xp, weighted(xp.linalg.trace(q_total @ q_total))) / 2
+        + _real(xp, weighted(xp.linalg.trace(q @ q))) / 4
     )
     return SpinExpectation(vector, square)
 

@@ -1,6 +1,7 @@
 """Self-consistent field methods over symmetry-structured matrices.
 
-One driver, :func:`solve_scf`, serves every Fukutome class: the
+One driver, :func:`solve_scf`, serves every Fukutome class and, through
+the k axis of the structured matrices, every k-point set (ADR-0020): the
 :class:`Hamiltonian` supplies the integrals, a :class:`CoulombExchange`
 implementation builds the two-electron terms of a structured density, an
 occupation policy fills the orbitals, and :class:`Diis` accelerates the
@@ -15,15 +16,14 @@ from hafnium.scf.coulomb_exchange import (
     CoulombExchange,
     DensityFittedCoulombExchange,
     ExactCoulombExchange,
+    KPointDensityFittedCoulombExchange,
     coulomb_exchange_matrices,
 )
 from hafnium.scf.diis import Diis
 from hafnium.scf.driver import (
-    DEFAULT_OVERLAP_THRESHOLD,
     ScfIteration,
     ScfOptions,
     ScfResult,
-    canonical_orthogonalizer,
     core_hamiltonian_guess,
     orbital_gradient,
     solve_scf,
@@ -35,6 +35,10 @@ from hafnium.scf.occupation import (
     AveragedOccupation,
     OccupationPolicy,
     electrons_per_block,
+)
+from hafnium.scf.orthogonalization import (
+    DEFAULT_OVERLAP_THRESHOLD,
+    canonical_orthogonalizer,
 )
 from hafnium.scf.spin import SpinExpectation, spin_expectation
 
@@ -48,6 +52,7 @@ __all__ = [
     "EnergyTerms",
     "ExactCoulombExchange",
     "Hamiltonian",
+    "KPointDensityFittedCoulombExchange",
     "OccupationPolicy",
     "ScfIteration",
     "ScfOptions",

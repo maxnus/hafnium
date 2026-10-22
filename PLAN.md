@@ -935,9 +935,19 @@ potential. The density fitting with momentum transfer done 2026-10-22
 pair from the screened Bloch three-centre kernel and the reciprocal-space
 sums at `q + G`, independent of the range separation, reproducing the
 molecular fitting in a large box with the Madelung terms, and matching
-PySCF's fitted integrals. Next: k-point J and K with the correction,
-occupations across k, the periodic Hamiltonian and the KRHF/KUHF/KGHF
-comparisons, and the reduced-dimension reciprocal-space kernels.
+PySCF's fitted integrals. The k-point Hartree–Fock done 2026-10-22
+(ADR-0020): Coulomb and exchange matrices over the full k set with the
+exchange correction, occupations across k, spin expectation values per
+cell, the periodic Hamiltonian and the eight classes over k; KRHF, KUHF
+and KGHF match PySCF. Remaining in M5: the two- and one-dimensional
+reciprocal-space kernels. Known limitations: the universal JKFIT basis
+can be near-linearly dependent in a small cell (LiH in 4 Bohr), where the
+fitted integrals agree with PySCF only to the fitting residual of 1e-6
+and the reference tests choose their tolerance from the metric's
+conditioning; the real-space three-centre sums of diffuse functions are
+slow (STO-3G lithium: a minute), the remedy being to fit pairs of diffuse
+functions in reciprocal space, on the later list; fractional occupations
+across k-points (smearing) are not part of version 1.
 
 **M6 Spatial symmetry.** Molecular point groups: detection and
 orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.

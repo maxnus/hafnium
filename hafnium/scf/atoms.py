@@ -84,7 +84,8 @@ def atomic_density_guess(
 
     Each distinct element and shell set is converged once; the per-spin
     atomic densities are placed on the diagonal of the molecular density in
-    the order of the atoms, which is then embedded into ``structure``.
+    the order of the atoms, which is then embedded into ``structure``; over
+    k-points the same density is placed at every point.
     """
     densities: dict[tuple[str, tuple[Shell, ...]], Array] = {}
     blocks: list[Array] = []
@@ -106,4 +107,9 @@ def atomic_density_guess(
         columns.append(xp.concat([before, block, after], axis=0))
         start += width
     total = xp.concat(columns, axis=1)
-    return BlockMatrix(BlockStructure.spatial(), (total,)).embed(structure)
+    axis = structure.k_axis
+    if axis is not None:
+        # Atomic densities carry no coherence between cells, so the Bloch
+        # density matrix is the same at every k-point.
+        total = xp.asarray(xp.broadcast_to(total, (axis.n_kpt, n, n)))
+    return BlockMatrix.from_spatial(total, axis).embed(structure)

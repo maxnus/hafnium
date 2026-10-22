@@ -372,3 +372,62 @@ def periodic_fitted_eri_reference(
         ).reshape(n, n, n, n)
         for quadruple in quadruples
     }
+
+
+def kscf_reference(
+    cell: Cell,
+    basis: BasisSet,
+    auxiliary: BasisSet,
+    kpoints: KPoints,
+    kind: str,
+) -> dict[str, Any]:
+    """Converged k-point ``kind`` (``"krhf"``, ``"kuhf"``, ``"kghf"``) state from PySCF.
+
+    The two-electron terms are density-fitted in ``auxiliary`` with the
+    Ewald exchange correction (PySCF's default ``exxdiv``), the same
+    construction as ADR-0017 and ADR-0019, so the energy per cell and the
+    orbital energies at every k-point compare directly.
+
+    PySCF's k-point classes take ``cell.spin`` as ``n_alpha − n_beta`` over
+    the whole mesh, the spin per cell times the number of k-points, and
+    the ``spin_square`` of ``KUHF`` is likewise that of the supercell
+    (``spin_square_supercell`` here). ``KGHF`` has no ``spin_square`` and
+    converges from its default guess to a higher non-magnetic state, so it
+    starts from the converged ``KUHF`` density and reports that run's
+    ``spin_square``.
+    """
+    pbc_scf: Any = pytest.importorskip("pyscf.pbc.scf")
+    reference = pyscf_cell(cell, basis)
+    reference.spin = cell.spin * kpoints.n_kpt
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    auxbasis = basis_input(cell, auxiliary)
+
+    def solve(method: Any, guess: np.ndarray | None = None) -> tuple[Any, float]:
+        mean_field = method(reference, kpts=kpts).density_fit(auxbasis=auxbasis)
+        mean_field.conv_tol = 1e-12
+        mean_field.conv_tol_grad = 1e-8
+        mean_field.max_cycle = 200
+        energy = float(mean_field.kernel(dm0=guess))
+        assert mean_field.converged
+        return mean_field, energy
+
+    if kind == "krhf":
+        mean_field, energy = solve(pbc_scf.KRHF)
+        spin_square = 0.0
+    elif kind == "kuhf":
+        mean_field, energy = solve(pbc_scf.KUHF)
+        spin_square = float(mean_field.spin_square()[0])
+    else:
+        unrestricted, _ = solve(pbc_scf.KUHF)
+        spin_square = float(unrestricted.spin_square()[0])
+        alpha, beta = (np.asarray(part) for part in unrestricted.make_rdm1())
+        n = alpha.shape[-1]
+        guess = np.zeros((len(kpts), 2 * n, 2 * n), dtype=np.result_type(alpha, beta))
+        guess[:, :n, :n] = alpha
+        guess[:, n:, n:] = beta
+        mean_field, energy = solve(pbc_scf.KGHF, guess)
+    return {
+        "energy": energy,
+        "mo_energies": np.asarray(mean_field.mo_energy),
+        "spin_square_supercell": spin_square,
+    }

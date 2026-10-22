@@ -11,6 +11,7 @@ reversal and K is complex conjugation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from enum import Enum
 
 from hafnium.errors import InputError
@@ -111,6 +112,7 @@ class SymmetrySpec:
 
     spin: SpinSymmetry = SpinSymmetry.RESTRICTED
     field: Field = Field.REAL
+    kpoints: KPoints | None = dataclass_field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.spin is SpinSymmetry.RESTRICTED and self.field is Field.PAIRED:
@@ -145,7 +147,11 @@ class SymmetrySpec:
         """The Fukutome class of this specification."""
         return FUKUTOME_CLASSES[(self.spin, self.field)]
 
-    def structure(self, kpoints: KPoints | None = None) -> BlockStructure:
+    def with_kpoints(self, kpoints: KPoints | None) -> SymmetrySpec:
+        """Return the same class over ``kpoints``, the translational sectors."""
+        return SymmetrySpec(self.spin, self.field, kpoints=kpoints)
+
+    def structure(self) -> BlockStructure:
         """Block structure of one-body operators (Fock, density) in this class.
 
         With ``kpoints`` the structure carries their k axis: the blocks
@@ -153,9 +159,9 @@ class SymmetrySpec:
         and paired classes (ADR-0007, ADR-0015).
         """
         structure = self._spin_structure()
-        if kpoints is None:
+        if self.kpoints is None:
             return structure
-        return structure.with_k_axis(kpoints.axis())
+        return structure.with_k_axis(self.kpoints.axis())
 
     def _spin_structure(self) -> BlockStructure:
         if self.field is Field.PAIRED:
