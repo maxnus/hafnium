@@ -243,9 +243,14 @@ class BlockStructure:
         """Number of irrep sectors, one without sectors."""
         return 1 if self.irreps is None else self.irreps.n_irreps
 
+    @property
+    def stored_per_sector(self) -> int:
+        """Number of stored blocks in each irrep sector (all stored blocks without)."""
+        return self.n_stored // self.n_sectors
+
     def sector_slice(self, sector: int) -> slice:
         """Positions of the stored blocks of ``sector`` among all stored blocks."""
-        size = self.sector_structure.n_stored
+        size = self.stored_per_sector
         return slice(sector * size, (sector + 1) * size)
 
     @property

@@ -197,6 +197,18 @@ def test_electrons_fixed_per_irrep_give_an_excited_configuration(
     assert excited.electrons_per_irrep() == {"A1": 4.0, "B1": 2.0, "B2": 4.0}
     assert excited.energy > plain_water.energy + EXCITATION_GAIN
     check_state(excited, hamiltonian)
+    # The paired classes take the same totals and reach the same state.
+    for name, counts in [
+        ("paired UHF", {"A1": 4, "B2": (2, 2)}),
+        ("paired GHF", {"A1": 4, "B2": 4}),
+    ]:
+        paired = solve_scf(
+            hamiltonian,
+            SymmetrySpec.from_name(name, point_group=group),
+            occupation=AufbauOccupation(5, 5, counts),
+        )
+        assert paired.energy == pytest.approx(excited.energy, abs=ENERGY_TOL)
+        assert paired.electrons_per_irrep() == {"A1": 4.0, "B1": 2.0, "B2": 4.0}
     unrestricted = SymmetrySpec.from_name("UHF", point_group=group)
     triplet = solve_scf(
         hamiltonian,
@@ -247,10 +259,21 @@ def test_fixed_irrep_electrons_are_validated(
         run(generalized, AufbauOccupation(5, 5, {"A1": (3, 3)}))
     with pytest.raises(InputError, match="no irrep sectors"):
         run(SymmetrySpec.from_name("RHF"), AufbauOccupation(5, 5, {"A1": 6}))
+
+
+def test_fixed_irrep_electrons_are_integers_and_copied() -> None:
     with pytest.raises(InputError, match="non-negative"):
         AufbauOccupation(5, 5, {"A1": -2})
     with pytest.raises(InputError, match="total or"):
         AufbauOccupation(5, 5, {"A1": (1, 2, 3)})  # type: ignore[dict-item]
+    with pytest.raises(InputError, match="integers"):
+        AufbauOccupation(5, 5, {"A1": 2.0})  # type: ignore[dict-item]
+    with pytest.raises(InputError, match="integers"):
+        AufbauOccupation(5, 5, {"A1": True})
+    counts = {"A1": 6}
+    policy = AufbauOccupation(5, 5, counts)
+    counts["B1"] = 2
+    assert dict(policy.irrep_electrons or {}) == {"A1": 6}
 
 
 def test_structures_and_hamiltonians_must_agree(

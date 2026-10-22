@@ -13,10 +13,11 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from types import MappingProxyType
+from typing import Protocol, cast
 
 from hafnium.backend import Array, array_namespace
-from hafnium.errors import InputError
+from hafnium.errors import InputError, StructureError
 from hafnium.structured import Block, BlockStructure, BlockVector, Spin
 
 IrrepElectrons = Mapping[str, int | tuple[int, int]]
@@ -87,14 +88,31 @@ class AufbauOccupation:
     def __post_init__(self) -> None:
         if self.n_alpha < 0 or self.n_beta < 0:
             raise InputError("electron counts must be non-negative")
-        for label, count in (self.irrep_electrons or {}).items():
-            counts = (count,) if isinstance(count, int) else count
-            if len(counts) != 2 and not isinstance(count, int):
+        if self.irrep_electrons is None:
+            return
+        for label, count in self.irrep_electrons.items():
+            # Validated at run time beyond the annotation: floats and bools
+            # would be filled or silently taken as integers otherwise.
+            raw = cast(object, count)
+            parts = (
+                tuple(cast(tuple[object, ...], raw))
+                if isinstance(raw, tuple)
+                else (raw,)
+            )
+            values = [
+                c for c in parts if isinstance(c, int) and not isinstance(c, bool)
+            ]
+            if len(parts) not in (1, 2) or len(values) != len(parts):
                 raise InputError(
-                    f"irrep {label}: give a total or (n_alpha, n_beta), got {count!r}"
+                    f"irrep {label}: give a total or (n_alpha, n_beta) of integers, "
+                    f"got {count!r}"
                 )
-            if any(c < 0 for c in counts):
+            if any(c < 0 for c in values):
                 raise InputError(f"irrep {label}: electron counts are non-negative")
+        # A frozen policy keeps its own copy of the mapping.
+        object.__setattr__(
+            self, "irrep_electrons", MappingProxyType(dict(self.irrep_electrons))
+        )
 
     def occupy(self, mo_energies: BlockVector) -> BlockVector:
         """Occupations ``[mo]`` per stored block: ones for the lowest orbitals.
@@ -164,8 +182,8 @@ def _occupy(
             )
         )
         return BlockVector(structure, blocks)
-    size = base.n_stored
-    filled: list[Array | None] = [None] * structure.n_stored
+    size = structure.stored_per_sector
+    filled: dict[int, Array] = {}
     for index, (block, count) in enumerate(
         zip(base.stored_blocks, counts, strict=True)
     ):
@@ -198,12 +216,9 @@ def _occupy(
             width = int(part.shape[-1])
             filled[position] = joined[..., start : start + width]
             start += width
-    return BlockVector(structure, tuple(_present(block) for block in filled))
-
-
-def _present(block: Array | None) -> Array:
-    assert block is not None
-    return block
+    return BlockVector(
+        structure, tuple(filled[position] for position in range(structure.n_stored))
+    )
 
 
 def _fixed_counts(
@@ -223,7 +238,7 @@ def _fixed_counts(
     for label, count in fixed.items():
         try:
             sector = sectors.index(label)
-        except Exception as error:
+        except StructureError as error:
             raise InputError(str(error)) from None
         if block.spin is Spin.SPINOR:
             if not isinstance(count, int):

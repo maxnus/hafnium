@@ -336,10 +336,9 @@ def _molecular_matrices(
             _exchange_block(two_body, block, n) for block in density.blocks
         )
         return coulomb, BlockMatrix(structure, exchange)
-    base = structure.sector_structure
-    size = base.n_stored
-    blocks: list[Array | None] = [None] * structure.n_stored
-    for index, block in enumerate(base.stored_blocks):
+    size = structure.stored_per_sector
+    blocks: dict[int, Array] = {}
+    for index, block in enumerate(structure.sector_structure.stored_blocks):
         spinor = block.spin is Spin.SPINOR
         parts = [
             density.blocks[sector * size + index] for sector in range(sectors.n_irreps)
@@ -351,12 +350,9 @@ def _molecular_matrices(
             blocks[sector * size + index] = cast_to_ring(
                 xp, part, structure.storage_ring(block)
             )
-    return coulomb, BlockMatrix(structure, tuple(_present(block) for block in blocks))
-
-
-def _present(block: Array | None) -> Array:
-    assert block is not None
-    return block
+    return coulomb, BlockMatrix(
+        structure, tuple(blocks[position] for position in range(structure.n_stored))
+    )
 
 
 def _periodic_matrices(

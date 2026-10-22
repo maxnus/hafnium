@@ -283,7 +283,7 @@ class BlockMatrix:
     @property
     def n_spatial(self) -> int:
         """Number of spatial basis functions in the row space, over all sectors."""
-        size = self.structure.sector_structure.n_stored
+        size = self.structure.stored_per_sector
         rows = sum(
             int(self.blocks[sector * size].shape[-2])
             for sector in range(self.structure.n_sectors)
@@ -572,7 +572,7 @@ def _sector_shapes(
 ) -> tuple[tuple[int, int], ...]:
     """Spatial shape of every stored block for a matrix of spatial ``shape``."""
     sectors = structure.irreps
-    size = structure.sector_structure.n_stored
+    size = structure.stored_per_sector
     if sectors is None:
         return (shape,) * size
     if shape != (sectors.n_functions, sectors.n_functions):

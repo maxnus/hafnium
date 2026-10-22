@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from hafnium.backend import Array, array_namespace
-from hafnium.structured.dense import block_diag, expand_k, spin_blocks_at
+from hafnium.backend import Array, array_namespace, block_diag
+from hafnium.structured.dense import expand_k, spin_blocks_at
 from hafnium.structured.structure import BlockStructure, Partner, Ring, Spin
 from hafnium.structured.validation import cast_to_ring
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from hafnium.backend import Array, Namespace, adjoint, array_namespace
+from hafnium.backend import Array, Namespace, adjoint, array_namespace, block_diag
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import (
     half_dimension,
@@ -241,27 +241,6 @@ def weighted_total(structure: BlockStructure, values: Sequence[Array]) -> Array:
 # ------------------------------------------------------------------ dense form
 
 
-def block_diag(a: Array, b: Array) -> Array:
-    """Block-diagonal matrices with ``a`` and ``b`` on the diagonal, batched."""
-    xp = array_namespace(a, b)
-    dtype = xp.result_type(a, b)
-    top = xp.concat(
-        [
-            xp.astype(a, dtype),
-            xp.zeros((*a.shape[:-1], b.shape[-1]), dtype=dtype),
-        ],
-        axis=-1,
-    )
-    bottom = xp.concat(
-        [
-            xp.zeros((*b.shape[:-1], a.shape[-1]), dtype=dtype),
-            xp.astype(b, dtype),
-        ],
-        axis=-1,
-    )
-    return xp.concat([top, bottom], axis=-2)
-
-
 def to_dense(
     structure: BlockStructure, stored: Sequence[Array], *, orbitals: bool = False
 ) -> Array:
@@ -286,7 +265,7 @@ def column_split(
     """
     if structure.is_spinor:
         return None
-    size = structure.sector_structure.n_stored
+    size = structure.stored_per_sector
     columns = [
         sum(
             int(stored[sector * size + index].shape[-1])

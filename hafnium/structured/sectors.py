@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from hafnium.backend import Array, array_namespace
+from hafnium.backend import Array, array_namespace, block_diag
 from hafnium.errors import StructureError
 
 ORTHONORMALITY_TOLERANCE = 1e-10
@@ -94,6 +94,8 @@ class IrrepSectors:
             )
 
     def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
         if not isinstance(other, IrrepSectors):
             return NotImplemented
         if self.group != other.group or self.labels != other.labels:
@@ -148,14 +150,7 @@ class IrrepSectors:
         ``block_diag(U_Γ, U_Γ)`` with alpha components first.
         """
         block = self.coefficients[irrep]
-        if not spinor:
-            return block
-        xp = array_namespace(block)
-        zeros = xp.zeros(block.shape, dtype=block.dtype)
-        return xp.concat(
-            [xp.concat([block, zeros], axis=1), xp.concat([zeros, block], axis=1)],
-            axis=0,
-        )
+        return block_diag(block, block) if spinor else block
 
     def to_atomic(
         self, parts: Sequence[Array], *, spinor: bool, orbitals: bool

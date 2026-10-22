@@ -17,10 +17,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from hafnium.backend import Array, Namespace, array_namespace
+from hafnium.backend import Array, Namespace, array_namespace, block_diag
 from hafnium.errors import InputError
 from hafnium.structured import BlockMatrix
-from hafnium.structured.dense import block_diag
 
 
 @dataclass(frozen=True, slots=True)
