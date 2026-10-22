@@ -729,7 +729,11 @@ module. No printing from library code.
   against PySCF for every Fukutome class that PySCF can produce (RHF,
   UHF, GHF, their complex variants via perturbed guesses, RKS, UKS,
   DF-MP2, CCSD, CCSD(T)). PySCF is a development dependency only, and
-  these tests carry a `reference` marker.
+  these tests carry a `reference` marker. PySCF is the oracle, not the
+  truth: it has bugs and conventions of its own, so a discrepancy is
+  located on both sides before a tolerance is loosened or Hafnium is
+  changed, the independent checks below carry equal weight, and any
+  oddity found in PySCF is recorded with the test that works around it.
 - Integral tests compare every integral type against libcint, and every
   derivative integral against finite differences of the undifferentiated
   integral.
