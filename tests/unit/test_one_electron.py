@@ -16,6 +16,7 @@ from hafnium.integrals import (
 )
 from hafnium.molecule import Molecule
 from tests.molecules import hydrogen, water
+from tests.spectra import generalized_eigenvalues
 from tests.tolerances import (
     ATTENUATION_LIMIT_TOL,
     INTEGRAL_TOL,
@@ -106,12 +107,6 @@ def test_integrals_are_invariant_under_translation_and_rotation() -> None:
             generalized_eigenvalues(after, s_new),
             atol=SPECTRUM_TOL,
         )
-
-
-def generalized_eigenvalues(a: np.ndarray, s: np.ndarray) -> np.ndarray:
-    lower = np.linalg.cholesky(s)
-    inverse = np.linalg.inv(lower)
-    return np.linalg.eigvalsh(inverse @ a @ inverse.T)
 
 
 def test_images_translate_the_ket() -> None:

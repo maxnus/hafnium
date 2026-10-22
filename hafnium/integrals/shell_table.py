@@ -89,12 +89,7 @@ class ShellTable:
         InputError
             If ``basis`` was built for other atoms than those of ``system``.
         """
-        if basis.atom_symbols != system.symbols:
-            raise InputError(
-                f"the basis set was built for the atoms {basis.atom_symbols} but "
-                f"the system has {system.symbols}; build it with "
-                "BasisSet.for_atoms(system, ...)"
-            )
+        require_basis_for_atoms(basis, system)
         positions = to_host(system.positions_array())
         angular_momenta: list[int] = []
         centers: list[Array] = []
@@ -140,6 +135,22 @@ class ShellTable:
                 int(k) * (2 * int(l) + 1)
                 for k, l in zip(counts, self.angular_momenta, strict=True)
             )
+        )
+
+
+def require_basis_for_atoms(basis: BasisSet, system: AtomicSystem) -> None:
+    """Raise unless ``basis`` was built for the atoms of ``system``.
+
+    Raises
+    ------
+    InputError
+        If the element symbols of the two differ.
+    """
+    if basis.atom_symbols != system.symbols:
+        raise InputError(
+            f"the basis set was built for the atoms {basis.atom_symbols} but "
+            f"the system has {system.symbols}; build it with "
+            "BasisSet.for_atoms(system, ...)"
         )
 
 

@@ -13,28 +13,29 @@ import numpy as np
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.molecule import Cell, Molecule
+from hafnium.molecule import AtomicSystem, Cell, Molecule
+from hafnium.symmetry import KPoints
 
 pyscf = pytest.importorskip("pyscf")
 gto: Any = pyscf.gto
 df: Any = pytest.importorskip("pyscf.df")
 
 
-def atom_label(molecule: Molecule, index: int) -> str:
+def atom_label(system: AtomicSystem, index: int) -> str:
     """The per-atom label PySCF keys basis input by, ``"O0"``, ``"H1"``, ..."""
-    return f"{molecule.atoms[index].symbol}{index}"
+    return f"{system.atoms[index].symbol}{index}"
 
 
-def basis_input(molecule: Molecule, basis: BasisSet) -> dict[str, list[Any]]:
+def basis_input(system: AtomicSystem, basis: BasisSet) -> dict[str, list[Any]]:
     """``basis`` in PySCF's internal format, keyed by :func:`atom_label`."""
     result: dict[str, list[Any]] = {}
-    for index in range(molecule.n_atoms):
+    for index in range(system.n_atoms):
         shells = [
             shell
             for shell, centre in zip(basis.shells, basis.shell_atoms, strict=True)
             if centre == index
         ]
-        result[atom_label(molecule, index)] = [
+        result[atom_label(system, index)] = [
             [
                 shell.angular_momentum,
                 *[
@@ -223,6 +224,68 @@ def scf_reference(
         "mo_energies": np.asarray(mean_field.mo_energy),
         "mo_occupations": np.asarray(mean_field.mo_occ),
         "spin_square": spin_square,
+    }
+
+
+def padded_lattice_vectors(cell: Cell, vacuum: float) -> np.ndarray:
+    """Three lattice vectors ``[3, 3]`` for PySCF, padded orthogonally.
+
+    A chain or a slab gets vectors of length ``vacuum`` Bohr orthogonal to
+    its periodic directions, so that PySCF's reciprocal vectors of the
+    periodic directions coincide with the cell's and no image along the
+    padding overlaps the cell.
+    """
+    vectors = [np.asarray(vector) for vector in cell.lattice.vectors]
+    if len(vectors) == 1:
+        (a,) = vectors
+        trial = np.eye(3)[np.argmin(np.abs(a))]
+        first = np.cross(a, trial)
+        vectors.append(vacuum * first / np.linalg.norm(first))
+    if len(vectors) == 2:
+        normal = np.cross(vectors[0], vectors[1])
+        vectors.append(vacuum * normal / np.linalg.norm(normal))
+    return np.asarray(vectors)
+
+
+def pyscf_cell(cell: Cell, basis: BasisSet, *, vacuum: float = 80.0) -> Any:
+    """A ``pyscf.pbc.gto.Cell`` with the same atoms, order, shells and lattice.
+
+    PySCF's lattice sums are cut off at a precision of 1e-14, below the
+    integral tolerance, so that the comparison is limited by the kernels and
+    not by the images included.
+    """
+    pbc_gto: Any = pytest.importorskip("pyscf.pbc.gto")
+    atoms = [
+        [atom_label(cell, index), list(atom.position)]
+        for index, atom in enumerate(cell.atoms)
+    ]
+    reference = pbc_gto.Cell(
+        atom=atoms,
+        a=padded_lattice_vectors(cell, vacuum),
+        basis=basis_input(cell, basis),
+        unit="Bohr",
+        dimension=cell.dimension,
+        low_dim_ft_type="inf_vacuum",
+        precision=1e-14,
+        verbose=0,
+    )
+    reference.build()
+    return reference
+
+
+def bloch_one_electron_reference(
+    cell: Cell, basis: BasisSet, kpoints: KPoints
+) -> dict[str, np.ndarray]:
+    """Overlap and kinetic matrices ``[kpt, ao, ao]`` at ``kpoints`` from PySCF.
+
+    PySCF forms the same Bloch sums ``Σ_T exp(i k·T) M_T`` over libcint's
+    integrals, with the k-points passed in Cartesian coordinates.
+    """
+    reference = pyscf_cell(cell, basis)
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    return {
+        "overlap": np.asarray(reference.pbc_intor("int1e_ovlp", kpts=kpts)),
+        "kinetic": np.asarray(reference.pbc_intor("int1e_kin", kpts=kpts)),
     }
 
 
