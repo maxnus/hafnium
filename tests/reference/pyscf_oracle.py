@@ -341,3 +341,34 @@ def madelung_reference(cell: Cell, basis: BasisSet, kpoints: KPoints) -> float:
     reference = pyscf_cell(cell, basis)
     kpts = np.asarray(kpoints.cartesian(cell.lattice))
     return float(tools.pbc.madelung(reference, kpts))
+
+
+def periodic_fitted_eri_reference(
+    cell: Cell,
+    basis: BasisSet,
+    auxiliary: BasisSet,
+    kpoints: KPoints,
+    quadruples: list[tuple[int, int, int, int]],
+) -> dict[str, np.ndarray]:
+    """Fitted ``(u k1 v k2 | w k3 x k4)`` from PySCF's Gaussian density fitting.
+
+    PySCF's ``GDF`` with the same auxiliary basis fits the pair densities
+    with the Coulomb metric and the range-separated kernel of its
+    ``rsdf_builder``, the ``G = 0`` term of the metric carrying the
+    ``−π/ω²`` finite part of ADR-0012, so its ``get_eri`` compares directly
+    with :meth:`hafnium.integrals.PeriodicDensityFitting.eri`: chemists'
+    notation with the first function of each pair conjugated.
+    """
+    pbc_df: Any = pytest.importorskip("pyscf.pbc.df")
+    reference = pyscf_cell(cell, basis)
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    fitting = pbc_df.GDF(reference, kpts=kpts)
+    fitting.auxbasis = basis_input(cell, auxiliary)
+    fitting.build()
+    n = reference.nao
+    return {
+        "".join(str(k) for k in quadruple): np.asarray(
+            fitting.get_eri([kpts[k] for k in quadruple], compact=False)
+        ).reshape(n, n, n, n)
+        for quadruple in quadruples
+    }

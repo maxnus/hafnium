@@ -25,3 +25,4 @@ ADR that supersedes it.
 | [0016](0016-lattice-sums-of-one-electron-integrals.md) | Lattice sums of one-electron integrals | accepted 2026-10-22 |
 | [0017](0017-probe-charge-exchange-correction.md) | Probe-charge Ewald correction of the exchange divergence | accepted 2026-10-22 |
 | [0018](0018-screened-lattice-sums-in-the-kernels.md) | Screened lattice sums in the kernels and the regularized nuclear attraction | accepted 2026-10-22 |
+| [0019](0019-density-fitting-with-momentum-transfer.md) | Density fitting with momentum transfer | accepted 2026-10-22 |

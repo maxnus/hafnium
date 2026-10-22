@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from hafnium import _kernels
 from hafnium.backend import Array, to_host
-from hafnium.integrals.engine import COULOMB, CoulombKernel, PointCharges
+from hafnium.integrals.engine import (
+    COULOMB,
+    BlochImages,
+    CoulombKernel,
+    PointCharges,
+)
 from hafnium.integrals.shell_table import ShellTable
 
 
@@ -66,11 +71,17 @@ class RustEngine:
         ket: ShellTable,
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
     ) -> Array:
         """Two-centre Coulomb integrals ``[image, aux, aux]``."""
         return _kernels.coulomb_two_center(
-            _kernel_table(bra), _kernel_table(ket), to_host(translations), omega
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            kernel.omega,
+            kernel.short_range,
+            threshold,
         )
 
     def coulomb_three_center(
@@ -80,7 +91,8 @@ class RustEngine:
         ket: ShellTable,
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
     ) -> Array:
         """Three-centre Coulomb integrals ``[image, aux, ao, ao]``."""
         return _kernels.coulomb_three_center(
@@ -88,7 +100,35 @@ class RustEngine:
             _kernel_table(bra),
             _kernel_table(ket),
             to_host(translations),
-            omega,
+            kernel.omega,
+            kernel.short_range,
+            threshold,
+        )
+
+    def coulomb_three_center_bloch(
+        self,
+        auxiliary: ShellTable,
+        bra: ShellTable,
+        ket: ShellTable,
+        images: BlochImages,
+        *,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
+    ) -> Array:
+        """Bloch-summed three-centre integrals, complex ``[kpt, kpt, aux, ao, ao]``."""
+        return _kernels.coulomb_three_center_bloch(
+            _kernel_table(auxiliary),
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(images.images),
+            to_host(images.coordinates[0], "int64"),
+            to_host(images.steps),
+            to_host(images.coordinates[1], "int64"),
+            to_host(images.phases[0], "complex128"),
+            to_host(images.phases[1], "complex128"),
+            kernel.omega,
+            kernel.short_range,
+            threshold,
         )
 
     def coulomb_four_center(
@@ -97,7 +137,7 @@ class RustEngine:
         ket: tuple[ShellTable, ShellTable],
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
         threshold: float = 0.0,
     ) -> Array:
         """Four-centre Coulomb integrals ``[image, ao, ao, ao, ao]``."""
@@ -105,7 +145,8 @@ class RustEngine:
             (_kernel_table(bra[0]), _kernel_table(bra[1])),
             (_kernel_table(ket[0]), _kernel_table(ket[1])),
             to_host(translations),
-            omega,
+            kernel.omega,
+            kernel.short_range,
             threshold,
         )
 
@@ -115,11 +156,15 @@ class RustEngine:
         ket: ShellTable,
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
     ) -> Array:
         """Schwarz bounds of the shell pairs ``[image, shell, shell]``."""
         return _kernels.schwarz_bounds(
-            _kernel_table(bra), _kernel_table(ket), to_host(translations), omega
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            kernel.omega,
+            kernel.short_range,
         )
 
     def fourier_transform(self, table: ShellTable, g_vectors: Array) -> Array:

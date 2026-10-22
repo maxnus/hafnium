@@ -83,6 +83,25 @@ def _primitive_radius(alpha: float, l: int, ratio: float) -> float:
     return high
 
 
+def function_absolute_integral(shell: Shell) -> float:
+    """Return a bound on ``∫ |χ(r)| dr`` over the functions of ``shell``.
+
+    With ``|Y_lm| ≤ Y_l = sqrt((2l + 1) / 4π)`` on the sphere and the radial
+    part bounded by ``Σ_i |c_i| r^l exp(−α_i r²)``, the integral is at most
+    ``4π Y_l Σ_i |c_i| Γ((l + 3) / 2) / (2 α_i^{(l + 3) / 2})``; the largest
+    coefficients over the contractions are taken. It bounds the Fourier
+    transform of the function at every reciprocal vector.
+    """
+    l = shell.angular_momentum
+    angular = 4.0 * math.pi * math.sqrt((2 * l + 1) / (4.0 * math.pi))
+    rows = shell.primitive_coefficients()
+    total = 0.0
+    for index, alpha in enumerate(shell.exponents):
+        coefficient = max(abs(row[index]) for row in rows)
+        total += coefficient * math.gamma((l + 3) / 2) / (2.0 * alpha ** ((l + 3) / 2))
+    return angular * total
+
+
 def atom_radii(basis: BasisSet, precision: float) -> tuple[float, ...]:
     """Return the radius of every atom: the largest radius among its shells."""
     radii = [0.0] * basis.n_atoms
@@ -146,6 +165,18 @@ def reaching_images(
         )
         keep = keep | xp.any(distance <= xp.expand_dims(reach[index], 0), axis=1)
     return candidates[keep]
+
+
+def integer_coordinates(lattice: Lattice, translations: Array) -> Array:
+    """Return the integer lattice coordinates ``[image, d]`` of ``translations``.
+
+    The translations ``[image, 3]`` in Bohr are lattice vectors; their
+    fractional coordinates are rounded to the nearest integers, which label
+    the images for the pair lookup of the compiled layer (ADR-0019).
+    """
+    xp = array_namespace(translations)
+    fractional = lattice.fractional_coordinates(translations)
+    return xp.astype(xp.floor(fractional + 0.5), xp.int64)
 
 
 def require_kpoints_for_lattice(kpoints: KPoints, lattice: Lattice) -> None:

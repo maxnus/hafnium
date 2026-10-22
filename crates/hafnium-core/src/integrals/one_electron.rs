@@ -18,63 +18,10 @@ use rayon::prelude::*;
 
 use super::ShellTable;
 use super::cartesian::n_cartesian;
-use super::coulomb::{HermiteTable, HermiteWorkspace};
+use super::coulomb::{CoulombKernel, HermiteTable, HermiteWorkspace};
 use super::pairs::{ENVELOPE_EPSILON, PrimitivePair, hermite_envelopes, primitive_pairs};
-use super::two_electron::{Tables, check_finite, check_omega};
+use super::two_electron::{Tables, check_finite, check_threshold};
 use crate::Error;
-
-/// The Coulomb kernel of an attraction integral.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CoulombKernel {
-    /// `1 / r`.
-    Full,
-    /// `erf(ω r) / r`, the long-range part of the range separation.
-    LongRange(f64),
-    /// `erfc(ω r) / r`, the short-range part.
-    ShortRange(f64),
-}
-
-impl CoulombKernel {
-    /// Build from the binding's arguments: `omega` selects the
-    /// range-separated kernels and `short_range` picks `erfc` over `erf`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidArgument`] if `omega` is not positive, or if
-    /// `short_range` is set without `omega`.
-    pub fn new(omega: Option<f64>, short_range: bool) -> Result<Self, Error> {
-        check_omega(omega)?;
-        match (omega, short_range) {
-            (None, false) => Ok(Self::Full),
-            (None, true) => Err(Error::InvalidArgument(
-                "the short-range kernel needs the range-separation parameter omega".to_string(),
-            )),
-            (Some(w), false) => Ok(Self::LongRange(w)),
-            (Some(w), true) => Ok(Self::ShortRange(w)),
-        }
-    }
-
-    /// The range-separation parameter, if the kernel has one.
-    fn omega(self) -> Option<f64> {
-        match self {
-            Self::Full => None,
-            Self::LongRange(w) | Self::ShortRange(w) => Some(w),
-        }
-    }
-
-    /// The exponent range `[s_lo, s_hi]` with
-    /// `R_000 = (1/√p) ∫_{s_lo}^{s_hi} exp(−s² R²) ds` for a pair of total
-    /// exponent `p`: `[0, √p]` for the full kernel, `[0, √α]` and `[√α, √p]`
-    /// for the long- and short-range parts with `α = p ω² / (p + ω²)`.
-    fn exponent_range(self, p: f64) -> (f64, f64) {
-        let attenuated = |w: f64| (p * w * w / (p + w * w)).sqrt();
-        match self {
-            Self::Full => (0.0, p.sqrt()),
-            Self::LongRange(w) => (0.0, attenuated(w)),
-            Self::ShortRange(w) => (attenuated(w), p.sqrt()),
-        }
-    }
-}
 
 /// Overlap integrals `S[T][μ][ν] = ⟨μ | ν(r − T)⟩` for each translation
 /// `T`, as a row-major `[n_translations, n_bra, n_ket]` array.
@@ -156,7 +103,7 @@ pub fn nuclear_attraction(
             right: positions.len(),
         });
     }
-    check_omega(kernel.omega())?;
+    kernel.validate()?;
     check_threshold(threshold)?;
     check_finite(translations, "translations")?;
     check_finite(positions, "positions")?;
@@ -185,39 +132,16 @@ pub fn nuclear_attraction(
                     radius_squared = (bound / threshold).ln() / decay;
                 }
             }
-            let alpha = match kernel {
-                CoulombKernel::Full => pair.p,
-                CoulombKernel::LongRange(_) => high * high,
-                CoulombKernel::ShortRange(_) => low * low,
-            };
-            let attenuation = (alpha / pair.p).sqrt();
             let mut summed = HermiteTable::zeros(pair.order);
             for (charge, position) in charges.iter().zip(positions) {
                 let pc: [f64; 3] = std::array::from_fn(|axis| pair.center[axis] - position[axis]);
                 if pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2] > radius_squared {
                     continue;
                 }
-                // Attenuation replaces p by α in every Hermite integral and
-                // scales the result by sqrt(α / p); the short-range kernel is
-                // the full kernel minus the attenuated one.
-                match kernel {
-                    CoulombKernel::Full => {
-                        summed.add_scaled(workspace.compute(pair.order, pair.p, pc), -charge);
-                    }
-                    CoulombKernel::LongRange(_) => {
-                        summed.add_scaled(
-                            workspace.compute(pair.order, alpha, pc),
-                            -charge * attenuation,
-                        );
-                    }
-                    CoulombKernel::ShortRange(_) => {
-                        summed.add_scaled(workspace.compute(pair.order, pair.p, pc), -charge);
-                        summed.add_scaled(
-                            workspace.compute(pair.order, alpha, pc),
-                            charge * attenuation,
-                        );
-                    }
-                }
+                summed.add_scaled(
+                    workspace.compute_kernel(pair.order, pair.p, kernel, pc),
+                    -charge,
+                );
             }
             let prefactor = 2.0 * PI / pair.p;
             for (ia, ca) in a.iter().enumerate() {
@@ -259,16 +183,6 @@ fn attraction_bound(
         .map(|(t, h)| high.powi(i32::try_from(t).expect("order fits in i32")) * h)
         .collect();
     2.0 * PI / pair.p / pair.p.sqrt() * (high - low) * pair.envelope(a, b, &weights)
-}
-
-pub(crate) fn check_threshold(threshold: f64) -> Result<(), Error> {
-    if threshold.is_finite() && threshold >= 0.0 {
-        Ok(())
-    } else {
-        Err(Error::InvalidArgument(
-            "the screening threshold is finite and non-negative".to_string(),
-        ))
-    }
 }
 
 /// Loop over translations in parallel and over shell pairs, let `values_fn`
@@ -487,7 +401,6 @@ mod tests {
         let shell = s_shell(1.0, [0.0; 3]);
         let full = CoulombKernel::Full;
         assert!(nuclear_attraction(&shell, &shell, &[[0.0; 3]], &[1.0], &[], full, 0.0).is_err());
-        assert!(CoulombKernel::new(Some(0.0), false).is_err());
         let unchecked = CoulombKernel::ShortRange(f64::NAN);
         assert!(
             nuclear_attraction(
@@ -500,13 +413,6 @@ mod tests {
                 0.0
             )
             .is_err()
-        );
-        assert!(CoulombKernel::new(Some(f64::NAN), true).is_err());
-        assert!(CoulombKernel::new(None, true).is_err());
-        assert_eq!(CoulombKernel::new(None, false).expect("valid"), full);
-        assert_eq!(
-            CoulombKernel::new(Some(0.5), true).expect("valid"),
-            CoulombKernel::ShortRange(0.5)
         );
         for threshold in [-1.0, f64::NAN, f64::INFINITY] {
             assert!(

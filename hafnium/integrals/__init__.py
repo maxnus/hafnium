@@ -13,7 +13,12 @@ the nuclear attraction regularized by the range-separated Coulomb kernel
 """
 
 from hafnium.integrals.density_fitting import DensityFitting
-from hafnium.integrals.engine import CoulombKernel, IntegralEngine, PointCharges
+from hafnium.integrals.engine import (
+    BlochImages,
+    CoulombKernel,
+    IntegralEngine,
+    PointCharges,
+)
 from hafnium.integrals.native import RustEngine
 from hafnium.integrals.one_electron import (
     core_hamiltonian,
@@ -23,8 +28,10 @@ from hafnium.integrals.one_electron import (
 )
 from hafnium.integrals.periodic import (
     DEFAULT_LATTICE_SUM_PRECISION,
+    PeriodicDensityFitting,
     bloch_sum,
     core_hamiltonian_k,
+    density_fitting_k,
     kinetic_k,
     lattice_images,
     madelung_constant,
@@ -36,15 +43,18 @@ from hafnium.integrals.two_electron import eri
 
 __all__ = [
     "DEFAULT_LATTICE_SUM_PRECISION",
+    "BlochImages",
     "CoulombKernel",
     "DensityFitting",
     "IntegralEngine",
+    "PeriodicDensityFitting",
     "PointCharges",
     "RustEngine",
     "ShellTable",
     "bloch_sum",
     "core_hamiltonian",
     "core_hamiltonian_k",
+    "density_fitting_k",
     "eri",
     "kinetic",
     "kinetic_k",

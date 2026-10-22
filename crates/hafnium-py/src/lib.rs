@@ -167,8 +167,7 @@ fn nuclear_attraction<'py>(
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let translations = to_vectors(&translations, "translations")?;
     let positions = to_vectors(&positions, "positions")?;
-    let kernel =
-        integrals::CoulombKernel::new(omega, short_range).map_err(|error| value_error(&error))?;
+    let kernel = to_kernel(omega, short_range)?;
     let values = integrals::nuclear_attraction(
         &bra.inner,
         &ket.inner,
@@ -183,9 +182,11 @@ fn nuclear_attraction<'py>(
 }
 
 /// Two-centre Coulomb integrals for each translation of the ket,
-/// `[image, bra, ket]`; `omega` selects the `erf(ωr)/r` kernel.
+/// `[image, bra, ket]`; `omega` selects the `erf(ωr)/r` kernel, or
+/// `erfc(ωr)/r` with `short_range`, and terms bounded below `threshold`
+/// are skipped.
 #[pyfunction]
-#[pyo3(signature = (bra, ket, translations, omega=None))]
+#[pyo3(signature = (bra, ket, translations, omega=None, short_range=false, threshold=0.0))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
@@ -196,20 +197,28 @@ fn coulomb_two_center<'py>(
     ket: &PyShellTable,
     translations: PyReadonlyArray2<'py, f64>,
     omega: Option<f64>,
+    short_range: bool,
+    threshold: f64,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let translations = to_vectors(&translations, "translations")?;
-    let values = integrals::coulomb_two_center(&bra.inner, &ket.inner, &translations, omega)
-        .map_err(|error| value_error(&error))?;
+    let kernel = to_kernel(omega, short_range)?;
+    let values =
+        integrals::coulomb_two_center(&bra.inner, &ket.inner, &translations, kernel, threshold)
+            .map_err(|error| value_error(&error))?;
     to_image_matrices(py, values, translations.len(), bra, ket)
 }
 
 /// Three-centre Coulomb integrals `(P | μ ν)` for each pair of translations
 /// (auxiliary, ket), `[image, aux, bra, ket]`.
 #[pyfunction]
-#[pyo3(signature = (auxiliary, bra, ket, translations, omega=None))]
+#[pyo3(signature = (auxiliary, bra, ket, translations, omega=None, short_range=false, threshold=0.0))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the binding mirrors the kernel's arguments"
 )]
 fn coulomb_three_center<'py>(
     py: Python<'py>,
@@ -218,14 +227,18 @@ fn coulomb_three_center<'py>(
     ket: &PyShellTable,
     translations: PyReadonlyArray3<'py, f64>,
     omega: Option<f64>,
+    short_range: bool,
+    threshold: f64,
 ) -> PyResult<Bound<'py, PyArray4<f64>>> {
     let translations = to_vector_sets::<2>(&translations)?;
+    let kernel = to_kernel(omega, short_range)?;
     let values = integrals::coulomb_three_center(
         &auxiliary.inner,
         &bra.inner,
         &ket.inner,
         &translations,
-        omega,
+        kernel,
+        threshold,
     )
     .map_err(|error| value_error(&error))?;
     let shape = [
@@ -237,11 +250,79 @@ fn coulomb_three_center<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
+/// Three-centre Coulomb integrals summed over the image pairs `(i, j)` of
+/// the orbital functions with phases, complex `[kpt, kpt, aux, bra, ket]`:
+/// `Σ_{ij} bra_phases[k1, i] ket_phases[k2, j] (P | μ(T_i) ν(T_j))` with
+/// the auxiliary function in the home cell, over the pairs whose
+/// difference `T_j − T_i` is one of the `steps`, found through the
+/// integer lattice `coordinates` of the images and of the steps.
+#[pyfunction]
+#[pyo3(signature = (auxiliary, bra, ket, images, image_coordinates, steps, step_coordinates, bra_phases, ket_phases, omega=None, short_range=false, threshold=0.0))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the binding mirrors the kernel's arguments"
+)]
+fn coulomb_three_center_bloch<'py>(
+    py: Python<'py>,
+    auxiliary: &PyShellTable,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    images: PyReadonlyArray2<'py, f64>,
+    image_coordinates: PyReadonlyArray2<'py, i64>,
+    steps: PyReadonlyArray2<'py, f64>,
+    step_coordinates: PyReadonlyArray2<'py, i64>,
+    bra_phases: PyReadonlyArray2<'py, Complex64>,
+    ket_phases: PyReadonlyArray2<'py, Complex64>,
+    omega: Option<f64>,
+    short_range: bool,
+    threshold: f64,
+) -> PyResult<Bound<'py, PyArray5<Complex64>>> {
+    let images = to_vectors(&images, "translations")?;
+    let steps = to_vectors(&steps, "translations")?;
+    let image_coordinates = to_coordinates(&image_coordinates)?;
+    let step_coordinates = to_coordinates(&step_coordinates)?;
+    let n_k = bra_phases.shape()[0];
+    if ket_phases.shape()[0] != n_k {
+        return Err(PyValueError::new_err(
+            "the phase tables have one row per k-point",
+        ));
+    }
+    let kernel = to_kernel(omega, short_range)?;
+    let sum = integrals::BlochSum {
+        images: &images,
+        image_coordinates: &image_coordinates,
+        steps: &steps,
+        step_coordinates: &step_coordinates,
+        phases: [bra_phases.as_slice()?, ket_phases.as_slice()?],
+    };
+    let values = integrals::coulomb_three_center_bloch(
+        &auxiliary.inner,
+        &bra.inner,
+        &ket.inner,
+        sum,
+        kernel,
+        threshold,
+    )
+    .map_err(|error| value_error(&error))?;
+    let shape = [
+        n_k,
+        n_k,
+        auxiliary.inner.n_functions(),
+        bra.inner.n_functions(),
+        ket.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
 /// Four-centre Coulomb integrals `(uv|wx)` for each triple of translations
 /// (second bra, first ket, second ket), `[image, ao, ao, ao, ao]`; shell
 /// quartets with a Schwarz bound below `threshold` are left at zero.
 #[pyfunction]
-#[pyo3(signature = (bra, ket, translations, omega=None, threshold=0.0))]
+#[pyo3(signature = (bra, ket, translations, omega=None, short_range=false, threshold=0.0))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
@@ -252,12 +333,14 @@ fn coulomb_four_center<'py>(
     ket: (PyRef<'py, PyShellTable>, PyRef<'py, PyShellTable>),
     translations: PyReadonlyArray3<'py, f64>,
     omega: Option<f64>,
+    short_range: bool,
     threshold: f64,
 ) -> PyResult<Bound<'py, PyArray5<f64>>> {
     let translations = to_vector_sets::<3>(&translations)?;
     let bra = [&bra.0.inner, &bra.1.inner];
     let ket = [&ket.0.inner, &ket.1.inner];
-    let values = integrals::coulomb_four_center(bra, ket, &translations, omega, threshold)
+    let kernel = to_kernel(omega, short_range)?;
+    let values = integrals::coulomb_four_center(bra, ket, &translations, kernel, threshold)
         .map_err(|error| value_error(&error))?;
     let shape = [
         translations.len(),
@@ -272,7 +355,7 @@ fn coulomb_four_center<'py>(
 /// Schwarz bounds `max sqrt((ab|ab))` of every shell pair for each
 /// translation of the ket, `[image, bra_shell, ket_shell]`.
 #[pyfunction]
-#[pyo3(signature = (bra, ket, translations, omega=None))]
+#[pyo3(signature = (bra, ket, translations, omega=None, short_range=false))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
@@ -283,9 +366,11 @@ fn schwarz_bounds<'py>(
     ket: &PyShellTable,
     translations: PyReadonlyArray2<'py, f64>,
     omega: Option<f64>,
+    short_range: bool,
 ) -> PyResult<Bound<'py, PyArray3<f64>>> {
     let translations = to_vectors(&translations, "translations")?;
-    let values = integrals::schwarz_bounds(&bra.inner, &ket.inner, &translations, omega)
+    let kernel = to_kernel(omega, short_range)?;
+    let values = integrals::schwarz_bounds(&bra.inner, &ket.inner, &translations, kernel)
         .map_err(|error| value_error(&error))?;
     let shape = [
         translations.len(),
@@ -388,6 +473,10 @@ fn configure_threads(n_threads: usize) -> PyResult<()> {
     integrals::configure_threads(n_threads).map_err(|error| value_error(&error))
 }
 
+fn to_kernel(omega: Option<f64>, short_range: bool) -> PyResult<integrals::CoulombKernel> {
+    integrals::CoulombKernel::new(omega, short_range).map_err(|error| value_error(&error))
+}
+
 fn value_error(error: &hafnium_core::Error) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
@@ -411,6 +500,18 @@ fn to_vectors(array: &PyReadonlyArray2<'_, f64>, name: &str) -> PyResult<Vec<[f6
         return Err(PyValueError::new_err(format!("{name} are finite")));
     }
     Ok(values
+        .chunks_exact(3)
+        .map(|row| [row[0], row[1], row[2]])
+        .collect())
+}
+
+/// Rows of an `[n, 3]` integer array as lattice coordinates.
+fn to_coordinates(array: &PyReadonlyArray2<'_, i64>) -> PyResult<Vec<[i64; 3]>> {
+    if array.shape()[1] != 3 {
+        return Err(PyValueError::new_err("coordinates have shape [n, 3]"));
+    }
+    Ok(array
+        .as_slice()?
         .chunks_exact(3)
         .map(|row| [row[0], row[1], row[2]])
         .collect())
@@ -458,6 +559,7 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(nuclear_attraction, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_two_center, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_three_center, module)?)?;
+    module.add_function(wrap_pyfunction!(coulomb_three_center_bloch, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_four_center, module)?)?;
     module.add_function(wrap_pyfunction!(schwarz_bounds, module)?)?;
     module.add_function(wrap_pyfunction!(fourier_transform, module)?)?;

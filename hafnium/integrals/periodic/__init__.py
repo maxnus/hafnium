@@ -13,7 +13,9 @@ from hafnium.integrals.periodic.bloch import (
     DEFAULT_LATTICE_SUM_PRECISION,
     atom_radii,
     bloch_sum,
+    function_absolute_integral,
     function_radius,
+    integer_coordinates,
     kinetic_k,
     lattice_images,
     overlap_k,
@@ -21,6 +23,10 @@ from hafnium.integrals.periodic.bloch import (
 )
 from hafnium.integrals.periodic.coulomb import RangeSeparation
 from hafnium.integrals.periodic.exchange import madelung_constant
+from hafnium.integrals.periodic.fitting import (
+    PeriodicDensityFitting,
+    density_fitting_k,
+)
 from hafnium.integrals.periodic.nuclear import (
     core_hamiltonian_k,
     nuclear_attraction_images,
@@ -29,11 +35,15 @@ from hafnium.integrals.periodic.nuclear import (
 
 __all__ = [
     "DEFAULT_LATTICE_SUM_PRECISION",
+    "PeriodicDensityFitting",
     "RangeSeparation",
     "atom_radii",
     "bloch_sum",
     "core_hamiltonian_k",
+    "density_fitting_k",
+    "function_absolute_integral",
     "function_radius",
+    "integer_coordinates",
     "kinetic_k",
     "lattice_images",
     "madelung_constant",

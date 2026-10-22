@@ -45,6 +45,7 @@ nav:
       - adr/0016-lattice-sums-of-one-electron-integrals.md
       - adr/0017-probe-charge-exchange-correction.md
       - adr/0018-screened-lattice-sums-in-the-kernels.md
+      - adr/0019-density-fitting-with-momentum-transfer.md
   - API reference: api.md
 
 markdown_extensions:

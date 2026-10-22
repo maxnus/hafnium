@@ -162,14 +162,14 @@ def test_attenuated_integrals_are_bounded_by_the_full_kernel() -> None:
     molecule = water()
     orbital, aux = tables(molecule, "sto-3g", "def2-universal-jkfit")
     full = ENGINE.coulomb_two_center(aux, aux, ZERO)[0]
-    long_range = ENGINE.coulomb_two_center(aux, aux, ZERO, omega=0.5)[0]
-    nearly = ENGINE.coulomb_two_center(aux, aux, ZERO, omega=1e5)[0]
+    long_range = ENGINE.coulomb_two_center(aux, aux, ZERO, kernel=CoulombKernel(0.5))[0]
+    nearly = ENGINE.coulomb_two_center(aux, aux, ZERO, kernel=CoulombKernel(1e5))[0]
     assert np.all(np.diag(long_range) < np.diag(full))
     assert np.all(np.diag(long_range) > 0.0)
     np.testing.assert_allclose(nearly, full, atol=ATTENUATION_LIMIT_TOL)
     three_full = ENGINE.coulomb_three_center(aux, orbital, orbital, ZERO_PAIR)[0]
     three_long = ENGINE.coulomb_three_center(
-        aux, orbital, orbital, ZERO_PAIR, omega=0.5
+        aux, orbital, orbital, ZERO_PAIR, kernel=CoulombKernel(0.5)
     )[0]
     assert np.abs(three_long).max() < np.abs(three_full).max()
 

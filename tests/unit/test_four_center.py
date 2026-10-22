@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from hafnium.basis import BasisLibrary, BasisSet
-from hafnium.integrals import DensityFitting, RustEngine, ShellTable, eri
+from hafnium.integrals import CoulombKernel, DensityFitting, RustEngine, ShellTable, eri
 from hafnium.molecule import Molecule
 from tests.molecules import water
 from tests.shell_tables import reversed_table
@@ -158,7 +158,7 @@ def test_schwarz_bounds_bound_every_quartet() -> None:
             index = shell_of[u], shell_of[v]
             attained[index] = max(attained[index], diagonal[u, v])
     np.testing.assert_allclose(bounds, attained, atol=INTEGRAL_TOL)
-    long_range = ENGINE.schwarz_bounds(table, table, ZERO, omega=0.5)[0]
+    long_range = ENGINE.schwarz_bounds(table, table, ZERO, kernel=CoulombKernel(0.5))[0]
     assert np.all(long_range <= bounds + INTEGRAL_TOL)
 
 

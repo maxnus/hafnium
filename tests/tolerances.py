@@ -59,3 +59,19 @@ LARGE_BOX_RESIDUAL_TOL = 1e-2
 # The ratio of that residual between boxes of 40 and 20 Bohr: 1/8 for the
 # inverse-cube law, with room for the next term of the expansion.
 LARGE_BOX_RATIO_WINDOW = (0.09, 0.16)
+# Fitted periodic integrals against PySCF's Gaussian density fitting with the
+# same auxiliary basis and kernel: both converge their lattice sums to about
+# this level for diffuse bases (STO-3G lithium).
+PERIODIC_FITTING_TOL = 1e-10
+# The residual of a cell's fitting integrals in an 80 Bohr box after the
+# Madelung terms: the quadrupole term (2π/3L³) of the diffuse universal
+# JKFIT functions, which the inverse-cube law of the test tracks.
+LARGE_BOX_FITTING_RESIDUAL_TOL = 0.1
+# Fitted periodic integrals with a near-singular metric against PySCF: the
+# universal JKFIT basis of LiH in a 4 Bohr cell has metric eigenvalues at
+# 1e-14 of the largest, and the fit moves by 1e-5 with the eigenvalue
+# cutoff, so the two codes agree only to the fitting residual.
+ILL_CONDITIONED_FITTING_TOL = 1e-4
+# Below this ratio of the smallest to the largest metric eigenvalue the
+# auxiliary basis counts as near-linearly dependent.
+METRIC_CONDITION_LIMIT = 1e-10
