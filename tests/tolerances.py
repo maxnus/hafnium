@@ -90,3 +90,9 @@ LARGE_VACUUM_SLAB_TOL = 1e-9
 # boxes of 40 and 20 Bohr is 1/4 with room for the quartic term.
 LARGE_VACUUM_RESIDUAL_TOL = 0.05
 LARGE_VACUUM_RATIO_WINDOW = (0.24, 0.26)
+# Positions after the rotation and translation into a standard frame, and
+# the frames themselves: double-precision geometry.
+GEOMETRY_TOL = 1e-10
+# The weight of a symmetry-adapted orbital in its own irrep, from a converged
+# or an exactly rotated set of orbitals.
+IRREP_WEIGHT_TOL = 1e-10

@@ -28,3 +28,4 @@ ADR that supersedes it.
 | [0019](0019-density-fitting-with-momentum-transfer.md) | Density fitting with momentum transfer | accepted 2026-10-22 |
 | [0020](0020-k-point-hartree-fock-assembly.md) | k-point Hartree–Fock through the structured matrices | accepted 2026-10-22 |
 | [0021](0021-reduced-dimension-kernels-by-quadrature.md) | Reduced-dimension reciprocal-space kernels by quadrature | accepted 2026-10-22 |
+| [0022](0022-molecular-point-groups-in-the-standard-frame.md) | Molecular point groups in the standard frame | accepted 2026-10-22 |

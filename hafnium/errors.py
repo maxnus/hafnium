@@ -26,6 +26,10 @@ class BasisSetError(HafniumError, ValueError):
     """A basis set is unavailable, malformed or unsupported."""
 
 
+class SymmetryError(HafniumError, ValueError):
+    """A system, a basis or an orbital lacks the symmetry a calculation assumes."""
+
+
 class ConvergenceError(HafniumError):
     """An iterative procedure stopped before reaching its tolerances.
 
