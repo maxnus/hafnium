@@ -33,6 +33,7 @@ CASES: list[tuple[Callable[[], Molecule], str, str]] = [
     (molecules.inversion_symmetric, "Ci", "Ci"),
     (molecules.square_pyramid, "C4v", "C2v"),
     (molecules.neon, "SO3", "D2h"),
+    (molecules.icosahedron, "Ih", "D2h"),
 ]
 
 

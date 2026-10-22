@@ -4,6 +4,7 @@ from hafnium.symmetry.adaptation import (
     DEFAULT_DEGENERACY_TOLERANCE,
     DEFAULT_LABEL_TOLERANCE,
     SymmetryAdaptation,
+    degenerate_sets,
 )
 from hafnium.symmetry.detection import (
     DEFAULT_SYMMETRY_TOLERANCE,
@@ -42,6 +43,7 @@ __all__ = [
     "SpinSymmetry",
     "SymmetryAdaptation",
     "SymmetrySpec",
+    "degenerate_sets",
     "detect_point_group",
     "solid_harmonic_parity",
 ]

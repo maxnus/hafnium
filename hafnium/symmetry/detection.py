@@ -27,7 +27,7 @@ import math
 from dataclasses import dataclass, replace
 
 from hafnium.backend import Array, array_namespace, default_namespace, eigh
-from hafnium.errors import InputError
+from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import Atom, Molecule
 from hafnium.symmetry.point_group import PointGroup
 
@@ -81,12 +81,12 @@ def _scale(s: float, a: Vector) -> Vector:
     return (s * a[0], s * a[1], s * a[2])
 
 
-def _parallel(a: Vector, b: Vector, tolerance: float) -> bool:
+def _is_parallel(a: Vector, b: Vector, tolerance: float) -> bool:
     """Whether the unit vectors ``a`` and ``b`` are parallel or antiparallel."""
     return abs(abs(_dot(a, b)) - 1.0) < tolerance
 
 
-def _perpendicular(a: Vector, b: Vector, tolerance: float) -> bool:
+def _is_perpendicular(a: Vector, b: Vector, tolerance: float) -> bool:
     return abs(_dot(a, b)) < tolerance
 
 
@@ -336,9 +336,14 @@ def _rotation_orders(geometry: _Geometry, axis: Vector) -> list[int]:
             angle %= 2.0 * math.pi
             if angle < geometry.tolerance / radius:
                 continue
-            ratio = 2.0 * math.pi / angle
-            if ratio >= 1.99 and abs(ratio - round(ratio)) < 0.01:
-                orders.add(round(ratio))
+            # An order n is possible when the atom sits within the
+            # tolerance of the angle 2π/n, and no further than the class
+            # size, the length of an orbit off the axis.
+            order = round(2.0 * math.pi / angle)
+            if 2 <= order <= len(points) and (
+                abs(angle - 2.0 * math.pi / order) * radius <= 2.0 * geometry.tolerance
+            ):
+                orders.add(order)
         return sorted(orders, reverse=True)
     return []
 
@@ -356,32 +361,28 @@ class _Elements:
     inversion: bool
     tolerance: float
 
-    def order_about(self, axis: Vector) -> int:
-        for other, order in self.rotations:
-            if _parallel(axis, other, self.tolerance):
-                return order
-        return 1
-
     def perpendicular_twofold(self, axis: Vector) -> tuple[Vector, ...]:
         return tuple(
             other
             for other, _ in self.rotations
-            if _perpendicular(axis, other, self.tolerance)
+            if _is_perpendicular(axis, other, self.tolerance)
         )
 
     def has_horizontal_mirror(self, axis: Vector) -> bool:
-        return any(_parallel(axis, normal, self.tolerance) for normal in self.mirrors)
+        return any(
+            _is_parallel(axis, normal, self.tolerance) for normal in self.mirrors
+        )
 
     def vertical_mirrors(self, axis: Vector) -> tuple[Vector, ...]:
         return tuple(
             normal
             for normal in self.mirrors
-            if _perpendicular(axis, normal, self.tolerance)
+            if _is_perpendicular(axis, normal, self.tolerance)
         )
 
     def has_improper(self, axis: Vector, order: int) -> bool:
         return any(
-            _parallel(axis, other, self.tolerance) and other_order == order
+            _is_parallel(axis, other, self.tolerance) and other_order == order
             for other, other_order in self.improper
         )
 
@@ -392,13 +393,13 @@ def _find_elements(geometry: _Geometry) -> _Elements:
     rotations: list[tuple[Vector, int]] = []
     mirrors: list[Vector] = []
     for axis in _candidate_directions(geometry):
-        if not any(_parallel(axis, other, tolerance) for other, _ in rotations):
+        if not any(_is_parallel(axis, other, tolerance) for other, _ in rotations):
             for order in _rotation_orders(geometry, axis):
                 if geometry.has_rotation(axis, order):
                     rotations.append((axis, order))
                     break
         if not any(
-            _parallel(axis, other, tolerance) for other in mirrors
+            _is_parallel(axis, other, tolerance) for other in mirrors
         ) and geometry.has_mirror(axis):
             mirrors.append(axis)
     improper = tuple(
@@ -508,10 +509,15 @@ def _cubic_frame(elements: _Elements) -> Frame:
         (a, b, c)
         for i, a in enumerate(axes)
         for j, b in enumerate(axes[i + 1 :], start=i + 1)
-        if _perpendicular(a, b, tolerance)
+        if _is_perpendicular(a, b, tolerance)
         for c in axes[j + 1 :]
-        if _perpendicular(a, c, tolerance) and _perpendicular(b, c, tolerance)
+        if _is_perpendicular(a, c, tolerance) and _is_perpendicular(b, c, tolerance)
     ]
+    if not triples:
+        raise SymmetryError(
+            "no three mutually perpendicular symmetry axes were found for a cubic "
+            "group; the tolerance admits spurious elements"
+        )
     frames = [_closest_frame(triple) for triple in triples]
     return max(frames, key=lambda frame: frame[0][0] + frame[1][1] + frame[2][2])
 
@@ -541,7 +547,7 @@ def _asymmetric_frame(
 ) -> Frame:
     """Put ``z`` along the twofold axis or mirror normal, the rest cyclically."""
     tolerance = geometry.tolerance
-    parallel = [k for k in range(3) if _parallel(z, geometry.axes[k], tolerance)]
+    parallel = [k for k in range(3) if _is_parallel(z, geometry.axes[k], tolerance)]
     distinct = all(
         abs(geometry.extents[(k + 1) % 3] - geometry.extents[(k + 2) % 3])
         > tolerance * max(1.0, sum(geometry.extents))
@@ -566,7 +572,7 @@ def _asymmetric_frame(
 def _input_axis_off(z: Vector, tolerance: float) -> Vector:
     """Return the first input axis not parallel to ``z``."""
     for axis in IDENTITY_FRAME:
-        if not _parallel(z, axis, tolerance):
+        if not _is_parallel(z, axis, tolerance):
             return axis
     raise AssertionError("no input axis is off a unit vector")
 
@@ -602,13 +608,13 @@ def _perpendicular_axis(axes: tuple[Vector, ...], geometry: _Geometry) -> Vector
     tolerance = geometry.tolerance
     for point in geometry.points:
         for axis in axes:
-            if _norm(point) > tolerance and _parallel(_unit(point), axis, tolerance):
+            if _norm(point) > tolerance and _is_parallel(_unit(point), axis, tolerance):
                 return axis
     for i, first in enumerate(geometry.points):
         for second in geometry.points[i + 1 :]:
             middle = _add(first, second)
             for axis in axes:
-                if _norm(middle) > tolerance and _parallel(
+                if _norm(middle) > tolerance and _is_parallel(
                     _unit(middle), axis, tolerance
                 ):
                     return axis

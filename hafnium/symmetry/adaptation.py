@@ -18,7 +18,13 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 
-from hafnium.backend import Array, adjoint, array_namespace, default_namespace, eigh
+from hafnium.backend import (
+    Array,
+    adjoint,
+    array_namespace,
+    default_namespace,
+    generalized_eigh,
+)
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import AtomicSystem
@@ -90,11 +96,10 @@ class SymmetryAdaptation:
         _require_equal_shells(basis, atom_images)
         xp = default_namespace()
         starts = _atom_starts(basis)
-        parities = [
-            solid_harmonic_parity(label.angular_momentum, label.m)
-            for label in basis.function_labels()
-        ]
         labels = basis.function_labels()
+        parities = [
+            solid_harmonic_parity(label.angular_momentum, label.m) for label in labels
+        ]
         images: list[list[int]] = []
         signs: list[list[float]] = []
         for operation, atoms in zip(group.operations, atom_images, strict=True):
@@ -254,18 +259,26 @@ class SymmetryAdaptation:
         """
         xp = array_namespace(mo_coefficients, mo_energies, overlap)
         projector = self._weighted_projector(mo_coefficients, overlap)
+        metric = adjoint(mo_coefficients) @ overlap @ mo_coefficients
         columns: list[Array] = []
         irreps: list[int] = []
-        for start, end in _degenerate_sets(mo_energies, degeneracy_tolerance):
+        for start, end in degenerate_sets(mo_energies, degeneracy_tolerance):
             block = projector[start:end, start:end]
-            values, vectors = eigh((block + adjoint(block)) / 2)
+            # The generalized problem in the orbitals' own overlap makes the
+            # eigenvalues irrep indices for any set spanning an invariant
+            # space, normalized or not; the rotated set is orthonormal.
+            values, vectors = generalized_eigh(
+                (block + adjoint(block)) / 2, metric[start:end, start:end]
+            )
             rotated = mo_coefficients[:, start:end] @ vectors
             for position in range(end - start):
                 value = float(values[position])
                 if abs(value - round(value)) > tolerance:
                     raise SymmetryError(
-                        f"orbitals {list(range(start, end))} are degenerate but not "
-                        f"invariant under the group (projector eigenvalue {value})"
+                        f"orbitals {list(range(start, end))} do not span a space "
+                        f"invariant under the group (projector eigenvalue {value}): "
+                        "a single orbital is symmetry-broken, a degenerate set "
+                        "incomplete"
                     )
                 irreps.append(round(value))
             columns.append(rotated)
@@ -285,8 +298,13 @@ class SymmetryAdaptation:
         return total
 
 
-def _degenerate_sets(energies: Array, tolerance: float) -> list[tuple[int, int]]:
-    """Return ``(start, end)`` of the sets of nearly equal consecutive energies."""
+def degenerate_sets(energies: Array, tolerance: float) -> list[tuple[int, int]]:
+    """Return ``(start, end)`` of the sets of nearly equal consecutive energies.
+
+    ``energies`` ``[mo]`` are in ascending order; consecutive energies
+    closer than ``tolerance`` times the larger of one and the spectral
+    range belong to one set.
+    """
     values = [float(energy) for energy in energies]
     if any(b < a for a, b in itertools.pairwise(values)):
         raise InputError("orbital energies are in ascending order")
@@ -363,32 +381,49 @@ def _salcs(
     function_signs: Array,
     starts: tuple[int, ...],
 ) -> tuple[Array, ...]:
-    """Project every basis function of one atom per orbit onto each irrep."""
+    """Project the functions of one atom per orbit onto each irrep.
+
+    The projector of an irrep is ``Σ_g χ_Γ(g) P_g`` over the signed
+    permutations ``P_g``; its columns at the representative functions,
+    normalized where they do not vanish, are the SALCs of the irrep.
+    """
     xp = array_namespace(function_images, function_signs)
-    n_atoms, n_ao = len(starts), int(function_images.shape[1])
-    characters = group.characters()
-    columns: list[list[Array]] = [[] for _ in group.irreps]
+    n_ao = int(function_images.shape[1])
+    eye = xp.eye(n_ao)
+    permutations = [
+        xp.take(eye, function_images[g], axis=0) * xp.expand_dims(function_signs[g], 1)
+        for g in range(group.order)
+    ]
+    representatives = xp.asarray(
+        _orbit_representatives(atom_images, starts, n_ao), dtype=xp.int64
+    )
+    columns: list[Array] = []
+    for row in group.characters():
+        projector = xp.zeros((n_ao, n_ao))
+        for character, permutation in zip(row, permutations, strict=True):
+            projector = projector + character * permutation
+        selected = xp.take(projector, representatives, axis=1)
+        norms = xp.linalg.vector_norm(selected, axis=0)
+        keep = xp.asarray(
+            [k for k in range(int(norms.shape[0])) if float(norms[k]) > 1e-8],
+            dtype=xp.int64,
+        )
+        columns.append(xp.take(selected, keep, axis=1) / xp.take(norms, keep, axis=0))
+    return tuple(columns)
+
+
+def _orbit_representatives(
+    atom_images: tuple[tuple[int, ...], ...], starts: tuple[int, ...], n_ao: int
+) -> list[int]:
+    """Return the functions of the first atom of every orbit, in order."""
+    n_atoms = len(starts)
     covered = [False] * n_atoms
+    functions: list[int] = []
     for atom in range(n_atoms):
         if covered[atom]:
             continue
         for images in atom_images:
             covered[images[atom]] = True
         end = starts[atom + 1] if atom + 1 < n_atoms else n_ao
-        for function in range(starts[atom], end):
-            targets = function_images[:, function]
-            for irrep, row in enumerate(characters):
-                weights = (
-                    xp.asarray(row, dtype=xp.float64) * function_signs[:, function]
-                )
-                vector = xp.sum(
-                    xp.take(xp.eye(n_ao), targets, axis=0) * xp.expand_dims(weights, 1),
-                    axis=0,
-                )
-                norm = float(xp.linalg.vector_norm(vector))
-                if norm > 1e-8:
-                    columns[irrep].append(vector / norm)
-    return tuple(
-        xp.stack(vectors, axis=1) if vectors else xp.zeros((n_ao, 0))
-        for vectors in columns
-    )
+        functions.extend(range(starts[atom], end))
+    return functions

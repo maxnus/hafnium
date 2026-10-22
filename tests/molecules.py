@@ -230,3 +230,13 @@ def square_pyramid() -> Molecule:
 def neon() -> Molecule:
     """A neon atom off the origin."""
     return Molecule.from_atoms([("Ne", (0.3, 0.2, 0.1))])
+
+
+def icosahedron() -> Molecule:
+    """Twelve hydrogens at the vertices of an icosahedron, Ih."""
+    phi = (1.0 + math.sqrt(5.0)) / 2.0
+    vertices = [(0.0, a, b * phi) for a in (1.0, -1.0) for b in (1.0, -1.0)] + [
+        (a, b * phi, 0.0) for a in (1.0, -1.0) for b in (1.0, -1.0)
+    ]
+    vertices += [(b * phi, 0.0, a) for a in (1.0, -1.0) for b in (1.0, -1.0)]
+    return Molecule.from_atoms([("H", vertex) for vertex in vertices])

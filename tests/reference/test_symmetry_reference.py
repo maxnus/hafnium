@@ -13,6 +13,7 @@ from hafnium.symmetry import (
     DEFAULT_DEGENERACY_TOLERANCE,
     SymmetryAdaptation,
     SymmetrySpec,
+    degenerate_sets,
     detect_point_group,
 )
 from tests import molecules
@@ -53,20 +54,6 @@ CASES: list[tuple[Callable[[], Molecule], str | None, bool]] = [
     (molecules.square_pyramid, None, False),
     (molecules.neon, "rhf", True),
 ]
-
-
-def degenerate_sets(energies: np.ndarray) -> list[tuple[int, int]]:
-    spread = max(1.0, float(energies[-1] - energies[0]))
-    sets: list[tuple[int, int]] = []
-    start = 0
-    for end in range(1, len(energies) + 1):
-        if (
-            end == len(energies)
-            or energies[end] - energies[end - 1] > DEFAULT_DEGENERACY_TOLERANCE * spread
-        ):
-            sets.append((start, end))
-            start = end
-    return sets
 
 
 @pytest.mark.reference
@@ -110,5 +97,5 @@ def test_point_groups_and_orbital_irreps_match_pyscf(
         ours = [adaptation.labels[irrep] for irrep in irreps]
         # Within a degenerate set the assignment of members to irreps is
         # arbitrary, so the sets are compared as multisets.
-        for start, end in degenerate_sets(energies):
+        for start, end in degenerate_sets(energies, DEFAULT_DEGENERACY_TOLERANCE):
             assert sorted(ours[start:end]) == sorted(labels[start:end])
