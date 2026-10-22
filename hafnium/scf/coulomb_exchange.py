@@ -15,7 +15,10 @@ With a k axis the contractions run over the full set of k-points
 materializes the partners the structure derives, and the results are
 stored back at the stored k-points in the ring of each block. The Bloch
 integrals conjugate the first function of each pair, so
-``J[u, v](k) = Σ_k' w_k' Σ_wx (u k v k | w k' x k') D[x, w](k')``.
+``J[u, v](k) = Σ_k' w_k' Σ_wx (u k v k | w k' x k') D[x, w](k')``. With
+irrep sectors the contractions run in the atomic basis (ADR-0023): the
+sector blocks of each spin block are assembled into its atomic-basis
+matrix, and the results are projected back onto the sectors.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from hafnium.integrals import (
 from hafnium.integrals.periodic import RangeSeparation
 from hafnium.integrals.two_electron import DEFAULT_SCHWARZ_THRESHOLD
 from hafnium.molecule import Cell, Molecule
-from hafnium.structured import BlockMatrix, BlockStructure, Ring
+from hafnium.structured import BlockMatrix, Ring, Spin
 from hafnium.structured.dense import expand_k
 from hafnium.structured.validation import cast_to_ring
 from hafnium.symmetry import KPoints
@@ -309,17 +312,47 @@ def coulomb_exchange_matrices(
             f"the density has {n} atomic orbitals, the integrals {two_body.n_ao}"
         )
     if density.structure.k_axis is None:
-        total = density.spin_trace().blocks[0]
-        xp = array_namespace(total)
-        coulomb = two_body.coulomb(xp.astype(xp.real(total), xp.float64))
-        spatial = BlockMatrix(BlockStructure.spatial(), (coulomb,))
+        return _molecular_matrices(two_body, density)
+    return _periodic_matrices(two_body, density)
+
+
+def _molecular_matrices(
+    two_body: CoulombExchange, density: BlockMatrix
+) -> tuple[BlockMatrix, BlockMatrix]:
+    """Contract in the atomic basis, over the irrep sectors if there are any."""
+    structure, n = density.structure, density.n_spatial
+    sectors = structure.irreps
+    total = density.spin_trace()
+    total_ao = (
+        total.blocks[0]
+        if sectors is None
+        else sectors.to_atomic(total.blocks, spinor=False, orbitals=False)
+    )
+    xp = array_namespace(total_ao)
+    coulomb_ao = two_body.coulomb(xp.astype(xp.real(total_ao), xp.float64))
+    coulomb = BlockMatrix.from_spatial(coulomb_ao, irreps=sectors).embed(structure)
+    if sectors is None:
         exchange = tuple(
             _exchange_block(two_body, block, n) for block in density.blocks
         )
-        return spatial.embed(density.structure), BlockMatrix(
-            density.structure, exchange
+        return coulomb, BlockMatrix(structure, exchange)
+    size = structure.stored_per_sector
+    blocks: dict[int, Array] = {}
+    for index, block in enumerate(structure.sector_structure.stored_blocks):
+        spinor = block.spin is Spin.SPINOR
+        parts = [
+            density.blocks[sector * size + index] for sector in range(sectors.n_irreps)
+        ]
+        full = _exchange_block(
+            two_body, sectors.to_atomic(parts, spinor=spinor, orbitals=False), n
         )
-    return _periodic_matrices(two_body, density)
+        for sector, part in enumerate(sectors.from_atomic(full, spinor=spinor)):
+            blocks[sector * size + index] = cast_to_ring(
+                xp, part, structure.storage_ring(block)
+            )
+    return coulomb, BlockMatrix(
+        structure, tuple(blocks[position] for position in range(structure.n_stored))
+    )
 
 
 def _periodic_matrices(

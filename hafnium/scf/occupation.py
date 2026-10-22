@@ -1,14 +1,27 @@
-"""Occupation policies: how electrons fill the orbitals of each block."""
+"""Occupation policies: how electrons fill the orbitals of each block.
+
+The electrons of a spin block are fixed by the class and the electron
+counts (:func:`electrons_per_block`). With irrep sectors (ADR-0023) the
+spin block is split over the sectors, and its electrons fill the orbitals
+of all sectors together in order of energy, unless a sector's count is
+fixed, in which case it fills its own orbitals and the remaining electrons
+share the free sectors.
+"""
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from types import MappingProxyType
+from typing import Protocol, cast
 
 from hafnium.backend import Array, array_namespace
-from hafnium.errors import InputError
-from hafnium.structured import Block, BlockStructure, BlockVector
+from hafnium.errors import InputError, StructureError
+from hafnium.structured import Block, BlockStructure, BlockVector, Spin
+
+IrrepElectrons = Mapping[str, int | tuple[int, int]]
+"""Electrons fixed per irrep label: a total, or ``(n_alpha, n_beta)``."""
 
 
 class OccupationPolicy(Protocol):
@@ -22,13 +35,16 @@ class OccupationPolicy(Protocol):
 def electrons_per_block(
     structure: BlockStructure, n_alpha: float, n_beta: float
 ) -> tuple[float, ...]:
-    """Electrons held by each stored block of ``structure``.
+    """Electrons held by each stored spin block of ``structure``.
 
     A spinor block holds all ``n_alpha + n_beta`` electrons, the alpha and
     beta blocks of a collinear structure ``n_alpha`` and ``n_beta``, and the
     single stored block of a restricted or paired-unrestricted structure
-    ``n_alpha`` per spin, which requires ``n_alpha == n_beta``.
+    ``n_alpha`` per spin, which requires ``n_alpha == n_beta``. With irrep
+    sectors the counts are those of the spin blocks of one sector's
+    structure, shared over the sectors by the policy.
     """
+    structure = structure.sector_structure
     if structure.is_spinor:
         return (n_alpha + n_beta,)
     if structure.is_spatial:
@@ -50,14 +66,53 @@ class AufbauOccupation:
     Orbital energies must be in ascending order, as
     :meth:`hafnium.structured.BlockMatrix.eigh` returns them. See
     :func:`electrons_per_block` for the counts.
+
+    Parameters
+    ----------
+    n_alpha, n_beta
+        Electron counts.
+    irrep_electrons
+        Electrons fixed in irrep sectors, by Mulliken label, as PySCF's
+        ``irrep_nelec``: a total, which a restricted or paired class
+        splits equally between the spins and an unrestricted class with
+        the odd electron in alpha, or ``(n_alpha, n_beta)`` for a
+        collinear class. The sectors named fill their own lowest orbitals
+        with those electrons; the remaining electrons of each spin fill the
+        other sectors together in order of energy. Only with irrep sectors.
     """
 
     n_alpha: int
     n_beta: int
+    irrep_electrons: IrrepElectrons | None = None
 
     def __post_init__(self) -> None:
         if self.n_alpha < 0 or self.n_beta < 0:
             raise InputError("electron counts must be non-negative")
+        if self.irrep_electrons is None:
+            return
+        for label, count in self.irrep_electrons.items():
+            # Validated at run time beyond the annotation: floats and bools
+            # would be filled or silently taken as integers otherwise.
+            raw = cast(object, count)
+            parts = (
+                tuple(cast(tuple[object, ...], raw))
+                if isinstance(raw, tuple)
+                else (raw,)
+            )
+            values = [
+                c for c in parts if isinstance(c, int) and not isinstance(c, bool)
+            ]
+            if len(parts) not in (1, 2) or len(values) != len(parts):
+                raise InputError(
+                    f"irrep {label}: give a total or (n_alpha, n_beta) of integers, "
+                    f"got {count!r}"
+                )
+            if any(c < 0 for c in values):
+                raise InputError(f"irrep {label}: electron counts are non-negative")
+        # A frozen policy keeps its own copy of the mapping.
+        object.__setattr__(
+            self, "irrep_electrons", MappingProxyType(dict(self.irrep_electrons))
+        )
 
     def occupy(self, mo_energies: BlockVector) -> BlockVector:
         """Occupations ``[mo]`` per stored block: ones for the lowest orbitals.
@@ -67,7 +122,9 @@ class AufbauOccupation:
         partner's weight too) until the block's electron count per cell is
         reached, which must land on a whole level.
         """
-        return _occupy(mo_energies, self.n_alpha, self.n_beta, None)
+        return _occupy(
+            mo_energies, self.n_alpha, self.n_beta, None, self.irrep_electrons
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,17 +160,120 @@ class AveragedOccupation:
 
 
 def _occupy(
-    mo_energies: BlockVector, n_alpha: float, n_beta: float, tolerance: float | None
+    mo_energies: BlockVector,
+    n_alpha: float,
+    n_beta: float,
+    tolerance: float | None,
+    fixed: IrrepElectrons | None = None,
 ) -> BlockVector:
     structure = mo_energies.structure
-    counts = electrons_per_block(structure, n_alpha, n_beta)
-    blocks = tuple(
-        _fill(energies, count, tolerance, _level_weights(structure, block))
-        for block, energies, count in zip(
-            structure.stored_blocks, mo_energies.blocks, counts, strict=True
+    base = structure.sector_structure
+    counts = electrons_per_block(base, n_alpha, n_beta)
+    if structure.irreps is None:
+        if fixed:
+            raise InputError(
+                f"electrons are fixed per irrep in the {structure.describe()} "
+                "structure, which has no irrep sectors"
+            )
+        blocks = tuple(
+            _fill(energies, count, tolerance, _level_weights(base, block))
+            for block, energies, count in zip(
+                base.stored_blocks, mo_energies.blocks, counts, strict=True
+            )
         )
+        return BlockVector(structure, blocks)
+    size = structure.stored_per_sector
+    filled: dict[int, Array] = {}
+    for index, (block, count) in enumerate(
+        zip(base.stored_blocks, counts, strict=True)
+    ):
+        weights = _level_weights(base, block)
+        positions = [sector * size + index for sector in range(structure.n_sectors)]
+        fixed_counts = _fixed_counts(structure, base, index, fixed or {})
+        remaining = count - sum(fixed_counts.values())
+        if remaining < -FILL_TOLERANCE:
+            raise InputError(
+                f"the irrep sectors fix {sum(fixed_counts.values()):g} electrons in "
+                f"the {block.spin.value} block, which holds {count:g}"
+            )
+        for position, fixed_count in fixed_counts.items():
+            filled[position] = _fill(
+                mo_energies.blocks[position], fixed_count, tolerance, weights
+            )
+        free = [position for position in positions if position not in fixed_counts]
+        if not free:
+            if remaining > FILL_TOLERANCE:
+                raise InputError(
+                    f"{remaining:g} electrons of the {block.spin.value} block are "
+                    "left over after the fixed irrep sectors"
+                )
+            continue
+        energies = [mo_energies.blocks[position] for position in free]
+        xp = array_namespace(*energies)
+        joined = _fill(xp.concat(energies, axis=-1), remaining, tolerance, weights)
+        start = 0
+        for position, part in zip(free, energies, strict=True):
+            width = int(part.shape[-1])
+            filled[position] = joined[..., start : start + width]
+            start += width
+    return BlockVector(
+        structure, tuple(filled[position] for position in range(structure.n_stored))
     )
-    return BlockVector(structure, blocks)
+
+
+def _fixed_counts(
+    structure: BlockStructure,
+    base: BlockStructure,
+    index: int,
+    fixed: IrrepElectrons,
+) -> dict[int, float]:
+    """Return the fixed electron count of each sector for stored spin block ``index``.
+
+    Keyed by the position of the sector's block among all stored blocks.
+    """
+    sectors = structure.irreps
+    assert sectors is not None
+    block = base.stored_blocks[index]
+    counts: dict[int, float] = {}
+    for label, count in fixed.items():
+        try:
+            sector = sectors.index(label)
+        except StructureError as error:
+            raise InputError(str(error)) from None
+        if block.spin is Spin.SPINOR:
+            if not isinstance(count, int):
+                raise InputError(
+                    f"irrep {label}: a generalized state holds a total per irrep, "
+                    f"not {count!r}"
+                )
+            per_block = float(count)
+        elif base.derived_partner is not None:
+            per_block = _per_spin(label, count, paired=True)[0]
+        else:
+            per_block = _per_spin(label, count, paired=False)[
+                0 if block.spin is Spin.ALPHA else 1
+            ]
+        counts[sector * base.n_stored + index] = per_block
+    return counts
+
+
+def _per_spin(
+    label: str, count: int | tuple[int, int], *, paired: bool
+) -> tuple[float, float]:
+    """Return ``(n_alpha, n_beta)`` of a fixed irrep count."""
+    if isinstance(count, int):
+        if paired and count % 2:
+            raise InputError(
+                f"irrep {label}: a restricted or paired state holds an even "
+                f"number of electrons per irrep, got {count}"
+            )
+        return (count - count // 2, count // 2)
+    if paired and count[0] != count[1]:
+        raise InputError(
+            f"irrep {label}: a restricted or paired state holds equal alpha and "
+            f"beta counts per irrep, got {count}"
+        )
+    return (float(count[0]), float(count[1]))
 
 
 def _level_weights(structure: BlockStructure, block: Block) -> tuple[float, ...]:

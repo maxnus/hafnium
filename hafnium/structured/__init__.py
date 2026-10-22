@@ -6,9 +6,12 @@ of independent dense blocks over the real, complex or quaternionic ring,
 possibly with partner blocks derived by copying or complex conjugation
 (PLAN.md §5). For a periodic system every block is a batch over the
 k-points of a :class:`KAxis`, the real and paired classes storing a half
-zone and deriving the block at ``−k`` (ADR-0015). :class:`BlockStructure`
-describes that decomposition, :class:`BlockMatrix` and :class:`BlockVector`
-hold data in it, and algorithms are written once against their operations.
+zone and deriving the block at ``−k`` (ADR-0015). The irrep sectors of
+an Abelian point group, :class:`IrrepSectors`, multiply the spin blocks of
+a molecular structure, each copy acting on the SALCs of its irrep
+(ADR-0023). :class:`BlockStructure` describes that decomposition,
+:class:`BlockMatrix` and :class:`BlockVector` hold data in it, and
+algorithms are written once against their operations.
 """
 
 from hafnium.structured.density import density_matrix
@@ -21,6 +24,7 @@ from hafnium.structured.kramers import (
     time_reverse_operator,
 )
 from hafnium.structured.matrix import BlockMatrix
+from hafnium.structured.sectors import IrrepSectors
 from hafnium.structured.structure import Block, BlockStructure, Partner, Ring, Spin
 from hafnium.structured.vector import BlockVector
 
@@ -29,6 +33,7 @@ __all__ = [
     "BlockMatrix",
     "BlockStructure",
     "BlockVector",
+    "IrrepSectors",
     "KAxis",
     "Partner",
     "Ring",

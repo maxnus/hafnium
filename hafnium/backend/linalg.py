@@ -6,6 +6,27 @@ from hafnium.backend.namespace import array_namespace
 from hafnium.backend.types import Array
 
 
+def block_diag(a: Array, b: Array) -> Array:
+    """Block-diagonal matrix with ``a`` and ``b`` on the diagonal, batched."""
+    xp = array_namespace(a, b)
+    dtype = xp.result_type(a, b)
+    top = xp.concat(
+        [
+            xp.astype(a, dtype),
+            xp.zeros((*a.shape[:-1], b.shape[-1]), dtype=dtype),
+        ],
+        axis=-1,
+    )
+    bottom = xp.concat(
+        [
+            xp.zeros((*b.shape[:-1], a.shape[-1]), dtype=dtype),
+            xp.astype(b, dtype),
+        ],
+        axis=-1,
+    )
+    return xp.concat([top, bottom], axis=-2)
+
+
 def adjoint(x: Array) -> Array:
     """Return the conjugate transpose of the last two axes of ``x``."""
     xp = array_namespace(x)

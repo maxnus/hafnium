@@ -517,3 +517,52 @@ def orbital_label_reference(
         },
         "spins": spins,
     }
+
+
+def symmetric_scf_reference(
+    molecule: Molecule,
+    basis: BasisSet,
+    kind: str,
+    *,
+    subgroup: str | None = None,
+    irrep_nelec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """PySCF's symmetry-adapted ``kind`` SCF in ``molecule``'s own frame.
+
+    Returns the energy, the electrons per irrep summed over spins, and per
+    spin block the orbital energies in ascending order with the irrep label
+    of every orbital; a generalized state has one spin block.
+    """
+    scf: Any = pytest.importorskip("pyscf.scf")
+    mol = pyscf_symmetric_molecule(molecule, basis, subgroup=subgroup)
+    mf = {"rhf": scf.RHF, "uhf": scf.UHF, "ghf": scf.GHF}[kind](mol)
+    if irrep_nelec is not None:
+        mf.irrep_nelec = irrep_nelec
+    mf.conv_tol = 1e-12
+    mf.conv_tol_grad = 1e-8
+    mf.max_cycle = 200
+    energy = float(mf.kernel())
+    assert mf.converged
+    names = {
+        int(i): str(name) for i, name in zip(mol.irrep_id, mol.irrep_name, strict=True)
+    }
+    # Per irrep PySCF reports a total (RHF, GHF) or ``(n_alpha, n_beta)`` (UHF).
+    electrons = {
+        str(label): float(np.sum(np.asarray(count, dtype=float)))
+        for label, count in mf.get_irrep_nelec().items()
+    }
+    orbsym = mf.get_orbsym(mf.mo_coeff)
+    if kind == "uhf":
+        spins = [
+            (np.asarray(e), [names[int(i)] for i in o])
+            for e, o in zip(mf.mo_energy, orbsym, strict=True)
+        ]
+    else:
+        spins = [(np.asarray(mf.mo_energy), [names[int(i)] for i in orbsym])]
+    return {
+        "group": str(mol.groupname),
+        "energy": energy,
+        "electrons": electrons,
+        "spins": spins,
+        "spin_square": 0.0 if kind == "rhf" else float(mf.spin_square()[0]),
+    }

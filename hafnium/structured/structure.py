@@ -1,9 +1,12 @@
 """Block structures: which blocks a symmetry-constrained operator consists of.
 
-The spin structure and, for periodic systems, the k axis exist at this
-stage. Point-group sectors, added in a later milestone, multiply each block
-below by the irreps of the group; non-Abelian irreps also use the
-``weight`` field for their multiplicity.
+A structure is a spin pattern (spatial, restricted, unrestricted,
+generalized, with real, complex or paired blocks), optionally over the k
+axis of a periodic system, and optionally multiplied by the irrep sectors
+of an Abelian point group (ADR-0023): with sectors the spin pattern is
+repeated once per irrep, in the order of the irreps, each copy acting on
+the SALCs of its irrep. Non-Abelian irreps, a later extension, would also
+use the ``weight`` field for their multiplicity.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from enum import Enum
 
 from hafnium.errors import StructureError
 from hafnium.structured.kaxis import KAxis
+from hafnium.structured.sectors import IrrepSectors
 
 
 class Spin(Enum):
@@ -60,6 +64,9 @@ class Block:
     partner
         Rule deriving the block from its source; set exactly when
         ``derived_from`` is.
+    irrep
+        Index of the block's irrep sector in the structure's
+        :class:`IrrepSectors`, or ``None`` in a structure without sectors.
     """
 
     spin: Spin
@@ -67,12 +74,15 @@ class Block:
     weight: int = 1
     derived_from: int | None = None
     partner: Partner | None = None
+    irrep: int | None = None
 
     def __post_init__(self) -> None:
         if (self.derived_from is None) != (self.partner is None):
             raise StructureError("derived_from and partner must be given together")
         if self.weight < 1:
             raise StructureError("block weight must be at least 1")
+        if self.irrep is not None and self.irrep < 0:
+            raise StructureError("an irrep index is non-negative")
         if self.ring is Ring.QUATERNION and self.spin is not Spin.SPINOR:
             raise StructureError("quaternionic blocks require the spinor sector")
         if self.spin in (Spin.NONE, Spin.SPINOR) and self.derived_from is not None:
@@ -93,33 +103,55 @@ class BlockStructure:
     every block a batch over k-points (ADR-0015): blocks over the real and
     quaternionic rings then store the half zone, ``k_axis.representatives``,
     and blocks over the complex ring every point. Without a k axis the
-    structure is molecular and blocks hold one matrix each.
+    structure is molecular and blocks hold one matrix each. ``irreps``
+    multiplies the spin pattern by the irrep sectors of a point group
+    (ADR-0023): the blocks are the pattern repeated for every sector in
+    order, each block carrying its sector's index as ``irrep`` and acting
+    on that sector's SALCs; sectors and a k axis cannot be combined.
     """
 
     blocks: tuple[Block, ...]
     k_axis: KAxis | None = field(default=None, kw_only=True)
+    irreps: IrrepSectors | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "blocks", tuple(self.blocks))
         if not self.blocks:
             raise StructureError("a structure needs at least one block")
-        spins = [block.spin for block in self.blocks]
-        if len(set(spins)) != len(spins):
-            raise StructureError("each spin sector may appear once")
-        if set(spins) not in ({Spin.NONE}, {Spin.SPINOR}, {Spin.ALPHA, Spin.BETA}):
-            raise StructureError(f"unsupported spin sectors {spins}")
-        if spins == [Spin.BETA, Spin.ALPHA]:
-            raise StructureError("the alpha block precedes the beta block")
-        for index, block in enumerate(self.blocks):
-            if block.derived_from is None:
-                continue
-            if not 0 <= block.derived_from < index:
-                raise StructureError("a derived block must follow its source")
-            source = self.blocks[block.derived_from]
-            if not source.is_stored:
-                raise StructureError("a derived block must derive from a stored block")
-            if source.ring is not block.ring:
-                raise StructureError("a derived block shares the ring of its source")
+        if self.irreps is None:
+            if any(block.irrep is not None for block in self.blocks):
+                raise StructureError(
+                    "blocks carry irrep indices only in a structure with irrep sectors"
+                )
+            _validate_spin_pattern(self.blocks)
+            return
+        if self.k_axis is not None:
+            raise StructureError(
+                "irrep sectors are molecular: a structure with a k axis has none "
+                "(the space groups of crystals reduce the k-point set instead)"
+            )
+        n_sectors = self.irreps.n_irreps
+        size, remainder = divmod(len(self.blocks), n_sectors)
+        if remainder or size == 0:
+            raise StructureError(
+                f"{len(self.blocks)} blocks do not repeat a spin pattern over "
+                f"{n_sectors} irrep sectors"
+            )
+        pattern = tuple(_unsectored(block) for block in self.blocks[:size])
+        _validate_spin_pattern(pattern)
+        for sector in range(n_sectors):
+            chunk = self.blocks[sector * size : (sector + 1) * size]
+            for block, expected in zip(chunk, pattern, strict=True):
+                if block.irrep != sector:
+                    raise StructureError(
+                        f"the blocks of sector {sector} carry the irrep index "
+                        f"{sector}, got {block.irrep}"
+                    )
+                if _unsectored(block, shift=sector * size) != expected:
+                    raise StructureError(
+                        f"sector {sector} does not repeat the spin pattern of the "
+                        "first sector"
+                    )
 
     @classmethod
     def spatial(cls, ring: Ring = Ring.REAL) -> BlockStructure:
@@ -165,7 +197,72 @@ class BlockStructure:
 
     def with_k_axis(self, k_axis: KAxis | None) -> BlockStructure:
         """Return the same block pattern over ``k_axis`` (``None``: molecular)."""
-        return BlockStructure(self.blocks, k_axis=k_axis)
+        return BlockStructure(self.blocks, k_axis=k_axis, irreps=self.irreps)
+
+    def with_irreps(self, irreps: IrrepSectors | None) -> BlockStructure:
+        """Return the spin pattern multiplied by ``irreps`` (``None``: no sectors).
+
+        The pattern of one sector is repeated for every irrep in order, the
+        copies acting on the SALCs of their irrep (ADR-0023).
+        """
+        pattern = self.sector_structure.blocks
+        if irreps is None:
+            return BlockStructure(pattern, k_axis=self.k_axis)
+        blocks: list[Block] = []
+        for sector in range(irreps.n_irreps):
+            shift = sector * len(pattern)
+            blocks.extend(
+                Block(
+                    block.spin,
+                    block.ring,
+                    block.weight,
+                    None if block.derived_from is None else block.derived_from + shift,
+                    block.partner,
+                    irrep=sector,
+                )
+                for block in pattern
+            )
+        return BlockStructure(tuple(blocks), k_axis=self.k_axis, irreps=irreps)
+
+    @property
+    def sector_structure(self) -> BlockStructure:
+        """The spin pattern of one irrep sector, without the sectors.
+
+        A structure without sectors is its own sector structure.
+        """
+        if self.irreps is None:
+            return self
+        size = len(self.blocks) // self.irreps.n_irreps
+        return BlockStructure(
+            tuple(_unsectored(block) for block in self.blocks[:size]),
+            k_axis=self.k_axis,
+        )
+
+    @property
+    def n_sectors(self) -> int:
+        """Number of irrep sectors, one without sectors."""
+        return 1 if self.irreps is None else self.irreps.n_irreps
+
+    @property
+    def stored_per_sector(self) -> int:
+        """Number of stored blocks in each irrep sector (all stored blocks without)."""
+        return self.n_stored // self.n_sectors
+
+    def sector_slice(self, sector: int) -> slice:
+        """Positions of the stored blocks of ``sector`` among all stored blocks."""
+        size = self.stored_per_sector
+        return slice(sector * size, (sector + 1) * size)
+
+    @property
+    def irrep_labels(self) -> tuple[str | None, ...]:
+        """Mulliken label of every stored block's sector; ``None`` without sectors."""
+        if self.irreps is None:
+            return (None,) * self.n_stored
+        labels = self.irreps.labels
+        return tuple(
+            None if block.irrep is None else labels[block.irrep]
+            for block in self.stored_blocks
+        )
 
     def half_zone(self, block: Block) -> bool:
         """Whether ``block`` stores the half zone and derives its partners."""
@@ -279,15 +376,25 @@ class BlockStructure:
             raise StructureError("paired structures fix their ring")
         return BlockStructure(
             tuple(
-                Block(block.spin, ring, block.weight, block.derived_from, block.partner)
+                Block(
+                    block.spin,
+                    ring,
+                    block.weight,
+                    block.derived_from,
+                    block.partner,
+                    irrep=block.irrep,
+                )
                 for block in self.blocks
             ),
             k_axis=self.k_axis,
+            irreps=self.irreps,
         )
 
     def describe(self) -> str:
         """Short human-readable name, for messages and logs."""
         name = self._describe_spin()
+        if self.irreps is not None:
+            return f"{name} in {self.irreps.group}"
         if self.k_axis is None:
             return name
         n = self.k_axis.n_kpt
@@ -308,3 +415,35 @@ class BlockStructure:
         if self.derived_partner is Partner.CONJUGATE:
             return "paired unrestricted"
         return f"unrestricted ({ring})"
+
+
+def _unsectored(block: Block, *, shift: int = 0) -> Block:
+    """Return ``block`` without its irrep, its source index moved back by ``shift``."""
+    return Block(
+        block.spin,
+        block.ring,
+        block.weight,
+        None if block.derived_from is None else block.derived_from - shift,
+        block.partner,
+    )
+
+
+def _validate_spin_pattern(blocks: tuple[Block, ...]) -> None:
+    """Raise unless ``blocks`` is one of the supported spin patterns."""
+    spins = [block.spin for block in blocks]
+    if len(set(spins)) != len(spins):
+        raise StructureError("each spin sector may appear once")
+    if set(spins) not in ({Spin.NONE}, {Spin.SPINOR}, {Spin.ALPHA, Spin.BETA}):
+        raise StructureError(f"unsupported spin sectors {spins}")
+    if spins == [Spin.BETA, Spin.ALPHA]:
+        raise StructureError("the alpha block precedes the beta block")
+    for index, block in enumerate(blocks):
+        if block.derived_from is None:
+            continue
+        if not 0 <= block.derived_from < index:
+            raise StructureError("a derived block must follow its source")
+        source = blocks[block.derived_from]
+        if not source.is_stored:
+            raise StructureError("a derived block must derive from a stored block")
+        if source.ring is not block.ring:
+            raise StructureError("a derived block shares the ring of its source")

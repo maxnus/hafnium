@@ -5,17 +5,21 @@ block ``X`` expands to ``block_diag(X, X)``, collinear blocks to
 ``block_diag(alpha, beta)`` and a spinor block is already dense. With a k
 axis the dense form carries every k-point of the set as a leading axis,
 ``[kpt, 2n, m]``, the blocks that are stored for a half zone being
-expanded by the antiunitary map of their ring (ADR-0015). It is the
-canonical form that relates all structures. The functions here act on a
-structure and its stored blocks rather than on :class:`BlockMatrix`, which
-keeps that class thin.
+expanded by the antiunitary map of their ring (ADR-0015). With irrep
+sectors the dense form is in the atomic basis (ADR-0023): the sector
+blocks of an operator are assembled as ``Σ_Γ U_Γ X_Γ U_Γᵀ`` and those of
+orbital coefficients placed side by side as ``U_Γ C_Γ``, so the dense form
+of a matrix over sectors is the dense form of the same matrix without
+them. It is the canonical form that relates all structures. The functions
+here act on a structure and its stored blocks rather than on
+:class:`BlockMatrix`, which keeps that class thin.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from hafnium.backend import Array, Namespace, adjoint, array_namespace
+from hafnium.backend import Array, Namespace, adjoint, array_namespace, block_diag
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import (
     half_dimension,
@@ -23,7 +27,7 @@ from hafnium.structured.kramers import (
     time_reverse,
     time_reverse_operator,
 )
-from hafnium.structured.structure import Block, BlockStructure, Partner, Ring
+from hafnium.structured.structure import Block, BlockStructure, Partner, Ring, Spin
 from hafnium.structured.validation import cast_to_ring
 
 # ----------------------------------------------------------------- k partners
@@ -90,12 +94,50 @@ def materialize_at(
     wanted: Sequence[int] | None,
     *,
     matrix: bool = True,
+    orbitals: bool = False,
 ) -> tuple[Array, ...]:
-    """One array per block of the structure at the k-points ``wanted``.
+    """One array per block of the spin pattern at the k-points ``wanted``.
 
     Derived blocks are built from their source: a copy at the same k, or
-    the conjugate of the source at ``−k``.
+    the conjugate of the source at ``−k``. With irrep sectors the blocks of
+    each sector are brought to the atomic basis and combined: operators as
+    ``Σ_Γ U_Γ X_Γ U_Γᵀ``, orbital coefficients (``orbitals``) and vectors
+    (``matrix`` false) side by side over the sectors, so the result has one
+    array per block of :attr:`BlockStructure.sector_structure`.
     """
+    sectors = structure.irreps
+    if sectors is None:
+        return _materialize_sector(structure, stored, wanted, matrix=matrix)
+    base = structure.sector_structure
+    per_sector = [
+        _materialize_sector(
+            base, stored[structure.sector_slice(sector)], wanted, matrix=matrix
+        )
+        for sector in range(sectors.n_irreps)
+    ]
+    arrays: list[Array] = []
+    for index, block in enumerate(base.blocks):
+        parts = [arrays_of_sector[index] for arrays_of_sector in per_sector]
+        if not matrix:
+            xp = array_namespace(*parts)
+            arrays.append(xp.concat(parts, axis=-1))
+            continue
+        arrays.append(
+            sectors.to_atomic(
+                parts, spinor=block.spin is Spin.SPINOR, orbitals=orbitals
+            )
+        )
+    return tuple(arrays)
+
+
+def _materialize_sector(
+    structure: BlockStructure,
+    stored: Sequence[Array],
+    wanted: Sequence[int] | None,
+    *,
+    matrix: bool,
+) -> tuple[Array, ...]:
+    """One array per block of a structure without sectors at ``wanted``."""
     axis = structure.k_axis
     positions: dict[int, int] = {}
     arrays: list[Array] = []
@@ -121,27 +163,37 @@ def materialize_at(
 
 
 def materialize(
-    structure: BlockStructure, stored: Sequence[Array], *, matrix: bool = True
+    structure: BlockStructure,
+    stored: Sequence[Array],
+    *,
+    matrix: bool = True,
+    orbitals: bool = False,
 ) -> tuple[Array, ...]:
-    """Expand stored blocks to one array per block over the full k set."""
-    return materialize_at(structure, stored, structure.all_kpoints, matrix=matrix)
+    """Expand stored blocks to one array per spin block over the full k set."""
+    return materialize_at(
+        structure, stored, structure.all_kpoints, matrix=matrix, orbitals=orbitals
+    )
 
 
 def spin_blocks_at(
-    structure: BlockStructure, stored: Sequence[Array], wanted: Sequence[int] | None
+    structure: BlockStructure,
+    stored: Sequence[Array],
+    wanted: Sequence[int] | None,
+    *,
+    orbitals: bool = False,
 ) -> tuple[Array, ...]:
     """``(alpha, beta)`` blocks, or the single spinor block, at ``wanted``."""
-    arrays = materialize_at(structure, stored, wanted)
+    arrays = materialize_at(structure, stored, wanted, orbitals=orbitals)
     if structure.is_spatial:
         return (arrays[0], arrays[0])
     return arrays
 
 
 def spin_blocks(
-    structure: BlockStructure, stored: Sequence[Array]
+    structure: BlockStructure, stored: Sequence[Array], *, orbitals: bool = False
 ) -> tuple[Array, ...]:
     """``(alpha, beta)`` blocks, or the single spinor block, over the full k set."""
-    return spin_blocks_at(structure, stored, structure.all_kpoints)
+    return spin_blocks_at(structure, stored, structure.all_kpoints, orbitals=orbitals)
 
 
 # ---------------------------------------------------------------- weighted sums
@@ -189,30 +241,16 @@ def weighted_total(structure: BlockStructure, values: Sequence[Array]) -> Array:
 # ------------------------------------------------------------------ dense form
 
 
-def block_diag(a: Array, b: Array) -> Array:
-    """Block-diagonal matrices with ``a`` and ``b`` on the diagonal, batched."""
-    xp = array_namespace(a, b)
-    dtype = xp.result_type(a, b)
-    top = xp.concat(
-        [
-            xp.astype(a, dtype),
-            xp.zeros((*a.shape[:-1], b.shape[-1]), dtype=dtype),
-        ],
-        axis=-1,
-    )
-    bottom = xp.concat(
-        [
-            xp.zeros((*b.shape[:-1], a.shape[-1]), dtype=dtype),
-            xp.astype(b, dtype),
-        ],
-        axis=-1,
-    )
-    return xp.concat([top, bottom], axis=-2)
+def to_dense(
+    structure: BlockStructure, stored: Sequence[Array], *, orbitals: bool = False
+) -> Array:
+    """Expand into the spin-orbital representation ``[(kpt,) 2n, m_alpha + m_beta]``.
 
-
-def to_dense(structure: BlockStructure, stored: Sequence[Array]) -> Array:
-    """Expand into the spin-orbital representation ``[(kpt,) 2n, m_alpha + m_beta]``."""
-    parts = spin_blocks(structure, stored)
+    ``orbitals`` marks orbital coefficients, whose columns stay as they are
+    when the rows of a matrix over irrep sectors are brought to the atomic
+    basis; an operator is transformed on both sides.
+    """
+    parts = spin_blocks(structure, stored, orbitals=orbitals)
     if len(parts) == 1:
         return parts[0]
     return block_diag(parts[0], parts[1])
@@ -221,10 +259,20 @@ def to_dense(structure: BlockStructure, stored: Sequence[Array]) -> Array:
 def column_split(
     structure: BlockStructure, stored: Sequence[Array]
 ) -> tuple[int, int] | None:
-    """Column counts of the alpha and beta blocks; ``None`` for spinor matrices."""
+    """Column counts of the alpha and beta blocks; ``None`` for spinor matrices.
+
+    With irrep sectors the columns of a spin block are summed over them.
+    """
     if structure.is_spinor:
         return None
-    columns = [int(block.shape[-1]) for block in stored]
+    size = structure.stored_per_sector
+    columns = [
+        sum(
+            int(stored[sector * size + index].shape[-1])
+            for sector in range(structure.n_sectors)
+        )
+        for index in range(size)
+    ]
     if len(columns) == 1:
         return (columns[0], columns[0])
     return (columns[0], columns[1])
@@ -242,11 +290,39 @@ def blocks_from_dense(
 
     With ``check`` the result must reproduce ``dense`` to within
     ``tolerance`` (a lossless embedding); without it the matrix is projected
-    (alpha and beta averaged, real part taken, Kramers-symmetrized, and the
-    block at ``k`` averaged with the partner map of the block at ``−k``).
+    (alpha and beta averaged, real part taken, Kramers-symmetrized, the
+    block at ``k`` averaged with the partner map of the block at ``−k``,
+    and the couplings between irrep sectors dropped). Only square
+    operators enter a structure with irrep sectors: the columns of orbital
+    coefficients carry no irrep to assign them by.
     """
     xp = array_namespace(dense)
     _check_dense_shape(structure, dense)
+    sectors = structure.irreps
+    if sectors is not None:
+        if int(dense.shape[-2]) != int(dense.shape[-1]):
+            raise StructureError(
+                "only square operators enter a structure with irrep sectors from "
+                "the dense form; orbital coefficients are built per sector"
+            )
+        base = structure.sector_structure
+        sector_blocks: list[Array] = []
+        for part in sectors.from_atomic(dense, spinor=True):
+            sector_blocks.extend(
+                blocks_from_dense(
+                    base, part, column_split=None, check=check, tolerance=tolerance
+                )
+            )
+        if check:
+            require_close(
+                xp,
+                to_dense(structure, sector_blocks),
+                dense,
+                tolerance,
+                f"the matrix couples the irreps of {sectors.group}, so it does "
+                f"not have the {structure.describe()} structure",
+            )
+        return tuple(sector_blocks)
     n = half_dimension(
         int(dense.shape[-2]), "the number of rows of a spin-orbital matrix"
     )

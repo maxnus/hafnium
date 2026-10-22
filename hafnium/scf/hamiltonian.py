@@ -21,7 +21,7 @@ from hafnium.scf.orthogonalization import (
     canonical_orthogonalizer,
 )
 from hafnium.structured import BlockMatrix, BlockStructure
-from hafnium.symmetry import KPoints
+from hafnium.symmetry import KPoints, PointGroup, SymmetryAdaptation, SymmetrySpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +67,10 @@ class Hamiltonian:
         Electron counts, per cell for a periodic system.
     kpoints
         The k-point set of a cell; ``None`` for a molecule.
+    adaptation
+        The symmetry adaptation of the basis to an Abelian point group of
+        the molecule, which a specification imposing that group needs
+        (ADR-0023); ``None`` when no group is imposed.
     """
 
     overlap: Array
@@ -76,6 +80,7 @@ class Hamiltonian:
     n_alpha: int
     n_beta: int
     kpoints: KPoints | None = field(default=None, kw_only=True)
+    adaptation: SymmetryAdaptation | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         n = self.two_body.n_ao
@@ -87,6 +92,14 @@ class Hamiltonian:
             )
         if self.n_alpha < 0 or self.n_beta < 0:
             raise InputError("electron counts must be non-negative")
+        if self.adaptation is not None:
+            if self.kpoints is not None:
+                raise InputError("a point group is imposed on a molecule, not a cell")
+            if self.adaptation.n_functions != n:
+                raise InputError(
+                    f"the symmetry adaptation covers {self.adaptation.n_functions} "
+                    f"functions, the integrals {n}"
+                )
 
     @classmethod
     def from_molecule(
@@ -95,8 +108,20 @@ class Hamiltonian:
         basis: BasisSet,
         molecule: Molecule,
         two_body: CoulombExchange,
+        *,
+        point_group: PointGroup | None = None,
     ) -> Hamiltonian:
-        """Evaluate the one-electron integrals of a molecule."""
+        """Evaluate the one-electron integrals of a molecule.
+
+        With ``point_group`` the basis is adapted to the group, which
+        requires the molecule in the group's standard frame
+        (:meth:`~hafnium.symmetry.PointGroupDetection.orient`).
+        """
+        adaptation = (
+            None
+            if point_group is None
+            else SymmetryAdaptation.from_basis(basis, molecule, point_group)
+        )
         return cls(
             overlap(engine, basis, molecule),
             core_hamiltonian(engine, basis, molecule),
@@ -104,6 +129,7 @@ class Hamiltonian:
             molecule.nuclear_repulsion_energy(),
             molecule.n_alpha,
             molecule.n_beta,
+            adaptation=adaptation,
         )
 
     @classmethod
@@ -142,12 +168,35 @@ class Hamiltonian:
         """Total number of electrons, per cell for a periodic system."""
         return self.n_alpha + self.n_beta
 
+    def structure(self, symmetry: SymmetrySpec) -> BlockStructure:
+        """Block structure of the state ``symmetry`` specifies for this Hamiltonian.
+
+        Raises
+        ------
+        InputError
+            If the specification carries a k-point set other than the
+            Hamiltonian's, or imposes a point group the Hamiltonian is not
+            adapted to.
+        """
+        if symmetry.kpoints != self.kpoints:
+            raise InputError(
+                "the symmetry specification and the Hamiltonian carry different "
+                "k-point sets; use SymmetrySpec.with_kpoints with the Hamiltonian's"
+            )
+        return symmetry.structure(self.adaptation)
+
     def metric(self, structure: BlockStructure) -> BlockMatrix:
-        """Embed the overlap matrix into ``structure``."""
+        """Embed the overlap matrix into ``structure``.
+
+        With irrep sectors the matrix is projected onto them, as every
+        one-electron matrix is (ADR-0023): the couplings between irreps,
+        which vanish for a molecule exactly in the standard frame, are
+        bounded by the tolerance of the symmetry adaptation.
+        """
         return self._embed_spatial(self.overlap, structure)
 
     def one_body(self, structure: BlockStructure) -> BlockMatrix:
-        """Embed the core Hamiltonian into ``structure``."""
+        """Embed the core Hamiltonian into ``structure``; see :meth:`metric`."""
         return self._embed_spatial(self.core_hamiltonian, structure)
 
     def orthogonalizer(
@@ -164,11 +213,13 @@ class Hamiltonian:
         structure derives at ``−k``, orthogonalizes ``S(−k) = conj(S(k))``
         just as well.
         """
-        self._require_matching_axis(structure)
-        overlap = BlockMatrix.from_spatial(self.overlap, structure.k_axis)
-        (block,) = overlap.blocks
-        orthogonalizer = canonical_orthogonalizer(block, threshold)
-        return BlockMatrix(overlap.structure, (orthogonalizer,)).embed(structure)
+        self._require_matching_sectors(structure)
+        overlap = BlockMatrix.from_spatial(
+            self.overlap, structure.k_axis, irreps=structure.irreps
+        )
+        return overlap.map_blocks(
+            lambda block: canonical_orthogonalizer(block, threshold)
+        ).embed(structure)
 
     def fock(self, density: BlockMatrix) -> tuple[BlockMatrix, EnergyTerms]:
         """Fock matrix ``h + J − K`` and energy terms of a Hermitian density."""
@@ -183,15 +234,24 @@ class Hamiltonian:
         return one_body + coulomb - exchange, energies
 
     def _embed_spatial(self, matrix: Array, structure: BlockStructure) -> BlockMatrix:
-        self._require_matching_axis(structure)
-        return BlockMatrix.from_spatial(matrix, structure.k_axis).embed(structure)
+        self._require_matching_sectors(structure)
+        return BlockMatrix.from_spatial(
+            matrix, structure.k_axis, irreps=structure.irreps
+        ).embed(structure)
 
-    def _require_matching_axis(self, structure: BlockStructure) -> None:
+    def _require_matching_sectors(self, structure: BlockStructure) -> None:
         expected = None if self.kpoints is None else self.kpoints.axis()
         if structure.k_axis != expected:
             raise InputError(
                 "the structure's k-points do not match the Hamiltonian's: build the "
                 "structure from a SymmetrySpec with the Hamiltonian's k-point set"
+            )
+        if structure.irreps is not None and (
+            self.adaptation is None or structure.irreps != self.adaptation.irreps()
+        ):
+            raise InputError(
+                "the structure's irrep sectors do not match the Hamiltonian's "
+                "symmetry adaptation: build the structure with Hamiltonian.structure"
             )
 
 

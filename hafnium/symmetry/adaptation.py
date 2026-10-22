@@ -16,7 +16,7 @@ symmetric density, is block-diagonal over the irreps in that basis.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from hafnium.backend import (
     Array,
@@ -28,6 +28,7 @@ from hafnium.backend import (
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import AtomicSystem
+from hafnium.structured import IrrepSectors
 from hafnium.symmetry.detection import DEFAULT_SYMMETRY_TOLERANCE
 from hafnium.symmetry.point_group import PointGroup, solid_harmonic_parity
 
@@ -66,6 +67,20 @@ class SymmetryAdaptation:
     function_images: Array
     function_signs: Array
     coefficients: tuple[Array, ...]
+    _sectors: IrrepSectors = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        spanned = [
+            (label, block)
+            for label, block in zip(self.labels, self.coefficients, strict=True)
+            if int(block.shape[1]) > 0
+        ]
+        sectors = IrrepSectors(
+            self.group.name,
+            tuple(label for label, _ in spanned),
+            tuple(block for _, block in spanned),
+        )
+        object.__setattr__(self, "_sectors", sectors)
 
     @classmethod
     def from_basis(
@@ -134,6 +149,16 @@ class SymmetryAdaptation:
     def labels(self) -> tuple[str, ...]:
         """Mulliken label of each irrep."""
         return self.group.labels
+
+    def irreps(self) -> IrrepSectors:
+        """Return the irrep sectors of the basis for the structured matrices.
+
+        One sector per irrep the basis spans, with its SALCs, in the order
+        of the group's irreps (ADR-0023); irreps without SALCs are left out.
+        The same object is returned every time, so structures built from
+        one adaptation share it.
+        """
+        return self._sectors
 
     def transformation(self) -> Array:
         """Return all SALCs as one orthogonal matrix ``[ao, ao]``, irrep by irrep."""

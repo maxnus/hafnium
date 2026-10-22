@@ -18,6 +18,7 @@ from hafnium.structured import (
     BlockMatrix,
     BlockStructure,
     BlockVector,
+    IrrepSectors,
     KAxis,
     Ring,
     Spin,
@@ -524,3 +525,133 @@ def test_zeros_and_identity_have_the_right_block_shapes() -> None:
     identity = BlockMatrix.identity(BlockStructure.paired_generalized(), 3)
     assert identity.shapes == ((6, 6),)
     assert identity.blocks[0].dtype == np.complex128
+
+
+# ------------------------------------------------------------- irrep sectors
+#
+# Irrep sectors (ADR-0023) multiply the molecular structures. A random
+# orthogonal matrix split into two or three column blocks serves as the SALC
+# basis; a member of a structure over sectors is a random Hermitian matrix
+# projected onto it, which drops the couplings between sectors.
+
+
+def random_sectors(rng: np.random.Generator, n: int) -> IrrepSectors:
+    """Sectors of a random orthogonal basis, as many as ``n`` functions allow."""
+    q, _ = np.linalg.qr(rng.standard_normal((n, n)))
+    splits = sorted(rng.choice(n - 1, size=min(2, n - 1), replace=False) + 1)
+    blocks = tuple(np.ascontiguousarray(part) for part in np.split(q, splits, axis=1))
+    return IrrepSectors("D2", ("A", "B1", "B2")[: len(blocks)], blocks)
+
+
+def sectored(name: str, n: int, rng: np.random.Generator) -> BlockMatrix:
+    """A random Hermitian member of the molecular structure ``name`` over sectors."""
+    structure = STRUCTURES[name].with_irreps(random_sectors(rng, n))
+    return BlockMatrix.from_dense(structure, random_hermitian(rng, 2 * n), check=False)
+
+
+@settings(max_examples=100, deadline=None)
+@given(seed=seeds, n=sizes, name=names)
+def test_sectors_round_trip_through_the_dense_form(
+    seed: int, n: int, name: str
+) -> None:
+    a = sectored(name, n, np.random.default_rng(seed))
+    assert a.n_spatial == n
+    assert a.structure.n_sectors == len(a.structure.irreps.labels)  # type: ignore[union-attr]
+    again = BlockMatrix.from_dense(a.structure, a.to_dense(), check=True)
+    assert close(a, again)
+    assert close(a.project(a.structure), a)
+    assert all(
+        close(part, BlockMatrix.from_dense(part.structure, part.to_dense()))
+        for part in a.sectors()
+    )
+    assert close(BlockMatrix.from_sectors(a.structure, a.sectors()), a)
+
+
+@settings(max_examples=100, deadline=None)
+@given(seed=seeds, n=sizes, name=names)
+def test_sector_algebra_matches_dense_algebra(seed: int, n: int, name: str) -> None:
+    rng = np.random.default_rng(seed)
+    a = sectored(name, n, rng)
+    b = BlockMatrix.from_dense(a.structure, random_hermitian(rng, 2 * n), check=False)
+    ad, bd = a.to_dense(), b.to_dense()
+    assert np.allclose((a @ b).to_dense(), ad @ bd, atol=STRUCTURE_TOL)
+    assert np.allclose((a + b).to_dense(), ad + bd, atol=STRUCTURE_TOL)
+    assert np.allclose(a.adjoint().to_dense(), adjoint(ad), atol=STRUCTURE_TOL)
+    assert np.allclose(a.trace(), np.trace(ad), atol=STRUCTURE_TOL)
+    assert np.allclose(a.trace_product(b), np.trace(ad @ bd), atol=STRUCTURE_TOL)
+    total = a.spin_trace()
+    assert total.structure == BlockStructure.spatial(
+        Ring.COMPLEX if a.structure.is_complex else Ring.REAL
+    ).with_irreps(a.structure.irreps)
+    assert np.allclose(
+        total.materialized()[0], ad[:n, :n] + ad[n:, n:], atol=STRUCTURE_TOL
+    )
+
+
+@settings(max_examples=100, deadline=None)
+@given(seed=seeds, n=sizes, pair=st.sampled_from(EMBEDDINGS))
+def test_sectors_embed_along_the_hierarchy_and_into_the_plain_structure(
+    seed: int, n: int, pair: tuple[str, str]
+) -> None:
+    lower, higher = pair
+    a = sectored(lower, n, np.random.default_rng(seed))
+    irreps = a.structure.irreps
+    embedded = a.embed(STRUCTURES[higher].with_irreps(irreps))
+    assert np.allclose(embedded.to_dense(), a.to_dense(), atol=STRUCTURE_TOL)
+    assert close(embedded.project(a.structure), a)
+    plain = a.embed(STRUCTURES[lower])
+    assert plain.structure.irreps is None
+    assert np.allclose(plain.to_dense(), a.to_dense(), atol=STRUCTURE_TOL)
+    assert close(plain.project(a.structure), a)
+    assert close(plain.embed(a.structure), a)
+
+
+@settings(max_examples=60, deadline=None)
+@given(seed=seeds, n=sizes, name=names)
+def test_sector_eigenvectors_diagonalize_the_dense_operator(
+    seed: int, n: int, name: str
+) -> None:
+    rng = np.random.default_rng(seed)
+    f = sectored(name, n, rng)
+    s = overlap_member(n, rng, "molecular").project(f.structure)
+    values, vectors = f.eigh(s)
+    c, w = vectors.to_dense(orbitals=True), values.to_dense()
+    fd, sd = f.to_dense(), s.to_dense()
+    assert c.shape == (2 * n, w.shape[0])
+    assert np.allclose(fd @ c, sd @ c * w[None, :], atol=EIGEN_TOL)
+    assert np.allclose(adjoint(c) @ sd @ c, np.eye(c.shape[1]), atol=EIGEN_TOL)
+    density = density_matrix(vectors, even_occupations(n, vectors))
+    occupations = even_occupations(n, vectors).to_dense()
+    assert np.allclose(
+        density.to_dense(), (c * occupations[None, :]) @ adjoint(c), atol=EIGEN_TOL
+    )
+
+
+def test_sector_shapes_and_crossings_are_validated() -> None:
+    rng = np.random.default_rng(3)
+    irreps = random_sectors(rng, 4)
+    structure = BlockStructure.unrestricted().with_irreps(irreps)
+    zeros = BlockMatrix.zeros(structure, (4, 4))
+    assert zeros.shapes == tuple((d, d) for d in irreps.dimensions for _ in range(2))
+    assert BlockMatrix.identity(
+        BlockStructure.generalized().with_irreps(irreps), 4
+    ).shapes == tuple((2 * d, 2 * d) for d in irreps.dimensions)
+    with pytest.raises(StructureError, match="square operator"):
+        BlockMatrix.zeros(structure, (4, 2))
+    with pytest.raises(StructureError, match="functions, got"):
+        BlockMatrix(structure, tuple(np.zeros((4, 4)) for _ in zeros.blocks))
+    with pytest.raises(StructureError, match="only square operators"):
+        BlockMatrix.from_dense(structure, np.zeros((8, 4)), check=False)
+    coefficients = zeros.map_blocks(lambda block: block[:, :1])
+    with pytest.raises(StructureError, match="orbitals=True"):
+        coefficients.embed(BlockStructure.unrestricted())
+    with pytest.raises(StructureError, match="orbitals=True"):
+        coefficients.to_dense()
+    assert coefficients.to_dense(orbitals=True).shape == (8, 2 * irreps.n_irreps)
+    with pytest.raises(StructureError, match="sectors"):
+        BlockMatrix.from_sectors(structure, zeros.sectors()[:1])
+    coupled = BlockMatrix.from_dense(
+        BlockStructure.unrestricted(), random_hermitian(rng, 8), check=False
+    )
+    with pytest.raises(StructureError, match="couples the irreps"):
+        coupled.embed(structure)

@@ -7,16 +7,17 @@ complex rings, and paired (time-reversal symmetric) targets accept paired
 sources or real sources whose alpha and beta blocks coincide. For such
 pairs the stored blocks of the target follow from those of the source by
 copying, casting and block-diagonal stacking, with nothing to verify. Both
-structures must share the k axis; a block that stores the half zone in the
-source is expanded to whatever the target block stores.
+structures must share the k axis and the irrep sectors; a block that
+stores the half zone in the source is expanded to whatever the target
+block stores, and with sectors every sector is embedded on its own.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from hafnium.backend import Array, array_namespace
-from hafnium.structured.dense import block_diag, expand_k, spin_blocks_at
+from hafnium.backend import Array, array_namespace, block_diag
+from hafnium.structured.dense import expand_k, spin_blocks_at
 from hafnium.structured.structure import BlockStructure, Partner, Ring, Spin
 from hafnium.structured.validation import cast_to_ring
 
@@ -39,7 +40,7 @@ def is_paired(structure: BlockStructure) -> bool:
 
 def is_structural_embedding(source: BlockStructure, target: BlockStructure) -> bool:
     """Whether every member of ``source`` is a member of ``target`` by construction."""
-    if source.k_axis != target.k_axis:
+    if source.k_axis != target.k_axis or source.irreps != target.irreps:
         return False
     if spin_level(source) > spin_level(target):
         return False
@@ -58,6 +59,17 @@ def embed_blocks(
 
     Only valid when :func:`is_structural_embedding` holds for the pair.
     """
+    if source.irreps is not None:
+        blocks: list[Array] = []
+        for sector in range(source.n_sectors):
+            blocks.extend(
+                embed_blocks(
+                    source.sector_structure,
+                    stored[source.sector_slice(sector)],
+                    target.sector_structure,
+                )
+            )
+        return tuple(blocks)
     xp = array_namespace(*stored)
     target_blocks: list[Array] = []
     for block in target.stored_blocks:

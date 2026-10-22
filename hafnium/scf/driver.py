@@ -22,7 +22,13 @@ from hafnium.scf.occupation import (
 )
 from hafnium.scf.orthogonalization import DEFAULT_OVERLAP_THRESHOLD
 from hafnium.scf.spin import SpinExpectation, spin_expectation
-from hafnium.structured import BlockMatrix, BlockStructure, BlockVector, density_matrix
+from hafnium.structured import (
+    BlockMatrix,
+    BlockStructure,
+    BlockVector,
+    dense,
+    density_matrix,
+)
 from hafnium.symmetry import SymmetrySpec
 
 logger = logging.getLogger(__name__)
@@ -124,6 +130,26 @@ class ScfResult:
         """Number of Fock builds in the iteration."""
         return len(self.history)
 
+    def electrons_per_irrep(self) -> dict[str, float]:
+        """Electrons in every irrep sector, summed over spins (ADR-0023).
+
+        Empty for a state without irrep sectors.
+        """
+        structure = self.structure
+        if structure.irreps is None:
+            return {}
+        xp = array_namespace(*self.mo_occupations.blocks)
+        sums = [xp.sum(block) for block in self.mo_occupations.blocks]
+        totals: dict[str, float] = {}
+        for sector, label in enumerate(structure.irreps.labels):
+            chosen = structure.sector_slice(sector)
+            values = [
+                total if chosen.start <= index < chosen.stop else xp.zeros(())
+                for index, total in enumerate(sums)
+            ]
+            totals[label] = float(xp.real(dense.weighted_total(structure, values)))
+        return totals
+
 
 def solve_scf(
     hamiltonian: Hamiltonian,
@@ -153,12 +179,7 @@ def solve_scf(
         After ``max_iterations`` Fock builds; ``last`` holds the result.
     """
     options = ScfOptions() if options is None else options
-    if symmetry.kpoints != hamiltonian.kpoints:
-        raise InputError(
-            "the symmetry specification and the Hamiltonian carry different "
-            "k-point sets; use SymmetrySpec.with_kpoints with the Hamiltonian's"
-        )
-    structure = symmetry.structure()
+    structure = hamiltonian.structure(symmetry)
     if occupation is None:
         symmetry.validate_electrons(hamiltonian.n_alpha, hamiltonian.n_beta)
         occupation = AufbauOccupation(hamiltonian.n_alpha, hamiltonian.n_beta)
@@ -315,7 +336,7 @@ class _Setup:
             spin.square,
             spin.multiplicity,
         )
-        return ScfResult(
+        result = ScfResult(
             energies,
             mo_coefficients,
             mo_energies,
@@ -326,6 +347,15 @@ class _Setup:
             converged,
             history,
         )
+        if self.structure.irreps is not None:
+            logger.info(
+                "scf electrons per irrep: %s",
+                ", ".join(
+                    f"{label} {count:g}"
+                    for label, count in result.electrons_per_irrep().items()
+                ),
+            )
+        return result
 
 
 def _record(

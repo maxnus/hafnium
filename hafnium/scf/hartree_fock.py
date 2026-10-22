@@ -33,7 +33,10 @@ def hartree_fock(
     ----------
     symmetry
         Fukutome class of the state; real RHF by default. For a cell it
-        carries the k-point set, :meth:`SymmetrySpec.with_kpoints`.
+        carries the k-point set, :meth:`SymmetrySpec.with_kpoints`; for a
+        molecule it may impose an Abelian point group,
+        :meth:`SymmetrySpec.with_point_group`, in whose standard frame the
+        molecule must be given (ADR-0022, ADR-0023).
     auxiliary
         Density-fitting basis. Without one the four-centre integrals of a
         molecule are evaluated exactly and held in memory; a cell needs one,
@@ -45,7 +48,8 @@ def hartree_fock(
     """
     symmetry = SymmetrySpec() if symmetry is None else symmetry
     hamiltonian = _hamiltonian(engine, basis, system, symmetry, auxiliary)
-    guess = atomic_density_guess(engine, basis, symmetry.structure(), options=options)
+    structure = hamiltonian.structure(symmetry)
+    guess = atomic_density_guess(engine, basis, structure, options=options)
     return solve_scf(hamiltonian, symmetry, guess=guess, options=options)
 
 
@@ -79,4 +83,6 @@ def _hamiltonian(
             engine, basis, auxiliary, system
         )
     )
-    return Hamiltonian.from_molecule(engine, basis, system, molecular)
+    return Hamiltonian.from_molecule(
+        engine, basis, system, molecular, point_group=symmetry.point_group
+    )

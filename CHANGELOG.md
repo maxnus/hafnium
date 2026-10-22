@@ -171,4 +171,17 @@ uses [Semantic Versioning](https://semver.org/).
   SALCs, irrep blocks of operators, orbital irrep weights and labels, and
   the symmetrization of degenerate orbitals (`SymmetryAdaptation`);
   `SymmetryError`; tests against PySCF for twenty molecules (ADR-0022).
+- Spatial symmetry (M6, part two): the irrep sectors of an Abelian point
+  group as an axis of the structured matrices (`IrrepSectors`,
+  `Block.irrep`, `BlockStructure.irreps`, `with_irreps`,
+  `sector_structure`, `BlockMatrix.sectors`, `from_sectors`,
+  `to_dense(orbitals=True)`), the SCF blocked over the sectors with the
+  Coulomb and exchange matrices built in the atomic basis and the
+  one-electron matrices projected onto the sectors, occupations shared
+  over the sectors of a spin block or fixed per irrep
+  (`AufbauOccupation.irrep_electrons`), `SymmetrySpec.point_group`,
+  `Hamiltonian.from_molecule(point_group=)`, `Hamiltonian.structure`,
+  `ScfResult.electrons_per_irrep`; all eight classes reproduce the
+  unconstrained results for symmetric molecules and energies, orbital
+  energies, labels and electrons per irrep match PySCF (ADR-0023).
 
