@@ -13,6 +13,12 @@ uses [Semantic Versioning](https://semver.org/).
   sampling added to the design: k-points as sectors of the structured
   matrices, time-reversal pairing of ±k, Bloch and lattice conventions
   (ADR-0007), and a revised roadmap.
+- Relativistic corrections added to the design (PLAN §5.10, M12): the
+  exact two-component Hamiltonian as a one-body operator, spin-free in
+  every symmetry class and with spin–orbit coupling in the generalized
+  classes, the Gaussian nuclear model as an erf-attenuated attraction,
+  the speed of light as an explicit parameter, and the open decisions on
+  the nuclear model, the two-electron spin–orbit correction and ECPs.
 - McMurchie–Davidson chosen for every integral type in the native engine
   (ADR-0008).
 - Native one-electron integrals: the Boys function, Hermite expansion and

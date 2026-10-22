@@ -60,6 +60,7 @@ authoritative and this file explains the intent.
 | `occ`, `vir` | occupied, virtual (only in `n_occ`, `n_vir`, slice names) |
 | `rhf`, `uhf`, `ghf` | restricted, unrestricted, generalized HF (only in user-facing names) |
 | `kpt` | k-point (as an axis name and in `n_kpt`) |
+| `x2c` | exact two-component relativistic Hamiltonian |
 
 ### 2.3 Mathematical names
 
@@ -193,6 +194,21 @@ Spin never appears as an explicit index in method code; it is part of the
   `[image, G, ao, ao]`, both complex.
   The range-separation parameter is named `omega` everywhere and results
   must not depend on it beyond the stated tolerance.
+- Relativistic Hamiltonians (PLAN §5.10): the speed of light is
+  `SPEED_OF_LIGHT = 137.035999084` (the CODATA 2018 inverse
+  fine-structure constant) in `molecule/units.py`; every relativistic
+  routine takes it as an explicit `speed_of_light` argument with that
+  default and never reads it from global state, so that tests can pass an
+  oracle's value and a very large value gives the non-relativistic limit.
+  The kinetic-balance matrices are `W[u, v] = Σ_i <∂_i χ_u| V |∂_i χ_v>`
+  for the scalar part and `W_so[k, u, v] = Σ_ij ε_ijk <∂_i χ_u| V |∂_j χ_v>`
+  for the spin–orbit part, so that `(σ·p) V (σ·p) = W + i Σ_k σ_k W_so[k]`
+  on spinors ordered α, β. A Gaussian nucleus is the erf-attenuated
+  nuclear attraction with `omega = sqrt(zeta)` per nucleus,
+  `zeta = 3 / (2 r²)` and `r = 0.836 A^(1/3) + 0.570 fm`, with `A` the
+  mass number of the most abundant isotope as tabulated by Visscher and
+  Dyall. Point nuclei are the default for non-relativistic calculations;
+  the default for relativistic ones is pending (PLAN §12).
 
 ## 4. Data model
 
