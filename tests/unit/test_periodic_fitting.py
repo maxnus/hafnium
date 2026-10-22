@@ -226,7 +226,9 @@ def test_absolute_integral_bounds_the_transform() -> None:
         table = ShellTable.from_basis(basis, molecule)
         transform = ENGINE.fourier_transform(table, g_vectors)
         bound = function_absolute_integral(shell)
-        assert np.max(np.abs(transform)) <= bound
+        # For a positive s function the bound is attained at G = 0, so the
+        # comparison allows the rounding of the two evaluations.
+        assert np.max(np.abs(transform)) <= bound + INTEGRAL_TOL
         if shell.angular_momentum == 0:
             # For an s function the bound is the integral itself.
             assert float(np.real(transform[0, 0])) == pytest.approx(
