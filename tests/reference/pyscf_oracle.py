@@ -256,9 +256,11 @@ def pyscf_cell(cell: Cell, basis: BasisSet, *, vacuum: float = 80.0) -> Any:
     two-dimensional Coulomb kernel (``low_dim_ft_type=None``, the truncated
     kernel of Ismail-Beigi), which converges exponentially with the vacuum
     and needs the slab in the ``xy`` plane for the Coulomb terms; a chain
-    takes ``"inf_vacuum"``, PySCF's only option, which sums the open
-    directions over the reciprocal mesh of the padded cell and is not exact
-    (with it a slab's ``energy_nuc`` is also wrong by millions of Hartree).
+    takes ``"inf_vacuum"``, PySCF's only option for dimension one, which
+    integrates the open directions of the three-dimensional kernel on
+    Gauss–Chebyshev nodes of a fixed count but drops the ``G = 0`` term
+    instead of regularizing it, so its energies are not exact (with it a
+    slab's ``energy_nuc`` comes out at millions of Hartree).
     """
     pbc_gto: Any = pytest.importorskip("pyscf.pbc.gto")
     atoms = [

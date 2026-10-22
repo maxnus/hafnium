@@ -24,9 +24,11 @@ Gaussians against the slab and chain kernels, which means a new family of
 kernels in the compiled layer with their own recurrences and, for chains,
 a quadrature anyway; or a quadrature over the perpendicular components of
 the three-dimensional transform, which reuses the existing transforms and
-keeps the kernel in Python. PySCF takes a third route, the truncated
-Coulomb kernel of Ismail-Beigi on a padded cell, which needs a vacuum and
-has no one-dimensional form.
+keeps the kernel in Python. PySCF takes the truncated Coulomb kernel of
+Ismail-Beigi on a padded cell for slabs, which needs a vacuum, and for
+chains only its `inf_vacuum` option, a quadrature over the open
+directions on Gauss–Chebyshev nodes of a fixed count that drops the
+`G = 0` term instead of regularizing it.
 
 ## Decision
 
@@ -98,8 +100,9 @@ has no one-dimensional form.
   `L` constant to 1e-9 between 20 and 40 Bohr; for a chain the residual
   after the Madelung term falls off as `1/L²`. KRHF of a helium slab
   matches PySCF's analytic two-dimensional treatment to 1e-12 in the
-  energy and the orbital energies; PySCF has no exact chain kernel, so
-  chains rest on the internal tests.
+  energy and the orbital energies; PySCF has no exact chain kernel (its
+  `inf_vacuum` quadrature drops the `G = 0` term), so chains rest on the
+  internal tests.
 - A slab costs about ten times the transforms of a comparable
   three-dimensional cell, a chain several tens of times more, since the
   perpendicular quadrature replaces one or two lattice directions by a
