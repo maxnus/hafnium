@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from hafnium.backend import Array, host_array
 from hafnium.basis import BasisSet
-from hafnium.integrals.engine import IntegralEngine
+from hafnium.integrals.engine import CoulombKernel, IntegralEngine
 from hafnium.integrals.shell_table import ShellTable
 from hafnium.molecule import Molecule
 
@@ -42,6 +42,6 @@ def eri(
         (table, table),
         (table, table),
         host_array([[[0.0] * 3] * 3]),
-        omega=omega,
+        kernel=CoulombKernel(omega),
         threshold=threshold,
     )[0]

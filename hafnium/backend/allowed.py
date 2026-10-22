@@ -59,8 +59,9 @@ ALLOWED: frozenset[str] = frozenset(
         "min",
         "prod",
         "sum",
-        # sorting
+        # sorting and searching
         "argsort",
+        "searchsorted",
         "sort",
         # linear algebra
         "einsum",

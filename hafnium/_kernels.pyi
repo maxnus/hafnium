@@ -71,8 +71,14 @@ def coulomb_two_center(
     ket: ShellTable,
     translations: NDArray[np.float64],
     omega: float | None = None,
+    short_range: bool = False,
+    threshold: float = 0.0,
 ) -> NDArray[np.float64]:
-    """Return two-centre Coulomb integrals ``[image, bra, ket]``."""
+    """Return two-centre Coulomb integrals ``[image, bra, ket]``.
+
+    ``omega`` selects ``erf(ωr)/r``, or ``erfc(ωr)/r`` with ``short_range``;
+    terms bounded below ``threshold`` are skipped.
+    """
 
 def coulomb_three_center(
     auxiliary: ShellTable,
@@ -80,10 +86,33 @@ def coulomb_three_center(
     ket: ShellTable,
     translations: NDArray[np.float64],
     omega: float | None = None,
+    short_range: bool = False,
+    threshold: float = 0.0,
 ) -> NDArray[np.float64]:
-    """Return three-centre Coulomb integrals ``[image, aux, bra, ket]``.
+    """Return three-centre Coulomb integrals ``(P|uv)`` as ``[image, aux, bra, ket]``.
 
-    ``translations`` has shape ``[image, 2, 3]``: auxiliary and ket vectors.
+    ``translations`` has shape ``[image, 2, 3]`` (auxiliary, ket).
+    """
+
+def coulomb_three_center_bloch(
+    auxiliary: ShellTable,
+    bra: ShellTable,
+    ket: ShellTable,
+    images: NDArray[np.float64],
+    image_coordinates: NDArray[np.int64],
+    steps: NDArray[np.float64],
+    step_coordinates: NDArray[np.int64],
+    bra_phases: NDArray[np.complex128],
+    ket_phases: NDArray[np.complex128],
+    omega: float | None = None,
+    short_range: bool = False,
+    threshold: float = 0.0,
+) -> NDArray[np.complex128]:
+    """Return the Bloch-summed three-centre integrals ``[kpt, kpt, aux, bra, ket]``.
+
+    ``Σ_ij bra_phases[k1, i] ket_phases[k2, j] (P | u(T_i) v(T_j))`` over the
+    image pairs whose difference is a step, found by the lattice
+    coordinates, the auxiliary function in the home cell.
     """
 
 def coulomb_four_center(
@@ -91,13 +120,14 @@ def coulomb_four_center(
     ket: tuple[ShellTable, ShellTable],
     translations: NDArray[np.float64],
     omega: float | None = None,
+    short_range: bool = False,
     threshold: float = 0.0,
 ) -> NDArray[np.float64]:
-    """Return four-centre Coulomb integrals ``(uv|wx)`` as ``[image, ao, ao, ao, ao]``.
+    """Return four-centre Coulomb integrals ``(uv|wx)`` as ``[image, u, v, w, x]``.
 
-    ``translations`` has shape ``[image, 3, 3]``: the vectors applied to the
-    second bra function and to the two ket functions. Shell quartets whose
-    Schwarz bound is below ``threshold`` are left at zero.
+    ``translations`` has shape ``[image, 3, 3]`` (second bra, first ket,
+    second ket); shell quartets with a Schwarz bound below ``threshold`` are
+    left at zero.
     """
 
 def schwarz_bounds(
@@ -105,8 +135,9 @@ def schwarz_bounds(
     ket: ShellTable,
     translations: NDArray[np.float64],
     omega: float | None = None,
+    short_range: bool = False,
 ) -> NDArray[np.float64]:
-    """Return the Schwarz bounds of the shell pairs, ``[image, shell, shell]``."""
+    """Return the Schwarz bounds of the shell pairs as ``[image, shell, shell]``."""
 
 def fourier_transform(
     table: ShellTable, g_vectors: NDArray[np.float64]

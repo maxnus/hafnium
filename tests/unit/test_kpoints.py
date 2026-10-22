@@ -142,3 +142,20 @@ def test_mesh_size_recovers_meshes_and_rejects_other_sets() -> None:
             KPoints.from_fractional(points).mesh_size()
     with pytest.raises(InputError, match="equal weights"):
         KPoints.from_fractional([(0.0,), (0.5,)], weights=(0.25, 0.75)).mesh_size()
+
+
+def test_momentum_transfers_form_the_gamma_centred_mesh() -> None:
+    for size, shift in [((2, 2, 2), (0.5, 0.5, 0.5)), ((3, 2), None), ((2,), (0.5,))]:
+        mesh = KPoints.mesh(size, shift=shift)
+        transfers, table = mesh.momentum_transfers()
+        assert transfers == KPoints.mesh(size)
+        assert table.shape == (mesh.n_kpt, mesh.n_kpt)
+        points = np.asarray(mesh.fractional)
+        for k1 in range(mesh.n_kpt):
+            for k2 in range(mesh.n_kpt):
+                expected = (points[k2] - points[k1]) % 1.0
+                found = np.asarray(transfers.fractional[int(table[k1, k2])])
+                distance = np.abs((found - expected + 0.5) % 1.0 - 0.5)
+                assert np.max(distance) < STRUCTURE_TOL
+    with pytest.raises(InputError, match="uniform mesh"):
+        KPoints.from_fractional([(0.0, 0.0), (0.3, 0.0)]).momentum_transfers()

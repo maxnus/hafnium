@@ -14,9 +14,8 @@ use rayon::prelude::*;
 
 use super::ShellTable;
 use super::cartesian::{n_cartesian, transform_index};
-use super::one_electron::check_threshold;
 use super::pairs::{PrimitivePairs, primitive_pairs, single_shell_pairs, transform_weights};
-use super::two_electron::{Tables, check_finite};
+use super::two_electron::{Tables, check_finite, check_threshold};
 use crate::Error;
 
 /// `ρ̃_P(G) = ∫ χ_P(r) exp(−i G·r) dr` for every function of `table` and

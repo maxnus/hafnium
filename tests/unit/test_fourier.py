@@ -5,7 +5,7 @@ import pytest
 
 from hafnium import _kernels
 from hafnium.basis import BasisSet, Shell
-from hafnium.integrals import RustEngine, ShellTable
+from hafnium.integrals import CoulombKernel, RustEngine, ShellTable
 from hafnium.molecule import Molecule
 from tests.molecules import water
 from tests.reciprocal_vectors import G_VECTORS
@@ -174,7 +174,9 @@ def test_metric_from_the_transform_matches_the_coulomb_kernel() -> None:
     radial = transforms * np.exp(1j * g[:, None] * heights[None, :])
     assert np.abs(np.imag(radial)).max() < INTEGRAL_TOL
     for omega in (None, 0.5):
-        metric = ENGINE.coulomb_two_center(table, table, ZERO, omega=omega)[0]
+        metric = ENGINE.coulomb_two_center(
+            table, table, ZERO, kernel=CoulombKernel(omega)
+        )[0]
         attenuation = 1.0 if omega is None else np.exp(-(g**2) / (4 * omega**2))
         for p in range(2):
             for q in range(2):

@@ -29,6 +29,50 @@ COULOMB = CoulombKernel()
 
 
 @dataclass(frozen=True, slots=True)
+class BlochImages:
+    """The images and phases of a Bloch-summed three-centre integral (ADR-0019).
+
+    Parameters
+    ----------
+    images : Array[image, 3]
+        The image list of the orbital functions, in Bohr, shared by the bra
+        and the ket.
+    steps : Array[step, 3]
+        The relative translations at which a pair of functions still
+        overlaps: the ket image of a pair is the bra image displaced by a
+        step, found by the lattice coordinates.
+    coordinates : tuple[Array[image, 3], Array[step, 3]]
+        Integer lattice coordinates of the images and of the steps.
+    phases : tuple[Array[kpt, image], Array[kpt, image]]
+        Complex phases of the bra and the ket images at every k-point.
+    """
+
+    images: Array
+    steps: Array
+    coordinates: tuple[Array, Array]
+    phases: tuple[Array, Array]
+
+    def __post_init__(self) -> None:
+        n_images = int(self.images.shape[0]) if self.images.ndim == 2 else -1
+        n_steps = int(self.steps.shape[0]) if self.steps.ndim == 2 else -1
+        if self.images.shape != (n_images, 3) or self.steps.shape != (n_steps, 3):
+            raise InputError("images and steps have shape [image, 3]")
+        if self.coordinates[0].shape != (n_images, 3) or self.coordinates[1].shape != (
+            n_steps,
+            3,
+        ):
+            raise InputError("every image and every step has three lattice coordinates")
+        n_kpt = int(self.phases[0].shape[0]) if self.phases[0].ndim == 2 else -1
+        if any(table.shape != (n_kpt, n_images) for table in self.phases):
+            raise InputError("phases have shape [kpt, image] for the bra and the ket")
+
+    @property
+    def n_kpt(self) -> int:
+        """Number of k-points."""
+        return int(self.phases[0].shape[0])
+
+
+@dataclass(frozen=True, slots=True)
 class PointCharges:
     """Point charges ``charges[n]`` at ``positions[n, 3]`` in Bohr."""
 
@@ -91,11 +135,13 @@ class IntegralEngine(Protocol):
         ket: ShellTable,
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
     ) -> Array:
         """Two-centre Coulomb integrals ``(P|Q)`` as ``[image, aux, aux]``.
 
-        With ``omega`` the kernel is ``erf(ω r) / r`` instead of ``1 / r``.
+        Primitive pairs bounded below ``threshold`` are left out; every
+        neglected term is smaller than ``threshold`` (ADR-0018).
         """
         ...
 
@@ -106,12 +152,36 @@ class IntegralEngine(Protocol):
         ket: ShellTable,
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
     ) -> Array:
         """Three-centre Coulomb integrals ``(P|uv)`` as ``[image, aux, ao, ao]``.
 
         ``translations`` has shape ``[image, 2, 3]``: the first vector
         translates the auxiliary function, the second the ket function.
+        Primitive quartets bounded below ``threshold`` are left out.
+        """
+        ...
+
+    def coulomb_three_center_bloch(
+        self,
+        auxiliary: ShellTable,
+        bra: ShellTable,
+        ket: ShellTable,
+        images: BlochImages,
+        *,
+        kernel: CoulombKernel = COULOMB,
+        threshold: float = 0.0,
+    ) -> Array:
+        """Bloch-summed three-centre integrals as complex ``[kpt, kpt, aux, ao, ao]``.
+
+        ``Σ_ij b[k1, i] c[k2, j] (P | u(r − T_i) v(r − T_j))`` over the pairs
+        of ``images`` whose difference is one of its steps, with its phases
+        ``b`` and ``c``, the auxiliary function in the home cell; with
+        ``b = exp(−i k1·T)`` and ``c = exp(i k2·T)`` it is ``(P^q | u k1 v k2)``
+        of the density fitting with momentum transfer ``q = k2 − k1``
+        (ADR-0019). Shell triples whose Schwarz bounds and primitive
+        quartets whose bounds fall below ``threshold`` are left out.
         """
         ...
 
@@ -121,7 +191,7 @@ class IntegralEngine(Protocol):
         ket: tuple[ShellTable, ShellTable],
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
         threshold: float = 0.0,
     ) -> Array:
         """Four-centre Coulomb integrals ``(uv|wx)`` as ``[image, ao, ao, ao, ao]``.
@@ -132,7 +202,7 @@ class IntegralEngine(Protocol):
         functions, the first bra function staying at its centre. Shell
         quartets whose Schwarz bound, the product of the two pair bounds of
         :meth:`schwarz_bounds`, is below ``threshold`` are not evaluated and
-        left at zero.
+        left at zero; a kept quartet is evaluated in full.
         """
         ...
 
@@ -142,7 +212,7 @@ class IntegralEngine(Protocol):
         ket: ShellTable,
         translations: Array,
         *,
-        omega: float | None = None,
+        kernel: CoulombKernel = COULOMB,
     ) -> Array:
         """Schwarz bounds of the shell pairs as ``[image, shell, shell]``.
 

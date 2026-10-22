@@ -930,9 +930,14 @@ of three-dimensional cells done 2026-10-22 (ADR-0018): native short-range
 kernel with rigorous screening, independent of the range separation,
 converging to the molecular matrix in a large box with the expected power
 law, folding across supercells and matching PySCF's density-fitted
-potential. Next: the range-separated density fitting with momentum
-transfer, k-point J and K with the correction, occupations across k, and
-the reduced-dimension reciprocal-space kernels.
+potential. The density fitting with momentum transfer done 2026-10-22
+(ADR-0019): the metric per transfer and the tensor over every k-point
+pair from the screened Bloch three-centre kernel and the reciprocal-space
+sums at `q + G`, independent of the range separation, reproducing the
+molecular fitting in a large box with the Madelung terms, and matching
+PySCF's fitted integrals. Next: k-point J and K with the correction,
+occupations across k, the periodic Hamiltonian and the KRHF/KUHF/KGHF
+comparisons, and the reduced-dimension reciprocal-space kernels.
 
 **M6 Spatial symmetry.** Molecular point groups: detection and
 orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.

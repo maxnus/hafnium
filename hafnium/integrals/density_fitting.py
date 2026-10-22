@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from hafnium.backend import Array, adjoint, array_namespace, eigh, host_array
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
-from hafnium.integrals.engine import IntegralEngine
+from hafnium.integrals.engine import CoulombKernel, IntegralEngine
 from hafnium.integrals.shell_table import ShellTable
 from hafnium.molecule import Molecule
 
@@ -64,10 +64,15 @@ class DensityFitting:
         """
         orbital = ShellTable.from_basis(basis, molecule)
         fitting = ShellTable.from_basis(auxiliary, molecule)
+        kernel = CoulombKernel(omega)
         zero = host_array([[0.0, 0.0, 0.0]])
-        metric = engine.coulomb_two_center(fitting, fitting, zero, omega=omega)[0]
+        metric = engine.coulomb_two_center(fitting, fitting, zero, kernel=kernel)[0]
         three_center = engine.coulomb_three_center(
-            fitting, orbital, orbital, host_array([[[0.0] * 3, [0.0] * 3]]), omega=omega
+            fitting,
+            orbital,
+            orbital,
+            host_array([[[0.0] * 3, [0.0] * 3]]),
+            kernel=kernel,
         )[0]
         return cls(metric, three_center)
 
@@ -90,17 +95,7 @@ class DensityFitting:
         JAX milestone revisits this).
         """
         xp = array_namespace(self.metric)
-        eigenvalues, eigenvectors = eigh(self.metric)
-        cutoff = threshold * xp.max(eigenvalues)
-        keep = eigenvalues > cutoff
-        dropped = self.n_aux - int(xp.sum(keep))
-        if dropped:
-            logger.info(
-                "density fitting dropped %d near-null metric eigenvalues", dropped
-            )
-        safe = xp.where(keep, eigenvalues, xp.ones_like(eigenvalues))
-        inverse_root = xp.where(keep, 1.0 / xp.sqrt(safe), xp.zeros_like(eigenvalues))
-        half = (eigenvectors * inverse_root) @ adjoint(eigenvectors)
+        half = inverse_square_root(self.metric, threshold)
         flat = xp.reshape(self.three_center, (self.n_aux, -1))
         return xp.reshape(half @ flat, self.three_center.shape)
 
@@ -112,3 +107,23 @@ class DensityFitting:
         xp = array_namespace(self.metric)
         fitted = self.df_tensor(threshold=threshold)
         return xp.einsum("Puv,Pwx->uvwx", fitted, fitted)
+
+
+def inverse_square_root(metric: Array, threshold: float) -> Array:
+    """``M^{-1/2}`` of a Hermitian positive ``metric`` ``[aux, aux]``.
+
+    Eigenvalues below ``threshold`` times the largest are dropped, which
+    removes near-linear dependence of the auxiliary basis; the number
+    dropped is logged, which reads the count on the host (the JAX milestone
+    revisits this).
+    """
+    xp = array_namespace(metric)
+    eigenvalues, eigenvectors = eigh(metric)
+    cutoff = threshold * xp.max(eigenvalues)
+    keep = eigenvalues > cutoff
+    dropped = int(metric.shape[0]) - int(xp.sum(keep))
+    if dropped:
+        logger.info("density fitting dropped %d near-null metric eigenvalues", dropped)
+    safe = xp.where(keep, eigenvalues, xp.ones_like(eigenvalues))
+    inverse_root = xp.where(keep, 1.0 / xp.sqrt(safe), xp.zeros_like(eigenvalues))
+    return (eigenvectors * inverse_root) @ adjoint(eigenvectors)

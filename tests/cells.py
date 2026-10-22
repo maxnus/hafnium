@@ -17,6 +17,12 @@ def lithium_hydride() -> Cell:
     return Cell.from_molecule(molecule, CUBIC)
 
 
+def helium_atom() -> Cell:
+    """One helium atom off the origin on the general three-dimensional lattice."""
+    molecule = Molecule.from_atoms([("He", (0.3, 0.2, 0.1))], unit="bohr")
+    return Cell.from_molecule(molecule, Lattice(GENERAL_VECTORS))
+
+
 def helium(dimension: int) -> Cell:
     """Two helium atoms at general positions on a general lattice of ``dimension``."""
     molecule = Molecule.from_atoms(

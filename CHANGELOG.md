@@ -133,4 +133,12 @@ uses [Semantic Versioning](https://semver.org/).
   of the nuclear attraction and the pair Fourier transform against a
   threshold, and parallel images in the one-electron kernels (ADR-0018);
   `CoulombKernel` and `PointCharges` on the engine protocol.
+- Periodic Hartree–Fock (M5, part two): density fitting with momentum
+  transfer, `density_fitting_k` and `PeriodicDensityFitting` with the
+  metric per transfer and the tensor `[kpt, kpt, aux, ao, ao]`, fitted
+  integrals `eri` per k-point quadruple, `KPoints.momentum_transfers`,
+  `integer_coordinates` and `function_absolute_integral` (ADR-0019); the Bloch
+  three-centre kernel `coulomb_three_center_bloch` with `BlochImages`,
+  `CoulombKernel` and a screening threshold on every Coulomb kernel and
+  the Schwarz bounds, and `searchsorted` in the allowed array operations.
 

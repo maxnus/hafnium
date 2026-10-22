@@ -6,8 +6,8 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``density_fitting_<molecule>_<basis>.json``,
 ``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
 ``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json``,
-``bloch_<cell>_<basis>.json`` and ``nuclear_<cell>_<basis>.json`` with the
-PySCF values and their provenance.
+``bloch_<cell>_<basis>.json``, ``nuclear_<cell>_<basis>.json`` and
+``fitting_<cell>_<basis>.json`` with the PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from tests.reference.pyscf_oracle import (
     fourier_transform_reference,
     madelung_reference,
     one_electron_reference,
+    periodic_fitted_eri_reference,
     periodic_nuclear_attraction_reference,
     pyscf,
     scf_reference,
@@ -43,6 +44,11 @@ from tests.reference.test_density_fitting_reference import (
 )
 from tests.reference.test_ewald_reference import CELLS
 from tests.reference.test_ewald_reference import STORED_CASES as EWALD_CASES
+from tests.reference.test_fitting_reference import AUXILIARY as FITTING_AUXILIARY
+from tests.reference.test_fitting_reference import CELLS as FITTING_CELLS
+from tests.reference.test_fitting_reference import MESHES as FITTING_MESHES
+from tests.reference.test_fitting_reference import QUADRUPLES
+from tests.reference.test_fitting_reference import STORED_CASES as FITTING_CASES
 from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
@@ -218,6 +224,32 @@ def record_cells() -> None:
                 "nuclear_attraction_imag": np.imag(matrix),
                 "madelung": np.asarray(madelung_reference(cell, basis, mesh)),
             },
+            dimension=cell.dimension,
+            lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
+            kpoints_fractional=[list(point) for point in mesh.fractional],
+        )
+    for name, basis_name in FITTING_CASES:
+        cell = FITTING_CELLS[name]()
+        basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(cell, FITTING_AUXILIARY, library=LIBRARY)
+        mesh = FITTING_MESHES[name]
+        integrals = periodic_fitted_eri_reference(
+            cell, basis, auxiliary, mesh, QUADRUPLES[name]
+        )
+        parts = {
+            f"eri_{key}_{part}": getattr(np, part)(value)
+            for key, value in integrals.items()
+            for part in ("real", "imag")
+        }
+        record(
+            "fitting",
+            cell,
+            name,
+            basis_name,
+            "df.GDF.get_eri with the same auxiliary basis at Cartesian kpts; "
+            "precision=1e-14; cart=False; Bohr",
+            parts,
+            auxiliary_basis=FITTING_AUXILIARY,
             dimension=cell.dimension,
             lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
             kpoints_fractional=[list(point) for point in mesh.fractional],

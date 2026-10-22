@@ -7,8 +7,82 @@
 //! A [`HermiteWorkspace`] owns the buffers so that the hot loops of the
 //! kernels allocate nothing.
 
+use crate::Error;
 use crate::special::fill_boys;
 use crate::to_f64;
+
+/// The Coulomb kernel of an integral: `1/r`, or the long- or short-range
+/// part of its range separation `1/r = erf(ωr)/r + erfc(ωr)/r` (ADR-0012).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CoulombKernel {
+    /// `1 / r`.
+    Full,
+    /// `erf(ω r) / r`, the long-range part.
+    LongRange(f64),
+    /// `erfc(ω r) / r`, the short-range part.
+    ShortRange(f64),
+}
+
+impl CoulombKernel {
+    /// Build from the binding's arguments: `omega` selects the
+    /// range-separated kernels and `short_range` picks `erfc` over `erf`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidArgument`] if `omega` is not positive, or if
+    /// `short_range` is set without `omega`.
+    pub fn new(omega: Option<f64>, short_range: bool) -> Result<Self, Error> {
+        check_omega(omega)?;
+        match (omega, short_range) {
+            (None, false) => Ok(Self::Full),
+            (None, true) => Err(Error::InvalidArgument(
+                "the short-range kernel needs the range-separation parameter omega".to_string(),
+            )),
+            (Some(w), false) => Ok(Self::LongRange(w)),
+            (Some(w), true) => Ok(Self::ShortRange(w)),
+        }
+    }
+
+    /// The range-separation parameter, if the kernel has one.
+    pub(crate) fn omega(self) -> Option<f64> {
+        match self {
+            Self::Full => None,
+            Self::LongRange(w) | Self::ShortRange(w) => Some(w),
+        }
+    }
+
+    /// Reject a kernel built with a non-positive `omega`.
+    pub(crate) fn validate(self) -> Result<(), Error> {
+        check_omega(self.omega())
+    }
+
+    /// The exponent range `[s_lo, s_hi]` with
+    /// `R_000 = (1/√α) ∫_{s_lo}^{s_hi} exp(−s² R²) ds` for Hermite Coulomb
+    /// integrals of reduced exponent `α`: `[0, √α]` for the full kernel,
+    /// `[0, √α']` and `[√α', √α]` for the long- and short-range parts with
+    /// the attenuated exponent `α' = α ω² / (α + ω²)`.
+    pub(crate) fn exponent_range(self, alpha: f64) -> (f64, f64) {
+        match self {
+            Self::Full => (0.0, alpha.sqrt()),
+            Self::LongRange(w) => (0.0, attenuated(alpha, w).sqrt()),
+            Self::ShortRange(w) => (attenuated(alpha, w).sqrt(), alpha.sqrt()),
+        }
+    }
+}
+
+/// `α ω² / (α + ω²)`, the exponent of the attenuated Hermite integrals.
+fn attenuated(alpha: f64, omega: f64) -> f64 {
+    alpha * omega * omega / (alpha + omega * omega)
+}
+
+pub(crate) fn check_omega(omega: Option<f64>) -> Result<(), Error> {
+    if omega.is_some_and(|w| w.is_nan() || w <= 0.0) {
+        return Err(Error::InvalidArgument(
+            "the range-separation parameter omega is positive".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 /// Buffers for the Hermite Coulomb recursion, reused across calls.
 #[derive(Debug, Default)]
@@ -16,6 +90,8 @@ pub(crate) struct HermiteWorkspace {
     boys: Vec<f64>,
     previous: Vec<f64>,
     current: Vec<f64>,
+    /// The short-range table, the full one minus the attenuated one.
+    difference: Vec<f64>,
     /// Scratch for the kernels that contract the table with expansion
     /// coefficients before contracting with the other side.
     pub(crate) intermediate: Vec<f64>,
@@ -127,11 +203,97 @@ impl HermiteWorkspace {
             stride,
         }
     }
+
+    /// `R^0_{tuv}` of `kernel` for the reduced exponent `alpha` and the
+    /// displacement `pc`: the table at `alpha` for the full kernel,
+    /// `sqrt(α'/α)` times the table at the attenuated exponent `α'` for the
+    /// long-range part (ADR-0008), and the difference of the two for the
+    /// short-range part.
+    pub(crate) fn compute_kernel(
+        &mut self,
+        order: usize,
+        alpha: f64,
+        kernel: CoulombKernel,
+        pc: [f64; 3],
+    ) -> HermiteView<'_> {
+        let stride = order + 1;
+        let size = stride * stride * stride;
+        match kernel {
+            CoulombKernel::Full => self.compute(order, alpha, pc),
+            CoulombKernel::LongRange(w) => {
+                let weak = attenuated(alpha, w);
+                let scale = (weak / alpha).sqrt();
+                let _ = self.compute(order, weak, pc);
+                for value in &mut self.previous[..size] {
+                    *value *= scale;
+                }
+                HermiteView {
+                    data: &self.previous[..size],
+                    stride,
+                }
+            }
+            CoulombKernel::ShortRange(w) => {
+                let weak = attenuated(alpha, w);
+                let scale = (weak / alpha).sqrt();
+                let _ = self.compute(order, alpha, pc);
+                self.difference.clear();
+                self.difference.extend_from_slice(&self.previous[..size]);
+                let _ = self.compute(order, weak, pc);
+                for (target, source) in self.difference.iter_mut().zip(&self.previous[..size]) {
+                    *target -= scale * source;
+                }
+                HermiteView {
+                    data: &self.difference[..size],
+                    stride,
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_tables_split_the_full_one() {
+        let mut workspace = HermiteWorkspace::default();
+        let (order, alpha, pc) = (2, 0.8, [0.3, -0.5, 0.2]);
+        let full: Vec<f64> = (0..27)
+            .map(|i| {
+                let view = workspace.compute_kernel(order, alpha, CoulombKernel::Full, pc);
+                view.get(i / 9, (i / 3) % 3, i % 3)
+            })
+            .collect();
+        for (i, total) in full.iter().enumerate() {
+            let (t, u, v) = (i / 9, (i / 3) % 3, i % 3);
+            if t + u + v > order {
+                continue;
+            }
+            let long = workspace
+                .compute_kernel(order, alpha, CoulombKernel::LongRange(0.6), pc)
+                .get(t, u, v);
+            let short = workspace
+                .compute_kernel(order, alpha, CoulombKernel::ShortRange(0.6), pc)
+                .get(t, u, v);
+            assert!(
+                (long + short - total).abs() < 1e-14,
+                "{long} + {short} vs {total}"
+            );
+        }
+        assert!(CoulombKernel::new(Some(0.0), false).is_err());
+        assert!(CoulombKernel::new(Some(f64::NAN), true).is_err());
+        assert!(CoulombKernel::new(None, true).is_err());
+        assert_eq!(
+            CoulombKernel::new(None, false).expect("valid"),
+            CoulombKernel::Full
+        );
+        assert_eq!(
+            CoulombKernel::new(Some(0.5), true).expect("valid"),
+            CoulombKernel::ShortRange(0.5)
+        );
+        assert!(CoulombKernel::ShortRange(-1.0).validate().is_err());
+    }
 
     #[test]
     fn zeroth_order_is_the_boys_function() {

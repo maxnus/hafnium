@@ -195,6 +195,40 @@ class KPoints:
             raise InputError("a uniform mesh has equal weights")
         return tuple(sizes)
 
+    def momentum_transfers(self) -> tuple[KPoints, Array]:
+        """Return the differences ``k2 − k1`` of a uniform mesh and their table.
+
+        The transfers ``q = (k2 − k1) mod 1`` of a mesh form the Γ-centred
+        mesh of the same sizes, whatever the shift; the table ``[kpt, kpt]``
+        holds the index of the transfer of every pair ``(k1, k2)`` in that
+        set (CONVENTIONS.md §2.3).
+
+        Raises
+        ------
+        InputError
+            If the set is not a uniform mesh with equal weights.
+        """
+        sizes = self.mesh_size()
+        transfers = KPoints.mesh(sizes)
+        xp = default_namespace()
+        points = self.fractional_array(xp)
+        shifts = xp.asarray(
+            [
+                min(point[axis] for point in self.fractional)
+                for axis in range(len(sizes))
+            ],
+            dtype=xp.float64,
+        )
+        n = xp.asarray(sizes, dtype=xp.float64)
+        indices = xp.astype(xp.floor(points * n - shifts * n + 0.5), xp.int64)
+        difference = (
+            xp.expand_dims(indices, 0) - xp.expand_dims(indices, 1)
+        ) % xp.astype(n, xp.int64)
+        strides = xp.asarray(
+            [math.prod(sizes[axis + 1 :]) for axis in range(len(sizes))], dtype=xp.int64
+        )
+        return transfers, xp.sum(difference * strides, axis=-1)
+
     @property
     def is_time_reversal_invariant(self) -> tuple[bool, ...]:
         """Whether each point equals its own partner, ``k ≡ −k``."""

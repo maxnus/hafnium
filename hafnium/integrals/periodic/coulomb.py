@@ -72,18 +72,24 @@ class RangeSeparation:
         """
         return math.sqrt(max(math.log(1.0 / self.precision), 0.0)) / self.omega
 
-    def reciprocal_vectors(self, lattice: Lattice, *, charge_product: float) -> Array:
+    def reciprocal_vectors(
+        self, lattice: Lattice, *, charge_product: float, margin: float = 0.0
+    ) -> Array:
         """Return the reciprocal vectors ``[G, 3]`` of the long-range sum.
 
         The zero vector comes first, the rest follow by length within the
         cutoff of :func:`hafnium.molecule.reciprocal_cutoff` for the
-        ``charge_product`` of the two interacting distributions.
+        ``charge_product`` of the two interacting distributions, plus
+        ``margin``: the length of a momentum transfer ``q`` added to every
+        vector, so that ``q + G`` still reaches the cutoff.
         """
         require_three_dimensions(lattice)
+        if not (math.isfinite(margin) and margin >= 0.0):
+            raise InputError("the cutoff margin is a non-negative length")
         cutoff = reciprocal_cutoff(
             lattice, self.omega, charge_product=charge_product, precision=self.precision
         )
-        return lattice.reciprocal.translations(cutoff)
+        return lattice.reciprocal.translations(cutoff + margin)
 
     def long_range_kernel(self, lattice: Lattice, g_vectors: Array) -> Array:
         """Fourier transform of ``erf(ω r) / r`` at every row of ``g_vectors``.
