@@ -1,5 +1,7 @@
 """Cells shared by the test suites, given in Bohr."""
 
+import numpy as np
+
 from hafnium.molecule import Cell, Lattice, Molecule
 
 CUBIC = Lattice(((4.0, 0.0, 0.0), (0.0, 4.0, 0.0), (0.0, 0.0, 4.0)))
@@ -21,3 +23,9 @@ def helium(dimension: int) -> Cell:
         [("He", (0.0, 0.0, 0.0)), ("He", (1.9, 2.1, 1.8))], unit="bohr"
     )
     return Cell.from_molecule(molecule, Lattice(GENERAL_VECTORS[:dimension]))
+
+
+def box(molecule: Molecule, length: float, dimension: int = 3) -> Cell:
+    """``molecule`` repeated on an orthogonal lattice of side ``length`` in Bohr."""
+    vectors = tuple(tuple(row) for row in (length * np.eye(3))[:dimension].tolist())
+    return Cell.from_molecule(molecule, Lattice(vectors))

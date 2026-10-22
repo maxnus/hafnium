@@ -27,6 +27,7 @@ from hafnium.integrals.periodic.bloch import (
     bloch_sum,
     lattice_images,
     reaching_images,
+    require_kpoints_for_lattice,
 )
 from hafnium.integrals.periodic.coulomb import (
     RangeSeparation,
@@ -57,6 +58,7 @@ def nuclear_attraction_k(
     parameter, which the result does not depend on beyond ``precision``.
     See :func:`overlap_k` for sharing the image list between matrices.
     """
+    require_kpoints_for_lattice(kpoints, cell.lattice)
     separation = RangeSeparation.for_lattice(
         cell.lattice, omega=omega, precision=precision
     )
@@ -79,6 +81,7 @@ def core_hamiltonian_k(
     One image list serves the kinetic and the nuclear attraction sums; see
     :func:`nuclear_attraction_k` for the regularization and the parameters.
     """
+    require_kpoints_for_lattice(kpoints, cell.lattice)
     separation = RangeSeparation.for_lattice(
         cell.lattice, omega=omega, precision=precision
     )
@@ -164,11 +167,13 @@ def _long_range_images(
 ) -> Array:
     """Return ``(1/Ω) Σ_G ṽ(G) S(−G) ρ̃_T(G)`` as a real array ``[image, ao, ao]``.
 
-    The pair transforms are evaluated in batches of images within a memory
-    budget and contracted with the weights ``ṽ(G) S(−G) / Ω``; the pairs
-    screened in the engine are those bounded below the precision divided by
-    the sum of the weights' magnitudes, so that the neglected part of every
-    element is below the precision.
+    The reciprocal vectors reach the cutoff for the nuclear charge against
+    a pair transform of magnitude at most one. The transforms are evaluated
+    in batches of images within a memory budget and contracted with the
+    weights ``ṽ(G) S(−G) / Ω``; the pairs screened in the engine are those
+    bounded below the precision divided by the sum of the weights'
+    magnitudes, so that the neglected part of every element is below the
+    precision.
     """
     xp = array_namespace(translations)
     lattice = cell.lattice
@@ -176,7 +181,7 @@ def _long_range_images(
     charges = xp.asarray(cell.nuclear_charges, dtype=xp.float64)
     n_images = int(translations.shape[0])
     g_vectors = separation.reciprocal_vectors(
-        lattice, charge_product=float(xp.sum(charges)) * n_images
+        lattice, charge_product=float(xp.sum(charges))
     )
     kernel = separation.long_range_kernel(lattice, g_vectors)
     angles = g_vectors @ xp.linalg.matrix_transpose(positions)

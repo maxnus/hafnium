@@ -148,6 +148,19 @@ def reaching_images(
     return candidates[keep]
 
 
+def require_kpoints_for_lattice(kpoints: KPoints, lattice: Lattice) -> None:
+    """Raise unless ``kpoints`` has one coordinate per direction of ``lattice``.
+
+    The check that :meth:`KPoints.cartesian` makes, taken before a lattice
+    sum rather than after it.
+    """
+    if kpoints.dimension != lattice.dimension:
+        raise InputError(
+            f"{kpoints.dimension}-dimensional k-points do not fit a "
+            f"{lattice.dimension}-dimensional lattice"
+        )
+
+
 def bloch_sum(
     images: Array, translations: Array, kpoints: KPoints, lattice: Lattice
 ) -> Array:
@@ -207,6 +220,7 @@ def _lattice_sum(
     precision: float,
 ) -> Array:
     """Bloch sums of a one-electron ``kernel`` over the images of ``cell``."""
+    require_kpoints_for_lattice(kpoints, cell.lattice)
     table = ShellTable.from_basis(basis, cell)
     translations = lattice_images(basis, cell, precision=precision)
     return bloch_sum(

@@ -20,9 +20,9 @@ from hafnium.integrals import (
     overlap_k,
 )
 from hafnium.integrals.periodic import atom_radii, function_radius
-from hafnium.molecule import Atom, AtomicSystem, Cell, Lattice, Molecule
+from hafnium.molecule import Atom, AtomicSystem, Cell
 from hafnium.symmetry import KPoints
-from tests.cells import helium
+from tests.cells import box, helium
 from tests.molecules import water
 from tests.spectra import generalized_eigenvalues
 from tests.tolerances import (
@@ -39,12 +39,6 @@ ENGINE = RustEngine()
 
 def basis_for(system: AtomicSystem, name: str) -> BasisSet:
     return BasisSet.for_atoms(system, name, library=LIBRARY)
-
-
-def box(molecule: Molecule, length: float, dimension: int) -> Cell:
-    """``molecule`` repeated on an orthogonal lattice of side ``length`` in Bohr."""
-    vectors = tuple(tuple(row) for row in (length * np.eye(3))[:dimension].tolist())
-    return Cell.from_molecule(molecule, Lattice(vectors))
 
 
 def bands(cell: Cell, basis: BasisSet, kpoints: KPoints) -> np.ndarray:

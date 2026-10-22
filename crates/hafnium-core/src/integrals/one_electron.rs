@@ -54,6 +54,14 @@ impl CoulombKernel {
         }
     }
 
+    /// The range-separation parameter, if the kernel has one.
+    fn omega(self) -> Option<f64> {
+        match self {
+            Self::Full => None,
+            Self::LongRange(w) | Self::ShortRange(w) => Some(w),
+        }
+    }
+
     /// The exponent range `[s_lo, s_hi]` with
     /// `R_000 = (1/√p) ∫_{s_lo}^{s_hi} exp(−s² R²) ds` for a pair of total
     /// exponent `p`: `[0, √p]` for the full kernel, `[0, √α]` and `[√α, √p]`
@@ -129,10 +137,10 @@ pub fn kinetic(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) ->
 /// # Errors
 ///
 /// Returns [`Error::LengthMismatch`] if there is not one position per
-/// charge, and [`Error::InvalidArgument`] if `threshold` is negative or not
-/// finite, or a translation, charge or position is not finite (a non-finite
-/// distance would otherwise reach the Boys function, which requires a
-/// finite argument).
+/// charge, and [`Error::InvalidArgument`] if the kernel's `omega` is not
+/// positive, `threshold` is negative or not finite, or a translation, charge
+/// or position is not finite (a non-finite distance would otherwise reach
+/// the Boys function, which requires a finite argument).
 pub fn nuclear_attraction(
     bra: &ShellTable,
     ket: &ShellTable,
@@ -148,6 +156,7 @@ pub fn nuclear_attraction(
             right: positions.len(),
         });
     }
+    check_omega(kernel.omega())?;
     check_threshold(threshold)?;
     check_finite(translations, "translations")?;
     check_finite(positions, "positions")?;
@@ -164,16 +173,18 @@ pub fn nuclear_attraction(
         0,
         |pair, a, b, screen, workspace, values| {
             let (low, high) = kernel.exponent_range(pair.p);
-            let bound = charge_max * screen * attraction_bound(pair, a, b, low, high, &envelopes);
-            if threshold > 0.0 && bound < threshold {
-                return false;
+            let mut radius_squared = f64::INFINITY;
+            if threshold > 0.0 {
+                let bound =
+                    charge_max * screen * attraction_bound(pair, a, b, low, high, &envelopes);
+                if bound < threshold {
+                    return false;
+                }
+                let decay = (1.0 - ENVELOPE_EPSILON) * low * low;
+                if decay > 0.0 {
+                    radius_squared = (bound / threshold).ln() / decay;
+                }
             }
-            let decay = (1.0 - ENVELOPE_EPSILON) * low * low;
-            let radius_squared = if threshold > 0.0 && decay > 0.0 {
-                (bound / threshold).ln() / decay
-            } else {
-                f64::INFINITY
-            };
             let alpha = match kernel {
                 CoulombKernel::Full => pair.p,
                 CoulombKernel::LongRange(_) => high * high,
@@ -477,6 +488,19 @@ mod tests {
         let full = CoulombKernel::Full;
         assert!(nuclear_attraction(&shell, &shell, &[[0.0; 3]], &[1.0], &[], full, 0.0).is_err());
         assert!(CoulombKernel::new(Some(0.0), false).is_err());
+        let unchecked = CoulombKernel::ShortRange(f64::NAN);
+        assert!(
+            nuclear_attraction(
+                &shell,
+                &shell,
+                &[[0.0; 3]],
+                &[1.0],
+                &[[0.0; 3]],
+                unchecked,
+                0.0
+            )
+            .is_err()
+        );
         assert!(CoulombKernel::new(Some(f64::NAN), true).is_err());
         assert!(CoulombKernel::new(None, true).is_err());
         assert_eq!(CoulombKernel::new(None, false).expect("valid"), full);

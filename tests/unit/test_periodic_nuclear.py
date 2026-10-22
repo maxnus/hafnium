@@ -23,13 +23,14 @@ from hafnium.integrals.periodic import (
     nuclear_attraction_images,
     reaching_images,
 )
-from hafnium.molecule import AtomicSystem, Cell, Lattice, Molecule, default_omega
+from hafnium.molecule import AtomicSystem, Cell, Lattice, default_omega
 from hafnium.symmetry import KPoints
-from tests.cells import CUBIC, helium
+from tests.cells import CUBIC, box, helium
 from tests.molecules import water
 from tests.spectra import generalized_eigenvalues
 from tests.tolerances import (
     INTEGRAL_TOL,
+    LARGE_BOX_RATIO_WINDOW,
     LARGE_BOX_RESIDUAL_TOL,
     LATTICE_SUM_LOOSE_PRECISION,
     LATTICE_SUM_LOOSE_TOL,
@@ -43,11 +44,6 @@ ENGINE = RustEngine()
 
 def basis_for(system: AtomicSystem, name: str) -> BasisSet:
     return BasisSet.for_atoms(system, name, library=LIBRARY)
-
-
-def cubic_box(molecule: Molecule, length: float) -> Cell:
-    vectors = tuple(tuple(row) for row in (length * np.eye(3)).tolist())
-    return Cell.from_molecule(molecule, Lattice(vectors))
 
 
 def bands(cell: Cell, basis: BasisSet, kpoints: KPoints) -> np.ndarray:
@@ -72,15 +68,14 @@ def test_large_box_at_gamma_approaches_the_molecular_matrix() -> None:
     charge = sum(molecule.nuclear_charges)
     residuals: list[float] = []
     for length in (20.0, 40.0):
-        v = nuclear_attraction_k(
-            ENGINE, basis, cubic_box(molecule, length), KPoints.gamma()
-        )
+        v = nuclear_attraction_k(ENGINE, basis, box(molecule, length), KPoints.gamma())
         assert v.shape == (1, basis.n_functions, basis.n_functions)
         np.testing.assert_allclose(np.imag(v), 0.0, atol=INTEGRAL_TOL)
         madelung = charge * POINT_CHARGE_CUBIC / length * s
         residuals.append(float(np.max(np.abs(np.real(v[0]) - reference - madelung))))
     assert residuals[1] < LARGE_BOX_RESIDUAL_TOL
-    assert 0.09 < residuals[1] / residuals[0] < 0.16
+    low, high = LARGE_BOX_RATIO_WINDOW
+    assert low < residuals[1] / residuals[0] < high
 
 
 @pytest.mark.parametrize(

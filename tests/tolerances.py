@@ -56,3 +56,6 @@ PERIODIC_ATTRACTION_TOL = 1e-10
 # Madelung term: the quadrupole term (2π/3L³) Σ_A Z_A <μ|(r − A)²|ν> of the
 # regularized potential, which the inverse-cube law of the test tracks.
 LARGE_BOX_RESIDUAL_TOL = 1e-2
+# The ratio of that residual between boxes of 40 and 20 Bohr: 1/8 for the
+# inverse-cube law, with room for the next term of the expansion.
+LARGE_BOX_RATIO_WINDOW = (0.09, 0.16)

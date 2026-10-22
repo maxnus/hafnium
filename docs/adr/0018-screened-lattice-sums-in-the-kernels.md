@@ -55,11 +55,11 @@ exceed memory, or a kernel that contracts them with weights.
   ADR-0016 plus the distance beyond which `erfc(ωr)` is below the
   precision, with the screened kernel, and the long-range part in
   reciprocal space from the pair transforms at the reciprocal vectors
-  within the Ewald cutoff of ADR-0012 for the charge product
-  `Z_tot × n_images`, with the finite part at `G = 0` carried by the zero
-  vector of the list. Every element of a Bloch sum collects one term per
-  image, so each image is converged to the precision divided by the
-  number of images. The transforms are evaluated in batches of images
+  within the Ewald cutoff of ADR-0012 for the nuclear charge against a
+  pair transform of magnitude at most one, with the finite part at
+  `G = 0` carried by the zero vector of the list. Every element of a Bloch
+  sum collects one term per image, so each image is converged to the
+  precision divided by the number of images. The transforms are evaluated in batches of images
   within a memory budget and contracted in Python, which keeps the
   contraction on the array backend. Only three dimensions are
   implemented; chains and slabs raise until their reciprocal-space
