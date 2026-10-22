@@ -17,11 +17,11 @@ def hamiltonian_for(
     molecule: Molecule, basis_name: str, auxiliary_name: str | None = None
 ) -> tuple[BasisSet, Hamiltonian]:
     """Basis set and Hamiltonian of ``molecule`` in the named basis sets."""
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     if auxiliary_name is None:
         two_body = ExactCoulombExchange.from_molecule(ENGINE, basis, molecule)
     else:
-        auxiliary = BasisSet.for_molecule(molecule, auxiliary_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(molecule, auxiliary_name, library=LIBRARY)
         two_body = DensityFittedCoulombExchange.from_molecule(
             ENGINE, basis, auxiliary, molecule
         )

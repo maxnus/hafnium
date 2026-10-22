@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from hafnium.backend import Array, host_array, to_host
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
+from hafnium.molecule import AtomicSystem
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,14 +81,21 @@ class ShellTable:
             )
 
     @classmethod
-    def from_basis(cls, basis: BasisSet, positions: Array) -> ShellTable:
-        """Lay out ``basis`` on centres ``positions`` (``[atom, 3]``, Bohr)."""
-        positions = to_host(positions)
-        if positions.shape != (basis.n_atoms, 3):
+    def from_basis(cls, basis: BasisSet, system: AtomicSystem) -> ShellTable:
+        """Lay out ``basis`` on the atoms of ``system``.
+
+        Raises
+        ------
+        InputError
+            If ``basis`` was built for other atoms than those of ``system``.
+        """
+        if basis.atom_symbols != system.symbols:
             raise InputError(
-                f"expected positions for {basis.n_atoms} atoms, got shape "
-                f"{positions.shape}"
+                f"the basis set was built for the atoms {basis.atom_symbols} but "
+                f"the system has {system.symbols}; build it with "
+                "BasisSet.for_atoms(system, ...)"
             )
+        positions = to_host(system.positions_array())
         angular_momenta: list[int] = []
         centers: list[Array] = []
         offsets = [0]

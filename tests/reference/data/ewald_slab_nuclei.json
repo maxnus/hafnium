@@ -1,0 +1,1 @@
+{"provenance":{"program":"pyscf","version":"2.14.0","settings":"Cell.energy_nuc() with precision=1e-12; Bohr","date":"2026-10-21","molecule":"slab","basis":"nuclei","dimension":2,"lattice_vectors_bohr":[[4.0,0.2,0.0],[-0.3,3.8,0.0]],"positions_bohr":[[0.1,0.2,0.3],[2.1,1.9,-0.6],[1.0,3.0,0.5]]},"energy":-49.15047479403265}

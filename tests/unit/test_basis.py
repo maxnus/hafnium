@@ -61,7 +61,7 @@ def test_bundled_sets_are_available_offline() -> None:
 )
 def test_basis_set_for_water(name: str, n_functions: int, max_l: int) -> None:
     library = BasisLibrary(Path("/nonexistent"), offline=True)
-    basis = BasisSet.for_molecule(WATER, name, library=library)
+    basis = BasisSet.for_atoms(WATER, name, library=library)
     assert basis.n_functions == n_functions
     assert basis.max_angular_momentum == max_l
     assert basis.shell_atoms[0] == 0
@@ -201,7 +201,7 @@ def test_elements_without_functions_are_reported(tmp_path: Path) -> None:
     hydrogen = Molecule.from_atoms([("H", (0, 0, 0))], spin=1)
     library = BasisLibrary(tmp_path, fetch=fake_fetch)
     with pytest.raises(BasisSetError, match="no functions for H"):
-        BasisSet.for_molecule(hydrogen, "empty", library=library)
+        BasisSet.for_atoms(hydrogen, "empty", library=library)
     with pytest.raises(BasisSetError, match="at least one shell"):
         BasisSet("empty", ("H",), (), ())
     with pytest.raises(BasisSetError, match="do not exist"):

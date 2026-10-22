@@ -24,7 +24,7 @@ MIXED_PATTERNS = ["abab", "aabb", "abba"]
 
 def compute(name: str, basis_name: str, omega: float | None = None) -> np.ndarray:
     molecule = MOLECULES[name]
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     return eri(ENGINE, basis, molecule, omega=omega)
 
 
@@ -46,7 +46,7 @@ def test_four_center_integrals_match_libcint(
     from tests.reference.pyscf_oracle import four_center_reference
 
     molecule = MOLECULES[name]
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     expected = four_center_reference(molecule, basis, omega)
     actual = compute(name, basis_name, omega)
     np.testing.assert_allclose(actual, expected, atol=INTEGRAL_TOL)
@@ -68,12 +68,11 @@ def test_mixed_tables_match_libcint(pattern: str) -> None:
     from tests.reference.pyscf_oracle import mixed_four_center_reference
 
     molecule = MOLECULES["water"]
-    first = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
-    second = BasisSet.for_molecule(molecule, "def2-svp", library=LIBRARY)
-    positions = molecule.positions_array()
+    first = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
+    second = BasisSet.for_atoms(molecule, "def2-svp", library=LIBRARY)
     tables = {
-        "a": ShellTable.from_basis(first, positions),
-        "b": ShellTable.from_basis(second, positions),
+        "a": ShellTable.from_basis(first, molecule),
+        "b": ShellTable.from_basis(second, molecule),
     }
     bra = (tables[pattern[0]], tables[pattern[1]])
     ket = (tables[pattern[2]], tables[pattern[3]])

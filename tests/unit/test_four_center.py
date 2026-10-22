@@ -34,7 +34,7 @@ PERMUTATIONS = [
 
 
 def basis_for(molecule: Molecule, name: str) -> BasisSet:
-    return BasisSet.for_molecule(molecule, name, library=LIBRARY)
+    return BasisSet.for_atoms(molecule, name, library=LIBRARY)
 
 
 def shifted(molecule: Molecule, shift: np.ndarray) -> Molecule:
@@ -73,7 +73,7 @@ def test_symmetry_paths_match_the_generic_path() -> None:
     # table holds the same functions and forces the generic evaluation.
     molecule = water()
     basis = basis_for(molecule, "def2-svp")
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     reordered, permutation = reversed_table(table)
     full = eri(ENGINE, basis, molecule, threshold=0.0)
 
@@ -103,12 +103,9 @@ def test_symmetry_paths_match_the_generic_path() -> None:
 def test_translations_move_three_of_the_four_functions() -> None:
     molecule = water()
     basis = basis_for(molecule, "sto-3g")
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     shifts = np.array([[0.7, -0.2, 0.4], [-0.3, 0.5, 0.1], [0.2, 0.2, -0.6]])
-    moved = [
-        ShellTable.from_basis(basis, shifted(molecule, shift).positions_array())
-        for shift in shifts
-    ]
+    moved = [ShellTable.from_basis(basis, shifted(molecule, shift)) for shift in shifts]
     translated = ENGINE.coulomb_four_center(
         (table, table), (table, table), np.concatenate([ZERO_TRIPLE, shifts[None]])
     )
@@ -144,7 +141,7 @@ def test_screening_neglects_only_quartets_below_the_threshold() -> None:
 def test_schwarz_bounds_bound_every_quartet() -> None:
     molecule = water()
     basis = basis_for(molecule, "def2-svp")
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     bounds = ENGINE.schwarz_bounds(table, table, ZERO)[0]
     assert bounds.shape == (table.n_shells, table.n_shells)
     integrals = eri(ENGINE, basis, molecule, threshold=0.0)
@@ -190,7 +187,7 @@ def test_density_fitting_approximates_the_exact_integrals() -> None:
 def test_four_center_rejects_bad_arguments() -> None:
     molecule = water()
     basis = basis_for(molecule, "sto-3g")
-    table = ShellTable.from_basis(basis, molecule.positions_array())
+    table = ShellTable.from_basis(basis, molecule)
     with pytest.raises(ValueError, match="threshold"):
         eri(ENGINE, basis, molecule, threshold=-1.0)
     with pytest.raises(ValueError, match="positive"):

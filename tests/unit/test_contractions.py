@@ -17,7 +17,7 @@ ZERO = np.zeros((1, 3))
 
 def test_from_basis_keeps_general_contractions_together() -> None:
     molecule = water()
-    basis = BasisSet.for_molecule(molecule, "cc-pvdz", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "cc-pvdz", library=LIBRARY)
     table = table_for(molecule, "cc-pvdz")
     assert table.n_shells == basis.n_shells
     assert table.n_functions == basis.n_functions

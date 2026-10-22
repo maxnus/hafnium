@@ -20,8 +20,8 @@ from tests.tolerances import FITTED_INTEGRAL_TOL, STRUCTURE_TOL
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
 MOLECULE = water()
-BASIS = BasisSet.for_molecule(MOLECULE, "sto-3g", library=LIBRARY)
-AUXILIARY = BasisSet.for_molecule(MOLECULE, "def2-universal-jkfit", library=LIBRARY)
+BASIS = BasisSet.for_atoms(MOLECULE, "sto-3g", library=LIBRARY)
+AUXILIARY = BasisSet.for_atoms(MOLECULE, "def2-universal-jkfit", library=LIBRARY)
 EXACT = ExactCoulombExchange.from_molecule(ENGINE, BASIS, MOLECULE)
 FITTED = DensityFittedCoulombExchange.from_molecule(ENGINE, BASIS, AUXILIARY, MOLECULE)
 

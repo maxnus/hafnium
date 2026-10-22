@@ -18,3 +18,6 @@ ADR that supersedes it.
 | [0009](0009-p-shell-order-verified.md) | Spherical function conventions verified against libcint | accepted 2026-10-21 |
 | [0010](0010-scf-driver-over-structured-matrices.md) | One SCF driver over structured matrices | accepted 2026-10-21 |
 | [0011](0011-general-contractions-in-the-kernels.md) | General contractions are evaluated once per shell | accepted 2026-10-21 |
+| [0012](0012-ewald-sums-in-reduced-dimensions.md) | One Ewald regularization in every dimension | accepted 2026-10-21 |
+| [0013](0013-molecule-and-cell-as-siblings.md) | `Molecule` and `Cell` are siblings under `AtomicSystem` | accepted 2026-10-21 |
+| [0014](0014-no-libcint-adapter.md) | No libcint adapter | accepted 2026-10-21 |

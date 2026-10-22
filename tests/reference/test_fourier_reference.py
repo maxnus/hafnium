@@ -35,7 +35,7 @@ def test_transforms_match_pyscf(name: str, basis_name: str) -> None:
     from tests.reference.pyscf_oracle import fourier_transform_reference
 
     molecule = MOLECULES[name]
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     expected = fourier_transform_reference(molecule, basis, G_VECTORS)
     actual = compute(table_for(molecule, basis_name))
     for key in ("single", "pair"):
@@ -47,8 +47,8 @@ def test_mixed_pair_transforms_match_pyscf() -> None:
     from tests.reference.pyscf_oracle import mixed_fourier_transform_reference
 
     molecule = MOLECULES["water"]
-    first = BasisSet.for_molecule(molecule, "sto-3g", library=LIBRARY)
-    second = BasisSet.for_molecule(molecule, "def2-svp", library=LIBRARY)
+    first = BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY)
+    second = BasisSet.for_atoms(molecule, "def2-svp", library=LIBRARY)
     expected = mixed_fourier_transform_reference(molecule, first, second, G_VECTORS)
     actual = ENGINE.pair_fourier_transform(
         table_for(molecule, "sto-3g"),
@@ -66,7 +66,7 @@ def test_high_angular_momentum_transforms_match_pyscf() -> None:
 
     molecule, basis = high_angular_momentum_case()
     expected = fourier_transform_reference(molecule, basis, G_VECTORS)
-    actual = compute(ShellTable.from_basis(basis, molecule.positions_array()))
+    actual = compute(ShellTable.from_basis(basis, molecule))
     for key in ("single", "pair"):
         np.testing.assert_allclose(actual[key], expected[key], atol=INTEGRAL_TOL)
 

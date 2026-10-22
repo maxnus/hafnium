@@ -33,7 +33,7 @@ STORED_CASES = CASES[:-1]
 
 def compute(name: str, basis_name: str) -> tuple[Molecule, BasisSet, dict[str, Array]]:
     molecule = MOLECULES[name]
-    basis = BasisSet.for_molecule(molecule, basis_name, library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     matrices = {
         "overlap": overlap(ENGINE, basis, molecule),
         "kinetic": kinetic(ENGINE, basis, molecule),
@@ -61,7 +61,7 @@ def test_attenuated_attraction_matches_gaussian_charges(omega: float) -> None:
     from tests.reference.pyscf_oracle import attenuated_attraction_reference
 
     molecule = MOLECULES["water"]
-    basis = BasisSet.for_molecule(molecule, "cc-pvdz", library=LIBRARY)
+    basis = BasisSet.for_atoms(molecule, "cc-pvdz", library=LIBRARY)
     actual = nuclear_attraction(ENGINE, basis, molecule, omega=omega)
     expected = attenuated_attraction_reference(molecule, basis, omega)
     np.testing.assert_allclose(actual, expected, atol=INTEGRAL_TOL)
