@@ -1,16 +1,18 @@
 """Block structures: which blocks a symmetry-constrained operator consists of.
 
-Only the spin structure exists at this stage. Point-group sectors, added in
-a later milestone, multiply each block below by the irreps of the group;
-non-Abelian irreps also use the ``weight`` field for their multiplicity.
+The spin structure and, for periodic systems, the k axis exist at this
+stage. Point-group sectors, added in a later milestone, multiply each block
+below by the irreps of the group; non-Abelian irreps also use the
+``weight`` field for their multiplicity.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from hafnium.errors import StructureError
+from hafnium.structured.kaxis import KAxis
 
 
 class Spin(Enum):
@@ -87,10 +89,15 @@ class BlockStructure:
     """Ordered blocks of a symmetry-constrained one-body operator.
 
     Use the class methods to build the structures of the Fukutome classes;
-    the constructor validates arbitrary block tuples.
+    the constructor validates arbitrary block tuples. A ``k_axis`` makes
+    every block a batch over k-points (ADR-0015): blocks over the real and
+    quaternionic rings then store the half zone, ``k_axis.representatives``,
+    and blocks over the complex ring every point. Without a k axis the
+    structure is molecular and blocks hold one matrix each.
     """
 
     blocks: tuple[Block, ...]
+    k_axis: KAxis | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "blocks", tuple(self.blocks))
@@ -156,6 +163,68 @@ class BlockStructure:
         """One quaternionic spinor block (paired GHF)."""
         return cls((Block(Spin.SPINOR, Ring.QUATERNION),))
 
+    def with_k_axis(self, k_axis: KAxis | None) -> BlockStructure:
+        """Return the same block pattern over ``k_axis`` (``None``: molecular)."""
+        return BlockStructure(self.blocks, k_axis=k_axis)
+
+    def half_zone(self, block: Block) -> bool:
+        """Whether ``block`` stores the half zone and derives its partners."""
+        return block.ring is not Ring.COMPLEX
+
+    def stored_kpoints(self, block: Block) -> tuple[int, ...] | None:
+        """Full-set indices of the k-points ``block`` stores, in storage order.
+
+        ``None`` without a k axis.
+        """
+        if self.k_axis is None:
+            return None
+        return self.k_axis.stored(self.half_zone(block))
+
+    def stored_weights(
+        self, block: Block
+    ) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """``(own, partner)`` weights of the stored k-points of ``block``.
+
+        See :meth:`KAxis.stored_weights`; ``((1,), (0,))`` without a k axis.
+        """
+        if self.k_axis is None:
+            return (1.0,), (0.0,)
+        return self.k_axis.stored_weights(self.half_zone(block))
+
+    def invariant_positions(self, block: Block) -> tuple[int, ...]:
+        """Storage positions of the time-reversal invariant k-points of ``block``.
+
+        Without a k axis the single stored matrix is invariant: ``(0,)``.
+        """
+        if self.k_axis is None:
+            return (0,)
+        invariant = self.k_axis.invariant
+        stored = self.k_axis.stored(self.half_zone(block))
+        return tuple(position for position, k in enumerate(stored) if invariant[k])
+
+    def storage_ring(self, block: Block) -> Ring:
+        """Ring the entries of ``block`` are stored over.
+
+        A real block is stored as ``float64`` only when every k-point is
+        time-reversal invariant, which includes the molecular case; at other
+        k-points the Bloch matrices are complex and the block is stored as
+        ``complex128`` with the conjugate relation between ``k`` and ``−k``.
+        """
+        if (
+            block.ring is Ring.REAL
+            and self.k_axis is not None
+            and not self.k_axis.all_invariant
+        ):
+            return Ring.COMPLEX
+        return block.ring
+
+    @property
+    def all_kpoints(self) -> tuple[int, ...] | None:
+        """Every index of the k axis, or ``None`` without one."""
+        if self.k_axis is None:
+            return None
+        return tuple(range(self.k_axis.n_kpt))
+
     @property
     def stored_blocks(self) -> tuple[Block, ...]:
         """The blocks that hold data, in storage order."""
@@ -212,11 +281,19 @@ class BlockStructure:
             tuple(
                 Block(block.spin, ring, block.weight, block.derived_from, block.partner)
                 for block in self.blocks
-            )
+            ),
+            k_axis=self.k_axis,
         )
 
     def describe(self) -> str:
         """Short human-readable name, for messages and logs."""
+        name = self._describe_spin()
+        if self.k_axis is None:
+            return name
+        n = self.k_axis.n_kpt
+        return f"{name} at {n} k-point{'' if n == 1 else 's'}"
+
+    def _describe_spin(self) -> str:
         ring = self.stored_blocks[0].ring.value
         if self.is_spatial:
             return f"spatial ({ring})"

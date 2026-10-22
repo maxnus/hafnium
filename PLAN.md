@@ -898,8 +898,11 @@ band structure. Status: `Lattice`, `Cell`, `KPoints` with time-reversal
 pairing, and the Ewald nuclear repulsion in one to three dimensions
 (ADR-0012) done 2026-10-21, matching the Madelung constants, PySCF's
 `energy_nuc` in three and two dimensions, and independent of the
-range-separation parameter. The k axis on the structured matrices and the
-lattice-summed one-electron integrals follow.
+range-separation parameter. The k axis on `BlockStructure` and
+`BlockMatrix` with half-zone storage done 2026-10-22 (ADR-0015): the
+property tests pass for all eight classes with k-points and the half-zone
+and full-zone storage agree. The lattice-summed one-electron integrals
+follow.
 
 **M5 Periodic Hartree–Fock.** First item: an ADR choosing the treatment
 of the exchange divergence (probe-charge Ewald, truncated Coulomb or

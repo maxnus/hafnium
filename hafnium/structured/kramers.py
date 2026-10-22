@@ -4,6 +4,10 @@ The time-reversal operator is Θ = −iσ_y K with K complex conjugation. On a
 spinor ``(v_alpha, v_beta)`` it acts as ``(-conj(v_beta), conj(v_alpha))``,
 and ``Θ² = −1``. Operators that commute with Θ have the quaternionic form
 ``[[A, B], [-conj(B), conj(A)]]`` and doubly degenerate (Kramers) spectra.
+
+The maps act on the last two axes, so batches of matrices (the k axis of a
+block) are transformed at once; the pairing of eigenvectors works on one
+matrix at a time.
 """
 
 from __future__ import annotations
@@ -26,23 +30,23 @@ def half_dimension(size: int, description: str) -> int:
 
 
 def time_reverse(x: Array) -> Array:
-    """Apply Θ to each column of a ``(2n, k)`` spinor array."""
+    """Apply Θ to each column of a ``(..., 2n, m)`` spinor array."""
     xp = array_namespace(x)
-    n = half_dimension(int(x.shape[0]), "the number of rows of a spinor array")
-    return xp.concat([-xp.conj(x[n:, ...]), xp.conj(x[:n, ...])], axis=0)
+    n = half_dimension(int(x.shape[-2]), "the number of rows of a spinor array")
+    return xp.concat([-xp.conj(x[..., n:, :]), xp.conj(x[..., :n, :])], axis=-2)
 
 
 def time_reverse_operator(x: Array) -> Array:
-    """Return ``Θ X Θ⁻¹`` for a square ``(2n, 2n)`` operator."""
+    """Return ``Θ X Θ⁻¹`` for square ``(..., 2n, 2n)`` operators."""
     xp = array_namespace(x)
-    n = half_dimension(int(x.shape[0]), "the number of rows of a spinor operator")
-    if x.shape[1] != 2 * n:
+    n = half_dimension(int(x.shape[-2]), "the number of rows of a spinor operator")
+    if x.shape[-1] != 2 * n:
         raise StructureError("time reversal of an operator needs a square matrix")
-    a, b = x[:n, :n], x[:n, n:]
-    c, d = x[n:, :n], x[n:, n:]
-    top = xp.concat([xp.conj(d), -xp.conj(c)], axis=1)
-    bottom = xp.concat([-xp.conj(b), xp.conj(a)], axis=1)
-    return xp.concat([top, bottom], axis=0)
+    a, b = x[..., :n, :n], x[..., :n, n:]
+    c, d = x[..., n:, :n], x[..., n:, n:]
+    top = xp.concat([xp.conj(d), -xp.conj(c)], axis=-1)
+    bottom = xp.concat([-xp.conj(b), xp.conj(a)], axis=-1)
+    return xp.concat([top, bottom], axis=-2)
 
 
 def kramers_symmetrize(x: Array) -> Array:
@@ -64,7 +68,7 @@ def kramers_adapt_eigenvectors(
     *,
     tolerance: float = 1e-8,
 ) -> Array:
-    """Rotate eigenvectors of a Θ-symmetric operator into Kramers pairs.
+    """Rotate eigenvectors of one Θ-symmetric operator into Kramers pairs.
 
     Within each degenerate eigenspace the returned columns come in adjacent
     pairs ``(u, Θu)``. Eigenvalues closer than ``tolerance`` (relative to the

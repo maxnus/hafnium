@@ -10,6 +10,7 @@ algorithms are written once against their operations.
 """
 
 from hafnium.structured.density import density_matrix
+from hafnium.structured.kaxis import KAxis
 from hafnium.structured.kramers import (
     is_kramers_symmetric,
     kramers_adapt_eigenvectors,
@@ -26,6 +27,7 @@ __all__ = [
     "BlockMatrix",
     "BlockStructure",
     "BlockVector",
+    "KAxis",
     "Partner",
     "Ring",
     "Spin",

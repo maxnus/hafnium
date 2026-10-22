@@ -6,8 +6,11 @@ from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import is_kramers_symmetric
 from hafnium.structured.matrix import BlockMatrix
-from hafnium.structured.structure import Ring
+from hafnium.structured.structure import Block, BlockStructure, Ring
 from hafnium.structured.vector import BlockVector
+
+REALITY_TOLERANCE = 1e-10
+"""Relative imaginary part a real block may carry at an invariant k-point."""
 
 
 def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> BlockMatrix:
@@ -18,24 +21,49 @@ def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> Block
     coefficients : BlockMatrix
         Orbital coefficients ``[ao, mo]`` per block.
     occupations : BlockVector
-        Occupation numbers ``[mo]`` per block, as floats. In a paired
-        generalized structure they must be equal within each Kramers pair.
+        Occupation numbers ``[mo]`` per block (``[kpt, mo]`` with a k
+        axis), as floats. In a paired generalized structure they must be
+        equal within each Kramers pair at the time-reversal invariant
+        k-points, and in a real structure they must leave the density real
+        there.
     """
-    if coefficients.structure != occupations.structure:
+    structure = coefficients.structure
+    if structure != occupations.structure:
         raise StructureError("coefficients and occupations must share a structure")
     blocks: list[Array] = []
     for block, c, occupation in zip(
-        coefficients.structure.stored_blocks,
-        coefficients.blocks,
-        occupations.blocks,
-        strict=True,
+        structure.stored_blocks, coefficients.blocks, occupations.blocks, strict=True
     ):
         xp = array_namespace(c, occupation)
-        density = (c * xp.expand_dims(occupation, axis=0)) @ adjoint(c)
-        if block.ring is Ring.QUATERNION and not is_kramers_symmetric(density):
-            raise StructureError(
-                "occupations of a paired structure must be equal within each "
-                "Kramers pair"
-            )
+        density = (c * xp.expand_dims(occupation, axis=-2)) @ adjoint(c)
+        _check_time_reversal(structure, block, density)
         blocks.append(density)
-    return BlockMatrix(coefficients.structure, tuple(blocks))
+    return BlockMatrix(structure, tuple(blocks))
+
+
+def _check_time_reversal(
+    structure: BlockStructure, block: Block, density: Array
+) -> None:
+    """Raise unless ``density`` has the symmetry of ``block`` at invariant k-points."""
+    if block.ring is Ring.COMPLEX:
+        return
+    batched = structure.k_axis is not None
+    for position in structure.invariant_positions(block):
+        matrix = density[position] if batched else density
+        if block.ring is Ring.QUATERNION:
+            if not is_kramers_symmetric(matrix):
+                raise StructureError(
+                    "occupations of a paired structure must be equal within each "
+                    "Kramers pair"
+                )
+            continue
+        xp = array_namespace(matrix)
+        if not xp.isdtype(matrix.dtype, "complex floating"):
+            continue
+        scale = max(1.0, float(xp.max(xp.abs(matrix))))
+        if float(xp.max(xp.abs(xp.imag(matrix)))) > REALITY_TOLERANCE * scale:
+            raise StructureError(
+                "the density of a real structure is real at a time-reversal "
+                "invariant k-point; the occupations break time reversal within a "
+                "degenerate set"
+            )

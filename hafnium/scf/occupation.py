@@ -108,6 +108,11 @@ def _fill(energies: Array, count: float, tolerance: float | None) -> Array:
     ``count`` orbitals are filled.
     """
     xp = array_namespace(energies)
+    if energies.ndim != 1:
+        raise InputError(
+            "occupations across k-points are not implemented yet; a structure "
+            "with a k axis cannot be occupied"
+        )
     n = int(energies.shape[0])
     if count > n:
         raise InputError(f"cannot place {count} electrons in {n} orbitals")

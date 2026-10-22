@@ -15,6 +15,7 @@ from enum import Enum
 
 from hafnium.errors import InputError
 from hafnium.structured import BlockStructure, Ring
+from hafnium.symmetry.kpoints import KPoints
 
 
 class SpinSymmetry(Enum):
@@ -144,8 +145,19 @@ class SymmetrySpec:
         """The Fukutome class of this specification."""
         return FUKUTOME_CLASSES[(self.spin, self.field)]
 
-    def structure(self) -> BlockStructure:
-        """Block structure of one-body operators (Fock, density) in this class."""
+    def structure(self, kpoints: KPoints | None = None) -> BlockStructure:
+        """Block structure of one-body operators (Fock, density) in this class.
+
+        With ``kpoints`` the structure carries their k axis: the blocks
+        become batches over the stored k-points, a half zone for the real
+        and paired classes (ADR-0007, ADR-0015).
+        """
+        structure = self._spin_structure()
+        if kpoints is None:
+            return structure
+        return structure.with_k_axis(kpoints.axis())
+
+    def _spin_structure(self) -> BlockStructure:
         if self.field is Field.PAIRED:
             if self.spin is SpinSymmetry.UNRESTRICTED:
                 return BlockStructure.paired_unrestricted()
