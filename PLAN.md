@@ -1,7 +1,7 @@
 # Design plan: a symmetry-aware, differentiable quantum chemistry library
 
 Status: living document; revised 2026-10-21 to add periodic systems (§5.9,
-ADR-0007).
+ADR-0007) and 2026-10-22 to add relativistic corrections (§5.10, M12).
 Package name: `hafnium`, decided 2026-10-21 (ADR-0003). Hf, as in
 Hartree–Fock; the element is named after Hafnia, Copenhagen, where it was
 discovered at Bohr's institute.
@@ -31,16 +31,21 @@ Goals, in priority order:
 4. Correlated methods: DF-MP2, CCSD and CCSD(T), implemented once in a
    spin-orbital, symmetry-blocked formulation that serves the restricted,
    unrestricted and generalized cases.
-5. A configurable array backend: NumPy (CPU, single- or multi-threaded),
+5. Relativistic corrections through the exact two-component (X2C)
+   Hamiltonian: spin-free in every symmetry class, with spin–orbit
+   coupling in the generalized classes, for molecules and cells (§5.10).
+6. A configurable array backend: NumPy (CPU, single- or multi-threaded),
    CuPy (GPU) and JAX (CPU/GPU plus automatic differentiation, AD).
-6. Basis sets fetched from the Basis Set Exchange (BSE) and cached locally.
-7. Code quality as a first-class requirement: static typing, immutable data,
+7. Basis sets fetched from the Basis Set Exchange (BSE) and cached locally.
+8. Code quality as a first-class requirement: static typing, immutable data,
    written conventions, and CI that enforces them.
 
-Non-goals for version 1: relativistic Hamiltonians, excited-state methods,
-semi-empirical methods, pseudopotentials and plane-wave basis sets. The
-architecture must not preclude them; two-component relativistic methods,
-for example, are complex GHF with different integrals and fit later.
+Non-goals for version 1: four-component Hamiltonians, excited-state
+methods, semi-empirical methods, plane-wave basis sets and
+pseudopotentials, and effective core potentials unless §12 decides
+otherwise. The architecture must not preclude them; the two-component
+Hamiltonian of §5.10 enters as a one-body operator and leaves the rest of
+the library untouched.
 
 ## 2. Guiding principles
 
@@ -127,8 +132,10 @@ two- and three-centre integrals for DF, range-separated (erf- and
 erfc-attenuated) variants of every Coulomb-type integral, the Fourier
 transform of basis-function pairs and of auxiliary functions, image loops
 that accumulate any of these over a given list of lattice translations
-with distance screening, first-derivative integrals of all of these, DFT grid generation
-(radial schemes, Lebedev angular grids, Becke partitioning) and
+with distance screening, first-derivative integrals of all of these and,
+by the same mechanism on bra and ket, the kinetic-balance integrals
+⟨∂_iχ_μ|V|∂_jχ_ν⟩ of the relativistic Hamiltonian (§5.10), DFT grid
+generation (radial schemes, Lebedev angular grids, Becke partitioning) and
 basis-function values and gradients on grid batches.
 
 Later: AO-direct J/K builders, ECP integrals, second-derivative integrals,
@@ -450,6 +457,117 @@ path.
 - **Energies, charge and spin are per unit cell**; a charged cell is
   neutralized by the uniform background.
 
+### 5.10 Relativistic corrections: a different one-body operator
+
+Relativistic effects are part of version 1 through the exact two-component
+Hamiltonian at the one-electron level (X2C-1e: Kutzelnigg and Liu, Iliaš
+and Saue, Liu and Peng). The one-electron Dirac Hamiltonian is set up in
+the uncontracted basis, decoupled exactly and renormalized, and the
+resulting matrix replaces the non-relativistic core Hamiltonian T + V; the
+two-electron terms stay non-relativistic. Everything downstream of the core
+Hamiltonian is unchanged, which is the reason for this choice over
+Douglas–Kroll–Hess and ZORA: X2C needs the same integrals, has no model
+potential and no gauge dependence, and is exact for one-electron systems
+in the given basis. Four-component Hartree–Fock is a non-goal (§1); the
+four-component one-electron matrix that the decoupling builds is the only
+four-component object in the library.
+
+- **The decoupling.** In a basis of restricted kinetic balance the matrix
+  Dirac equation reads
+  [[V, T], [T, W/(4c²) − T]] C = [[S, 0], [0, T/(2c²)]] C E, with S, T
+  and V the overlap, kinetic and nuclear-attraction matrices of the
+  uncontracted scalar basis and the kinetic-balance matrix
+  W_μν = ⟨(σ·p)χ_μ|V|(σ·p)χ_ν⟩ = Σ_i ⟨∂_iχ_μ|V|∂_iχ_ν⟩
+  + i Σ_k σ_k Σ_ij ε_ijk ⟨∂_iχ_μ|V|∂_jχ_ν⟩ (CONVENTIONS §3). The
+  positive-energy solutions give the decoupling X = C_S C_L⁻¹, the
+  renormalization R = (S⁻¹S̃)^{−1/2} with S̃ = S + X†TX/(2c²), and the
+  two-component Hamiltonian h = R†(V + TX + X†T + X†(W/(4c²) − T)X)R,
+  projected onto the contracted basis with the contraction matrix, which
+  is exact because contracted functions are linear combinations of the
+  primitives that ADR-0011 keeps. The cost is one diagonalization of a
+  matrix of twice (four times with spin–orbit coupling) the uncontracted
+  size, negligible next to the SCF. A constant shift of the potential
+  shifts W by twice that constant times T, hence the whole Dirac matrix
+  along its metric: the decoupling is invariant under the arbitrary
+  constant of a regularized periodic potential, provided W is built from
+  the same regularized potential as V.
+- **Spin-free and spin–orbit variants.** The spin-free Hamiltonian keeps
+  the scalar part of W only; it is a real n×n matrix like T + V, so all
+  eight Fukutome classes, Kohn–Sham DFT and the correlated methods use it
+  unchanged. With spin–orbit coupling the Hamiltonian is a 2n×2n complex
+  matrix with the quaternionic (Kramers) structure of §5.2, that is a
+  one-body operator of the paired GHF class (TSCW), and symmetry as data
+  does the rest: the one-body operator carries its own `BlockStructure`,
+  `Hamiltonian` embeds it into the requested class, which succeeds for
+  TSCW (Kramers-restricted, even electron counts) and TSW
+  (Kramers-unrestricted) and raises a `StructureError` for every other
+  class: the spin-separable ones, and real GHF (TSDW), since the
+  spin–orbit operator is complex. Nothing in the SCF driver changes; the
+  new code is the decoupling and the structured one-body operator. The one-electron spin–orbit operator overestimates
+  spin–orbit splittings because the two-electron spin–same-orbit
+  screening is missing; the correction (Boettger's screened-nuclear
+  spin–orbit scaling, its modified form, or atomic mean-field integrals)
+  is one of the decisions of the milestone's ADR (§12). Two-component
+  Kohn–Sham needs the noncollinear exchange–correlation evaluation, so
+  spin–orbit DFT follows noncollinear DFT; spin-free X2C-DFT needs nothing
+  new, and spin–orbit MP2 and CC are the generalized case of the
+  spin-orbital formulation of §5.5.
+- **Locality.** The full molecular decoupling is the default for
+  molecules. The atomic decoupling builds X and R from the Dirac problem of
+  each atom alone (the free-atom form of the diagonal local approximation
+  of Peng and Reiher) and applies them, block-diagonal over atoms, to the
+  full molecular, or lattice-summed, V, T and W; it is linear in the
+  number of atoms and independent of the lattice, so it is what cells use
+  at every k, and it keeps nuclear gradients simple because X and R are
+  then rigid under nuclear displacements. The variant that takes the
+  atomic blocks from the molecular matrices instead is an option whose
+  gradients carry a response term. The full
+  per-k decoupling of the lattice-summed matrices (invariant under the
+  Ewald constant, see above) and analytic gradients of the full molecular
+  decoupling (Cheng and Gauss) are later items; the AD path of M9
+  differentiates through the full decoupling by way of the positive-energy
+  projector rather than the eigenvectors, since every eigenvalue of the
+  spin–orbit Dirac matrix is Kramers-degenerate and the eigenvector
+  derivative of `eigh` is singular there.
+- **Nuclear charge model.** A Gaussian nucleus with the exponent
+  ζ_A = 3/(2 r_A²), r_A = 0.836 A^{1/3} + 0.570 fm (Visscher and Dyall),
+  has the potential Z_A erf(√ζ_A r)/r, which is the erf-attenuated nuclear
+  attraction the engine already evaluates, with ω = √ζ_A per nucleus. The
+  finite nucleus therefore costs a per-nucleus attenuation parameter in
+  the kernels and nothing else, and it removes the weak singularity of the
+  relativistic orbitals at a point nucleus, which is why Dyall's sets and
+  ANO-RCC are optimized with it (the cc-pVXZ-DK sets are not). Point
+  nuclei stay the default for non-relativistic calculations, so molecular
+  results do not change; the default for relativistic ones is an open
+  decision (§12).
+- **Basis sets.** The decoupling runs in the fully uncontracted basis,
+  with near-linear dependence among steep functions handled by the
+  canonical orthogonalization of M3. Contractions optimized
+  non-relativistically are unsuitable for heavy elements; the relativistic
+  families on the Basis Set Exchange (x2c-SVPall and x2c-TZVPall,
+  cc-pVXZ-DK, ANO-RCC, Dyall's and Sapporo's sets) are the intended
+  inputs, and the bundled library gains one of them for offline tests.
+  Effective core potentials are not needed for correctness on this
+  route, since all-electron X2C covers the periodic table and the
+  decoupling itself is cheap, but all-electron basis sets of heavy
+  elements make the SCF far more expensive than an ECP valence basis;
+  whether version 1 adds ECP integrals for the def2 sets beyond krypton is
+  an open decision (§12).
+- **Properties.** A one-electron property in the two-component picture
+  needs the same transformation of its operator (picture change),
+  O → R†(O_LL + O_LS X + X†O_SL + X†O_SS X)R with
+  O_SS = ⟨(σ·p)χ|O|(σ·p)χ⟩/(4c²), one more derivative-type integral per
+  operator. The decoupling is therefore kept as an immutable result (X, R
+  and the contraction matrix) that transforms operators on request;
+  picture-change errors are large for core properties and small for
+  valence ones, and every property of M11 states whether it applies the
+  transformation.
+- **The speed of light is an explicit parameter** with the CODATA 2018
+  default (CONVENTIONS §3): oracle comparisons pass the oracle's value,
+  since the relativistic energy of a heavy atom moves by far more than
+  `ENERGY_TOL` between CODATA revisions, and a very large value
+  reproduces the non-relativistic Hamiltonian, which is the first test.
+
 ## 6. Array backend and automatic differentiation
 
 ### 6.1 Backend abstraction
@@ -514,16 +632,20 @@ convert once. `Lattice`: one to three translation vectors, reciprocal
 vectors, fractional coordinates, translations within a cutoff. `Cell`: a
 sibling of `Molecule` under `AtomicSystem` with a `Lattice`, charge and
 spin per cell, supercell construction, extended-XYZ input and output that
-keep the lattice, and an Ewald nuclear repulsion. Owns: units at the
-boundary.
+keep the lattice, and an Ewald nuclear repulsion. `NuclearModel`: point
+nuclei or Gaussian nuclei with the Visscher–Dyall exponents (§5.10). Owns:
+units at the boundary, the nuclear charge model.
 
 **basis.** `Shell` (angular momentum, exponents, contraction
 coefficients, spherical or Cartesian), `BasisSet` (shells per atom, AO
-ordering, normalization). `BasisLibrary` fetches from the BSE REST API,
-caches in the platform cache directory, and ships a small bundled set
-(STO-3G, def2-SVP, cc-pVDZ and matching DF auxiliary sets) for offline
-tests. Internal format: BSE's JSON schema. Owns: AO ordering and spherical
-harmonic phase conventions, normalization.
+ordering, normalization, the uncontracted basis with the contraction
+matrix for the relativistic decoupling of §5.10). `BasisLibrary` fetches
+from the BSE REST API, caches in the platform cache directory, and ships a
+small bundled set (STO-3G, def2-SVP, cc-pVDZ and matching DF auxiliary
+sets, later one relativistic family) for offline tests. Internal format:
+BSE's JSON schema; effective-core-potential data is rejected with a clear
+error until §12 decides on ECPs. Owns: AO ordering and spherical harmonic
+phase conventions, normalization.
 
 **symmetry.** Point groups and irrep tables (Abelian in version 1), SALC
 construction, `SpinSymmetry`, `Field`, `SymmetrySpec`, the mapping to
@@ -540,10 +662,12 @@ Backend-agnostic.
 algebra shims, thread configuration, DLPack exchange.
 
 **integrals.** `IntegralEngine` protocol (one-electron, four-centre,
-two- and three-centre, range-separated kernels, pair Fourier transforms,
-derivatives, screening data), each over shell pairs at explicit translation
-vectors so that molecules and cells share it, `RustEngine` (the only
-engine, ADR-0014), `DensityFitting` (auxiliary basis, metric, Cholesky or
+two- and three-centre, range-separated kernels, nuclear attraction with a
+per-nucleus attenuation for Gaussian nuclei, pair Fourier transforms,
+derivatives including the kinetic-balance integrals of §5.10, screening
+data), each over shell pairs at explicit translation vectors so that
+molecules and cells share it, `RustEngine` (the only engine, ADR-0014),
+`DensityFitting` (auxiliary basis, metric, Cholesky or
 eigen decomposition of the metric, `B[aux, ao, ao]`), `CoulombExchangeBuilder`
 implementations (DF, in-core exact, later AO-direct). `periodic/`: image
 lists and real-space cutoffs, Bloch phases, Ewald sums per dimension,
@@ -564,20 +688,32 @@ LDA, GGA, meta-GGA, hybrid and range-separated hybrids; noncollinear later.
 
 **scf.** One `SelfConsistentField` driver with pluggable parts: initial
 guess (core Hamiltonian, superposition of atomic densities, generalized
-Wolfsberg–Helmholz, from a previous result), `Hamiltonian` (one-body plus
-two-body builders, plus XC for KS), occupation policy (aufbau per sector
-and across k-points, fixed per-irrep occupations, fractional occupation
-and smearing later),
+Wolfsberg–Helmholz, from a previous result), `Hamiltonian` (a one-body
+operator carrying its own block structure, so that the two-component
+Hamiltonian of §5.10 embeds into the generalized classes and is rejected
+by the others, plus two-body builders, plus XC for KS), occupation
+policy (aufbau per sector and across k-points, fixed per-irrep
+occupations, fractional occupation and smearing later),
 convergence acceleration (DIIS, EDIIS/ADIIS, level shift, damping; a
 second-order solver later), stability analysis and following. Result
 objects carry energy components, orbitals, orbital energies, occupations,
 the structured density, and convergence history.
 
+**relativistic.** The exact two-component decoupling of §5.10: the
+one-electron Dirac matrices in the uncontracted basis for either nuclear
+model, the positive-energy projection, the decoupling and renormalization
+matrices, the spin-free and spin–orbit Hamiltonians as one-body operators
+with their block structure, the atomic (local) variant, the two-electron
+spin–orbit correction chosen in the milestone's ADR, and the
+picture-change transformation of property operators, all kept as an
+immutable result. Owns: the speed of light as an explicit parameter.
+
 **mp, cc.** DF-based MO integral transformation, DF-MP2, CCSD, (T), with
 generated contraction code; later Λ equations, EOM-CC, properties.
 
 **properties.** Energy decomposition, dipoles and multipoles, population
-analysis, analytic nuclear gradients (derivative integrals plus the AD
+analysis, each with the picture-change transformation for two-component
+results (§5.10), analytic nuclear gradients (derivative integrals plus the AD
 path as a cross-check), geometry optimization via an external optimizer,
 band structures along k-point paths from a converged density.
 
@@ -626,6 +762,32 @@ module. No printing from library code.
   - reference comparisons against PySCF's `pbc` module (KRHF, KUHF, KGHF,
     KRKS, KMP2, KCCSD) with the same auxiliary basis and the Ewald exchange
     correction, with the fitting-scheme residual recorded alongside.
+- Relativistic consistency tests, required for every relativistic feature
+  (§5.10):
+  - the kinetic-balance integrals, all nine Cartesian components of
+    ⟨∂_iχ_μ|V|∂_jχ_ν⟩, against libcint (`int1e_pnucp`, `int1e_pnucxp`)
+    and against mixed second differences of the nuclear attraction with
+    respect to the two basis-function centres;
+  - at a very large speed of light the two-component Hamiltonian and the
+    energy reproduce the non-relativistic ones to `ENERGY_TOL`, and a
+    constant shift of the potential shifts the Hamiltonian by that
+    constant times the overlap;
+  - a hydrogen-like ion: the lowest positive-energy eigenvalue of the
+    decoupling converges with an even-tempered basis towards the Dirac
+    energy c²(√(1 − (Zα)²) − 1) of the point nucleus, for which X2C is
+    exact;
+  - spin-free energies match PySCF's `sfx2c1e` and two-component energies
+    match PySCF's `x2c` module, with PySCF's speed of light and nuclear
+    model passed explicitly;
+  - with spin–orbit coupling the energy is invariant under rotations of
+    the molecule, while the spin-rotation invariance above holds for
+    spin-free Hamiltonians only; the Kramers-restricted (TSCW) and
+    unrestricted (TSW) results agree for closed shells by the embedding
+    test; a spin-separable class is rejected;
+  - the atomic decoupling agrees with the full one to the tolerance the
+    literature reports; for cells, the large-box test reproduces the
+    molecular two-component result, since no periodic two-component
+    oracle is relied on.
 - A reference-value database (JSON with provenance: code, version,
   settings) under `tests/reference/data/` for regression testing without
   PySCF installed.
@@ -701,8 +863,9 @@ shell-pair bounds and permutational symmetry done 2026-10-21, matching
 libcint to 1e-12 up to g functions. Fourier transforms of functions and
 pairs done 2026-10-21, matching numerical quadrature and PySCF's analytical
 transforms. The kernel list of M2 is complete; derivative integrals follow
-with the gradients of M11. No libcint adapter is built (ADR-0014,
-2026-10-21); the native engine is the only one. General contractions are evaluated
+with the gradients of M11 and serve the relativistic integrals of M12. No
+libcint adapter is built (ADR-0014, 2026-10-21); the native engine is the
+only one. General contractions are evaluated
 once per shell since 2026-10-21 (ADR-0011), after benchmarks against PySCF
 showed the split representation costing fifteen times libcint's CPU time
 on cc-pVDZ; on segmented bases the four-centre kernel matches libcint's
@@ -782,9 +945,29 @@ symmetry-breaking workflows following the JCTC 2011 paper (dissociation
 curves across Fukutome classes as a worked example and regression test),
 band structures along k-point paths, Molden/cube output, checkpoints.
 
+**M12 Relativistic Hamiltonians.** First item: an ADR deciding the
+nuclear charge model default, the two-electron spin–orbit correction and
+whether ECP integrals enter version 1 (§12). Then the kinetic-balance
+integrals with all nine Cartesian components in Rust, sharing the
+derivative mechanism of M11, with per-nucleus attenuation for Gaussian
+nuclei; the uncontracted basis and the contraction matrix on `BasisSet`;
+the spin-free decoupling and its Hamiltonian in all eight classes; the
+spin–orbit decoupling as a TSCW one-body operator; the atomic decoupling;
+the two-electron spin–orbit correction; the picture-change transformation
+of the multipole operators of M11; a bundled relativistic basis family;
+cells with the atomic decoupling at every k. Its only dependencies are M3
+and the derivative kernels, so it can be scheduled before M9–M11 if heavy
+elements become pressing. Exit: the relativistic tests of §8 pass: the
+non-relativistic limit and the shift invariance to `ENERGY_TOL`, spin-free
+and two-component energies against PySCF for a set of heavy-element atoms
+and molecules, the hydrogen-like convergence, and orientation invariance
+with spin–orbit coupling.
+
 Later: AO-direct J/K, non-Abelian point groups, noncollinear DFT,
-quaternion storage, EOM-CC, ECPs and pseudopotentials, FFT-based density
-fitting, explicit Q-vector coupling between k-points.
+quaternion storage, EOM-CC, ECPs (pending §12) and pseudopotentials,
+four-component Hamiltonians and the Breit interaction, the full per-k
+decoupling and analytic gradients of the full decoupling (§5.10),
+FFT-based density fitting, explicit Q-vector coupling between k-points.
 
 ## 11. Relationship to PySCF
 
@@ -800,6 +983,7 @@ design template. Where this plan differs deliberately:
 | Low-dimensional cells padded with vacuum in a 3×3 lattice | Only the periodic vectors are stored; reduced-dimension kernels |
 | Units and conventions implicit in call signatures | Stated in `CONVENTIONS.md` and docstrings |
 | Loose typing | Strict typing |
+| Relativity as separate `x2c` wrapper classes over a spinor basis, plus `DHF` | The two-component Hamiltonian is a one-body operator with a block structure; the generalized classes of the one SCF are the spinor case |
 
 PySCF is never a runtime dependency; its `pbc` module is the reference
 for periodic results.
@@ -813,6 +997,22 @@ for periodic results.
    crystal symmetry, C with Python bindings, BSD-3-Clause) as an optional
    dependency, versus an own implementation. Molecular point groups stay
    in-house either way, since spglib does not treat finite systems.
+4. The nuclear charge model for relativistic calculations (§5.10): point
+   nuclei (PySCF's default, the simplest oracle comparison) versus the
+   Gaussian model of Visscher and Dyall (DIRAC's default, what the
+   relativistic basis families are optimized with; recommended).
+   Non-relativistic calculations keep point nuclei either way.
+5. The two-electron spin–orbit correction on top of the one-electron
+   operator: Boettger's screened-nuclear spin–orbit scaling (no new
+   integrals; recommended first), its modified form, or atomic mean-field
+   integrals (atomic two-electron spin–orbit integrals; the more accurate
+   option, as a later addition).
+6. Effective core potentials in version 1: native semi-local ECP integrals
+   are a substantial kernel of their own, and libecpint would add a C++
+   toolchain to a build that is Rust only (ADR-0002); the recommendation
+   is all-electron relativistic basis sets only, with ECP data in a basis
+   file rejected by a clear error as today, and ECPs kept on the later
+   list.
 
 Decided so far: no libcint adapter, the native engine being complete
 for M2 and libcint the test oracle only (2026-10-21, ADR-0014); `Molecule`
@@ -842,6 +1042,7 @@ reserve for four-centre integrals (2026-10-21, ADR-0008).
 | JAX constraints conflict with iterative algorithms | Pure step functions and implicit differentiation from the start |
 | Array API support in JAX still partly experimental | All backend-specific code isolated in `backend/`, with a lint test for the allowed subset |
 | Thread oversubscription between rayon and BLAS | Single thread setting applied to both |
+| Spin–orbit coupling is the first operator that ties spin to space, so an error in the Kramers structure is invisible in spin-free calculations | The orientation-invariance, embedding (TSCW versus TSW) and non-relativistic-limit tests of §8 with spin–orbit coupling, and PySCF's two-component energies |
 | The PyPI name `hafnium` is held by an empty placeholder package | Contact the owner and file a PEP 541 request before M0; publishing is far off, so wait, with `hafnio` as the fallback if the name is not obtained by the first public release |
 
 ## References
@@ -871,3 +1072,25 @@ reserve for four-centre integrals (2026-10-21, ADR-0008).
 - Python array API standard and `array-api-compat`.
 - REST (Rust electronic structure toolkit) and its `rest_libcint` crate as
   prior art for Rust in quantum chemistry.
+- W. Kutzelnigg, W. Liu, J. Chem. Phys. 123, 241102 (2005); M. Iliaš,
+  T. Saue, J. Chem. Phys. 126, 064102 (2007); W. Liu, D. Peng, J. Chem.
+  Phys. 131, 031104 (2009): the exact two-component Hamiltonian.
+- T. Saue, ChemPhysChem 12, 3077 (2011): review of relativistic
+  Hamiltonians for molecular calculations.
+- K. G. Dyall, K. Fægri, *Introduction to Relativistic Quantum
+  Chemistry*, Oxford University Press (2007).
+- D. Peng, M. Reiher, J. Chem. Phys. 136, 244108 (2012): local (atomic)
+  exact decoupling.
+- L. Cheng, J. Gauss, J. Chem. Phys. 135, 084114 (2011): analytic
+  gradients of the exact two-component Hamiltonian.
+- L. Visscher, K. G. Dyall, At. Data Nucl. Data Tables 67, 207 (1997):
+  the Gaussian nuclear charge model.
+- J. C. Boettger, Phys. Rev. B 62, 7809 (2000); M. Filatov, W. Zou,
+  D. Cremer, J. Chem. Phys. 139, 014106 (2013): screened-nuclear
+  spin–orbit scaling and its modified form.
+- B. A. Heß, C. M. Marian, U. Wahlgren, O. Gropen, Chem. Phys. Lett. 251,
+  365 (1996); J. Liu, L. Cheng, J. Chem. Phys. 148, 144108 (2018): atomic
+  mean-field spin–orbit integrals, also within X2C.
+- P. Pollak, F. Weigend, J. Chem. Theory Comput. 13, 3696 (2017): the
+  x2c-SVPall and x2c-TZVPall basis sets.
+- R. A. Shaw, J. G. Hill, J. Chem. Phys. 147, 074108 (2017): libecpint.
