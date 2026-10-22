@@ -5,7 +5,7 @@ import pytest
 
 from hafnium.basis import BasisLibrary, BasisSet
 from hafnium.errors import InputError, StructureError
-from hafnium.integrals import RustEngine
+from hafnium.integrals import RustEngine, density_fitting_k, overlap_k
 from hafnium.integrals.periodic import RangeSeparation
 from hafnium.molecule import AtomicSystem, Cell, Lattice, Molecule, default_omega
 from hafnium.scf import (
@@ -385,6 +385,28 @@ def test_slab_and_chain_energies_are_range_separation_independent_and_fold(
     assert folded.energy / np.prod(multiples) == pytest.approx(
         reference.energy, abs=ENERGY_TOL
     )
+
+
+def test_signed_contractions_match_the_fitted_integrals_of_a_chain() -> None:
+    # At Γ of a chain the signature carries one −1; the builder's J and K
+    # must still be the contractions of the explicit fitted integrals.
+    cell = helium(1)
+    gamma = KPoints.gamma(1)
+    basis = basis_for(cell, "cc-pvdz")
+    fit = density_fitting_k(ENGINE, basis, basis_for(cell, AUXILIARY), cell, gamma)
+    assert int(np.count_nonzero(np.asarray(fit.signature()) < 0.0)) == 1
+    two_body = KPointDensityFittedCoulombExchange.from_fitting(
+        fit, overlap_k(ENGINE, basis, cell, gamma), 0.0
+    )
+    generator = np.random.default_rng(3)
+    n = basis.n_functions
+    random = generator.normal(size=(n, n)) + 1j * generator.normal(size=(n, n))
+    density = (random + random.conj().T)[None, :, :]
+    eri = fit.eri((0, 0, 0, 0))
+    coulomb = np.einsum("uvwx,kwx->kuv", eri, density)
+    exchange = np.einsum("uwxv,kwx->kuv", eri, density)
+    np.testing.assert_allclose(two_body.coulomb(density), coulomb, atol=STRUCTURE_TOL)
+    np.testing.assert_allclose(two_body.exchange(density), exchange, atol=STRUCTURE_TOL)
 
 
 def test_fitted_builder_requires_a_matching_signature(

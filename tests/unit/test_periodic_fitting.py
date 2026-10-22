@@ -16,6 +16,7 @@ from hafnium.integrals import (
     density_fitting_k,
     overlap,
 )
+from hafnium.integrals.density_fitting import signed_inverse_square_root
 from hafnium.integrals.periodic import (
     RangeSeparation,
     function_absolute_integral,
@@ -182,6 +183,27 @@ def test_metric_is_signed_along_the_charge_at_zero_transfer(dimension: int) -> N
     neutral = np.eye(fit.n_aux) - np.outer(charges, charges) / np.dot(charges, charges)
     projected = np.linalg.eigvalsh(neutral @ fit.metric[gamma] @ neutral)
     assert np.sum(projected < -INTEGRAL_TOL) == 0
+
+
+def test_signed_inverse_square_root_inverts_an_indefinite_metric() -> None:
+    generator = np.random.default_rng(7)
+    rotation, _ = np.linalg.qr(
+        generator.normal(size=(4, 4)) + 1j * generator.normal(size=(4, 4))
+    )
+    metric = rotation @ np.diag([3.0, -1.0, 0.5, 2.0]) @ rotation.conj().T
+    vectors = generator.normal(size=(4, 6)) + 1j * generator.normal(size=(4, 6))
+    half, signs = signed_inverse_square_root(metric, 1e-12)
+    np.testing.assert_array_equal(np.sort(signs), [-1.0, 1.0, 1.0, 1.0])
+    fitted = half @ vectors
+    np.testing.assert_allclose(
+        fitted.conj().T @ (signs[:, None] * fitted),
+        vectors.conj().T @ np.linalg.inv(metric) @ vectors,
+        atol=INTEGRAL_TOL,
+    )
+    # A near-null eigenvalue is dropped with its sign.
+    singular = rotation @ np.diag([3.0, -1.0, 1e-14, 2.0]) @ rotation.conj().T
+    _, signs = signed_inverse_square_root(singular, 1e-10)
+    assert int(np.count_nonzero(signs == 0.0)) == 1
 
 
 def test_fitted_integrals_conserve_momentum_and_follow_the_tensor() -> None:

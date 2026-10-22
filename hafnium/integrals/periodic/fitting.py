@@ -144,7 +144,9 @@ class PeriodicDensityFitting:
         """
         xp = array_namespace(self.metric)
         signs = xp.stack([sign for _, sign in self._halves(threshold)])
-        return xp.take(signs, self.transfer_index, axis=0)
+        n_kpt = self.kpoints.n_kpt
+        flat = xp.take(signs, xp.reshape(self.transfer_index, (-1,)), axis=0)
+        return xp.reshape(flat, (n_kpt, n_kpt, self.n_aux))
 
     def _halves(self, threshold: float) -> list[tuple[Array, Array]]:
         """Return the signed inverse square root of the metric at every transfer."""

@@ -57,7 +57,8 @@ has no one-dimensional form.
 - **The quadrature is composite Gauss–Legendre along the open directions,
   with a trapezoid rule in the polar angle of a chain.** The integrand of
   a line `q + G_∥ ≠ 0` has poles at `G_⊥ = ±i|q + G_∥|`, a Gaussian
-  `exp(−βG²)` from the kernel and the most diffuse functions, and the
+  `exp(−βG²)` from the kernel and two functions of the smallest exponent,
+  and the
   oscillation `exp(iG·Δ)` of the perpendicular separation `Δ` of two
   centres; sixteen nodes per panel integrate it to below 1e-15 of its size
   when the panel is no wider than the smallest `|q + G_∥|`, than
@@ -103,8 +104,9 @@ has no one-dimensional form.
   three-dimensional cell, a chain several tens of times more, since the
   perpendicular quadrature replaces one or two lattice directions by a
   few hundred or a few thousand nodes per line; the cost grows with `ω`
-  through the cutoff. The transforms run in batches within the memory
-  budget, as before.
+  through the cutoff and with the k-mesh through the panel width, which
+  follows the smallest `|q + G_∥|`. The transforms run in batches within
+  the memory budget, as before.
 - `RangeSeparation.reciprocal_vectors` and `long_range_kernel` are replaced
   by `reciprocal_sum`; `reciprocal_cutoff` takes the dimension of its
   bound; `integer_coordinates` returns three coordinates in every

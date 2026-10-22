@@ -56,9 +56,10 @@ class PerpendicularProfile:
     features of the integrand (ADR-0021): the oscillation ``exp(i G·Δ)`` of
     the largest perpendicular separation ``extent`` of two centres, the
     Gaussian ``exp(−G²/4α)`` of the most diffuse function, whose exponent
-    is ``smallest_exponent``, and the polynomial of ``degree`` in the
-    components that the transforms of Hermite Gaussians carry. A
-    three-dimensional cell has no open direction and ignores the profile.
+    is ``smallest_exponent`` (two such functions give the narrowest
+    product), and the polynomial of ``degree`` in the components that the
+    transforms of Hermite Gaussians carry. A three-dimensional cell has no
+    open direction and ignores the profile.
     """
 
     extent: float
@@ -229,7 +230,8 @@ class RangeSeparation:
         on_zero = lengths == 0.0
         finite = self.finite_part(lattice)
         if lattice.dimension == 3:
-            return ReciprocalSum(lines, xp.where(on_zero, finite, self._kernel(lines)))
+            at_zero = xp.full(lengths.shape, finite, dtype=xp.float64)
+            return ReciprocalSum(lines, xp.where(on_zero, at_zero, self._kernel(lines)))
         nodes, node_weights = self._perpendicular_rule(
             lattice, profile, cutoff, lengths
         )
@@ -268,7 +270,9 @@ class RangeSeparation:
         xp = array_namespace(line_lengths)
         nonzero = line_lengths[line_lengths > 0.0]
         pole = float(xp.min(nonzero)) if int(nonzero.shape[0]) else cutoff
-        gaussian = 1.0 / (4.0 * self.omega**2) + 3.0 / (8.0 * profile.smallest_exponent)
+        # The kernel's Gaussian and that of two functions of the smallest
+        # exponent, the narrowest product of transforms in G.
+        gaussian = 1.0 / (4.0 * self.omega**2) + 1.0 / (2.0 * profile.smallest_exponent)
         width = min(pole, _PANEL_GAUSSIAN_WIDTH / math.sqrt(gaussian), cutoff)
         if profile.extent > 0.0:
             width = min(width, _PANEL_OSCILLATION / profile.extent)

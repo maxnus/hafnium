@@ -8,7 +8,7 @@ over the nuclear images ``L`` that reach the basis functions, with the
 kernel's screening (ADR-0018). The long-range part is the plane-wave
 expansion of the periodic potential, ``(1/Ω) Σ_G ṽ(G) S(G) exp(iG·r)``
 with the structure factor ``S(G) = Σ_A −Z_A exp(−iG·A)`` and the kernel
-``ṽ`` of :meth:`RangeSeparation.long_range_kernel`, whose matrix elements
+``ṽ`` of :meth:`RangeSeparation.reciprocal_sum`, whose matrix elements
 are ``(1/Ω) Σ_G ṽ(G) S(−G) ρ̃_T(G)`` over the pair transforms
 ``ρ̃_T(G) = ∫ φ_u(r) φ_v(r − T) exp(−iG·r) dr`` of the engine; the ``G = 0``
 term carries the finite part of the kernel, which makes the matrices
