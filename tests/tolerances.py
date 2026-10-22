@@ -37,6 +37,10 @@ MO_ENERGY_TOL = 1e-7
 # Densities of the same state converged in different classes: first order in
 # the residual orbital error at the default gradient tolerance.
 CONVERGED_DENSITY_TOL = 1e-6
+# The residual of F C = S C ε at a converged result, with the Fock matrix
+# rebuilt from the density of the orbitals: first order in the residual
+# orbital error at the default gradient tolerance.
+FINAL_FOCK_RESIDUAL_TOL = 1e-6
 # Spin expectation values of converged states against PySCF: first order in
 # the residual orbital error, like the orbital energies.
 SPIN_TOL = 1e-7

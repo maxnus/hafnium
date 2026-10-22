@@ -46,6 +46,7 @@ nav:
       - adr/0017-probe-charge-exchange-correction.md
       - adr/0018-screened-lattice-sums-in-the-kernels.md
       - adr/0019-density-fitting-with-momentum-transfer.md
+      - adr/0020-k-point-hartree-fock-assembly.md
   - API reference: api.md
 
 markdown_extensions:

@@ -141,4 +141,12 @@ uses [Semantic Versioning](https://semver.org/).
   three-centre kernel `coulomb_three_center_bloch` with `BlochImages`,
   `CoulombKernel` and a screening threshold on every Coulomb kernel and
   the Schwarz bounds.
+- Periodic Hartree–Fock (M5, part three): k-point Coulomb and exchange
+  matrices from the fitted tensor with the exchange correction
+  (`KPointDensityFittedCoulombExchange`), `Hamiltonian.from_cell`,
+  `BlockMatrix.from_spatial`, occupations and spin expectation values
+  across k-points (per cell; the reference tests map to PySCF's supercell
+  convention), the k-point set on `SymmetrySpec` (`with_kpoints`), and
+  `hartree_fock` for cells; `canonical_orthogonalizer` per k-point in its
+  own module, built over the storage ring of the block (ADR-0020).
 
