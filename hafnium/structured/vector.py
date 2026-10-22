@@ -38,7 +38,12 @@ class BlockVector:
             check_k_count(self.structure, block, array)
 
     def materialized(self) -> tuple[Array, ...]:
-        """One array per block over the full k set, derived blocks included."""
+        """One array per spin block over the full k set, derived blocks included.
+
+        With irrep sectors the entries of a spin block run over its sectors
+        in order, matching the columns of ``to_dense(orbitals=True)`` of a
+        coefficient matrix.
+        """
         return materialize(self.structure, self.blocks, matrix=False)
 
     def to_dense(self) -> Array:

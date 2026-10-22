@@ -4,7 +4,14 @@ import pytest
 
 from hafnium.errors import InputError
 from hafnium.structured import BlockStructure, Ring
-from hafnium.symmetry import FUKUTOME_CLASSES, Field, SpinSymmetry, SymmetrySpec
+from hafnium.symmetry import (
+    FUKUTOME_CLASSES,
+    Field,
+    KPoints,
+    PointGroup,
+    SpinSymmetry,
+    SymmetrySpec,
+)
 
 
 def test_all_eight_classes_are_listed() -> None:
@@ -67,3 +74,17 @@ def test_electron_count_validation() -> None:
         SymmetrySpec.from_name("paired GHF").validate_electrons(2, 1)
     with pytest.raises(InputError, match="non-negative"):
         SymmetrySpec.from_name("UHF").validate_electrons(-1, 0)
+
+
+def test_point_groups_are_named_or_given() -> None:
+    spec = SymmetrySpec.from_name("UHF", point_group="c2v")
+    assert spec.point_group == PointGroup.named("C2v")
+    assert spec.with_point_group(PointGroup.named("Cs")).point_group is not None
+    assert spec.with_point_group(None).point_group is None
+    assert spec.with_point_group(None) == SymmetrySpec.from_name("UHF")
+    assert spec.with_kpoints(None) == spec
+    with pytest.raises(InputError, match="adaptation"):
+        spec.structure()
+    with pytest.raises(InputError, match="space group"):
+        SymmetrySpec(point_group=PointGroup.named("Cs"), kpoints=KPoints.gamma())
+    assert SymmetrySpec.from_name("TSW", point_group="D2h").point_group is not None

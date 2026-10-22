@@ -28,6 +28,7 @@ from hafnium.backend import (
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import AtomicSystem
+from hafnium.structured import IrrepSectors
 from hafnium.symmetry.detection import DEFAULT_SYMMETRY_TOLERANCE
 from hafnium.symmetry.point_group import PointGroup, solid_harmonic_parity
 
@@ -134,6 +135,23 @@ class SymmetryAdaptation:
     def labels(self) -> tuple[str, ...]:
         """Mulliken label of each irrep."""
         return self.group.labels
+
+    def irreps(self) -> IrrepSectors:
+        """Return the irrep sectors of the basis for the structured matrices.
+
+        One sector per irrep the basis spans, with its SALCs, in the order
+        of the group's irreps (ADR-0023); irreps without SALCs are left out.
+        """
+        spanned = [
+            (label, block)
+            for label, block in zip(self.labels, self.coefficients, strict=True)
+            if int(block.shape[1]) > 0
+        ]
+        return IrrepSectors(
+            self.group.name,
+            tuple(label for label, _ in spanned),
+            tuple(block for _, block in spanned),
+        )
 
     def transformation(self) -> Array:
         """Return all SALCs as one orthogonal matrix ``[ao, ao]``, irrep by irrep."""

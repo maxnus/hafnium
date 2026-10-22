@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias
 
@@ -23,6 +23,7 @@ from hafnium.structured.kramers import (
     is_kramers_symmetric,
     kramers_adapt_eigenvectors,
 )
+from hafnium.structured.sectors import IrrepSectors
 from hafnium.structured.structure import Block, BlockStructure, Ring, Spin
 from hafnium.structured.validation import (
     cast_to_ring,
@@ -52,7 +53,9 @@ class BlockMatrix:
     Spatial and collinear blocks have shape ``[n, m]``; spinor blocks have
     shape ``[2n, 2m]`` with alpha components first. With a k axis every
     block carries a leading axis over the k-points it stores,
-    ``[kpt, n, m]`` (ADR-0015). Real-ring blocks are float64, the others
+    ``[kpt, n, m]`` (ADR-0015). With irrep sectors the blocks of a sector
+    act on its SALCs, ``[salc, m]`` with as many rows as the sector has
+    functions (ADR-0023). Real-ring blocks are float64, the others
     complex128, except that a real block over k-points that are not all
     time-reversal invariant is complex128; the constructor rejects
     mismatches, so changing ring or structure is always an explicit
@@ -88,12 +91,29 @@ class BlockMatrix:
             ):
                 raise StructureError("spinor blocks have even dimensions")
             check_ring(xp, array, self.structure, block)
-        rows = {int(array.shape[-2]) for array in self.blocks}
-        if len(rows) > 1:
-            raise StructureError(
-                "all blocks act on the same basis, but row counts differ: "
-                f"{sorted(rows)}"
-            )
+        sectors = self.structure.irreps
+        for sector in range(self.structure.n_sectors):
+            arrays = self.blocks[self.structure.sector_slice(sector)]
+            rows = {int(array.shape[-2]) for array in arrays}
+            if len(rows) > 1:
+                where = (
+                    ""
+                    if sectors is None
+                    else f" of the {sectors.labels[sector]} sector"
+                )
+                raise StructureError(
+                    f"all blocks{where} act on the same basis, but row counts differ: "
+                    f"{sorted(rows)}"
+                )
+            if sectors is None:
+                continue
+            factor = 2 if self.structure.is_spinor else 1
+            expected = factor * sectors.dimensions[sector]
+            if rows != {expected}:
+                raise StructureError(
+                    f"the blocks of the {sectors.labels[sector]} sector act on its "
+                    f"{expected} functions, got {rows.pop()} rows"
+                )
 
     # ------------------------------------------------------------------ building
 
@@ -105,14 +125,18 @@ class BlockMatrix:
         *,
         xp: Namespace | None = None,
     ) -> BlockMatrix:
-        """All-zero matrix with spatial shape ``shape`` (doubled for spinor blocks)."""
+        """All-zero matrix with spatial shape ``shape`` (doubled for spinor blocks).
+
+        With irrep sectors the shape is that of a square operator over the
+        atomic basis, and each sector's blocks are square over its SALCs.
+        """
         xp = default_namespace() if xp is None else xp
         blocks: list[Array] = []
-        for block in structure.stored_blocks:
+        for block, (rows, columns) in zip(
+            structure.stored_blocks, _sector_shapes(structure, shape), strict=True
+        ):
             factor = 2 if block.spin is Spin.SPINOR else 1
-            block_shape = _batched(
-                structure, block, (factor * shape[0], factor * shape[1])
-            )
+            block_shape = _batched(structure, block, (factor * rows, factor * columns))
             blocks.append(
                 xp.zeros(
                     block_shape, dtype=dtype_for(xp, structure.storage_ring(block))
@@ -127,8 +151,10 @@ class BlockMatrix:
         """Identity matrix with ``n`` spatial basis functions, at every stored k."""
         xp = default_namespace() if xp is None else xp
         blocks: list[Array] = []
-        for block in structure.stored_blocks:
-            size = 2 * n if block.spin is Spin.SPINOR else n
+        for block, (rows, _) in zip(
+            structure.stored_blocks, _sector_shapes(structure, (n, n)), strict=True
+        ):
+            size = 2 * rows if block.spin is Spin.SPINOR else rows
             eye = xp.eye(size, dtype=dtype_for(xp, structure.storage_ring(block)))
             stored = structure.stored_kpoints(block)
             if stored is not None:
@@ -144,8 +170,9 @@ class BlockMatrix:
         *,
         ring: Ring = Ring.REAL,
         tolerance: float = 1e-10,
+        irreps: IrrepSectors | None = None,
     ) -> BlockMatrix:
-        """Build a spatial operator from its matrix, ``[n, m]`` or ``[kpt, n, m]``.
+        """Build a spatial operator from its matrix, ``[n, n]`` or ``[kpt, n, n]``.
 
         With ``k_axis`` the matrix runs over the full k set. The structure
         is :meth:`BlockStructure.spatial` over ``ring`` with the axis. A
@@ -154,7 +181,11 @@ class BlockMatrix:
         ``tolerance``, relative to the largest entry, which makes it real at
         the time-reversal invariant points; the overlap, the core
         Hamiltonian and the Coulomb matrix of a time-reversal symmetric
-        density have that property.
+        density have that property. With ``irreps`` the matrix is projected
+        onto the sectors (ADR-0023): the blocks ``U_Γᵀ X U_Γ`` are kept and
+        the couplings between irreps dropped, which vanish for an operator
+        that commutes with the group and are bounded by the tolerance of
+        the symmetry adaptation otherwise.
 
         Raises
         ------
@@ -191,7 +222,52 @@ class BlockMatrix:
                 "the matrix is not time-reversal symmetric, so it is not a real "
                 "spatial operator; use the complex ring",
             )
-        return cls(structure, (cast_to_ring(xp, kept, structure.storage_ring(block)),))
+        storage = structure.storage_ring(block)
+        if irreps is None:
+            return cls(structure, (cast_to_ring(xp, kept, storage),))
+        return cls(
+            structure.with_irreps(irreps),
+            tuple(
+                cast_to_ring(xp, part, storage)
+                for part in irreps.from_atomic(kept, spinor=False)
+            ),
+        )
+
+    @classmethod
+    def from_sectors(
+        cls, structure: BlockStructure, parts: Sequence[BlockMatrix]
+    ) -> BlockMatrix:
+        """Assemble a matrix over the irrep sectors of ``structure`` from its sectors.
+
+        ``parts`` holds one matrix per sector in the structure's
+        :attr:`~BlockStructure.sector_structure`; see :meth:`sectors`.
+        """
+        if len(parts) != structure.n_sectors:
+            raise StructureError(
+                f"the {structure.describe()} structure has {structure.n_sectors} "
+                f"sectors, got {len(parts)} matrices"
+            )
+        base = structure.sector_structure
+        blocks: list[Array] = []
+        for part in parts:
+            if part.structure != base:
+                raise StructureError(
+                    f"a sector of the {structure.describe()} structure has the "
+                    f"{base.describe()} structure, got {part.structure.describe()}"
+                )
+            blocks.extend(part.blocks)
+        return cls(structure, tuple(blocks))
+
+    def sectors(self) -> tuple[BlockMatrix, ...]:
+        """Return the matrix of every irrep sector, in the sector structure.
+
+        A matrix without sectors is its own single sector.
+        """
+        base = self.structure.sector_structure
+        return tuple(
+            BlockMatrix(base, self.blocks[self.structure.sector_slice(sector)])
+            for sector in range(self.structure.n_sectors)
+        )
 
     def map_blocks(self, function: Callable[[Array], Array]) -> BlockMatrix:
         """Apply ``function`` to every stored block."""
@@ -206,8 +282,12 @@ class BlockMatrix:
 
     @property
     def n_spatial(self) -> int:
-        """Number of spatial basis functions in the row space."""
-        rows = int(self.blocks[0].shape[-2])
+        """Number of spatial basis functions in the row space, over all sectors."""
+        size = self.structure.sector_structure.n_stored
+        rows = sum(
+            int(self.blocks[sector * size].shape[-2])
+            for sector in range(self.structure.n_sectors)
+        )
         return rows // 2 if self.structure.is_spinor else rows
 
     # ------------------------------------------------------------------ algebra
@@ -295,22 +375,34 @@ class BlockMatrix:
 
     # ------------------------------------------------------------------ dense form
 
-    def materialized(self) -> tuple[Array, ...]:
-        """One array per block over the full k set, derived blocks included."""
-        return dense.materialize(self.structure, self.blocks)
+    def materialized(self, *, orbitals: bool = False) -> tuple[Array, ...]:
+        """One array per spin block over the full k set, derived blocks included.
 
-    def spin_blocks(self) -> tuple[Array, ...]:
-        """``(alpha, beta)`` blocks, or the single spinor block, over the full k set."""
-        return dense.spin_blocks(self.structure, self.blocks)
+        With irrep sectors the arrays are in the atomic basis (ADR-0023):
+        ``orbitals`` marks orbital coefficients, whose rows alone are
+        transformed; square blocks are otherwise taken as operators and
+        transformed on both sides.
+        """
+        return dense.materialize(self.structure, self.blocks, orbitals=orbitals)
+
+    def spin_blocks(self, *, orbitals: bool = False) -> tuple[Array, ...]:
+        """``(alpha, beta)`` blocks, or the single spinor block, over the full k set.
+
+        See :meth:`materialized` for ``orbitals``.
+        """
+        return dense.spin_blocks(self.structure, self.blocks, orbitals=orbitals)
 
     @property
     def column_split(self) -> tuple[int, int] | None:
         """Column counts of the alpha and beta blocks; ``None`` for spinor matrices."""
         return dense.column_split(self.structure, self.blocks)
 
-    def to_dense(self) -> Array:
-        """Expand into the spin-orbital form ``[(kpt,) 2n, m_alpha + m_beta]``."""
-        return dense.to_dense(self.structure, self.blocks)
+    def to_dense(self, *, orbitals: bool = False) -> Array:
+        """Expand into the spin-orbital form ``[(kpt,) 2n, m_alpha + m_beta]``.
+
+        See :meth:`materialized` for ``orbitals``.
+        """
+        return dense.to_dense(self.structure, self.blocks, orbitals=orbitals)
 
     @classmethod
     def from_dense(
@@ -350,8 +442,11 @@ class BlockMatrix:
     def embed(self, target: BlockStructure) -> BlockMatrix:
         """Re-express the matrix in a less symmetric structure, losslessly.
 
-        Pairs within the Fukutome hierarchy are converted block by block.
-        Other pairs go through the dense representation and are verified.
+        Pairs within the Fukutome hierarchy with the same irrep sectors are
+        converted block by block. Other pairs go through the dense
+        representation and are verified; across different sectors this
+        serves square operators only, since the dense form cannot assign
+        the columns of orbital coefficients to sectors.
 
         Raises
         ------
@@ -365,16 +460,30 @@ class BlockMatrix:
             return BlockMatrix(
                 target, embedding.embed_blocks(self.structure, self.blocks, target)
             )
+        self._require_operator_across_sectors(target)
         return BlockMatrix.from_dense(
             target, self.to_dense(), column_split=self.column_split, check=True
         )
 
     def project(self, target: BlockStructure) -> BlockMatrix:
-        """Project the matrix onto a more symmetric structure by averaging."""
+        """Project the matrix onto a more symmetric structure by averaging.
+
+        Across different irrep sectors this serves square operators only.
+        """
         self._require_same_k_axis(target)
+        self._require_operator_across_sectors(target)
         return BlockMatrix.from_dense(
             target, self.to_dense(), column_split=self.column_split, check=False
         )
+
+    def _require_operator_across_sectors(self, target: BlockStructure) -> None:
+        if target.irreps == self.structure.irreps:
+            return
+        if any(block.shape[-2] != block.shape[-1] for block in self.blocks):
+            raise StructureError(
+                "orbital coefficients do not change irrep sectors by embedding or "
+                "projection; to_dense(orbitals=True) gives them in the atomic basis"
+            )
 
     def _require_same_k_axis(self, target: BlockStructure) -> None:
         if target.k_axis != self.structure.k_axis:
@@ -391,11 +500,14 @@ class BlockMatrix:
         spin trace of a paired structure is real by its symmetry.
         """
         structure = self.structure
-        ring = (
-            Ring.COMPLEX
-            if any(block.ring is Ring.COMPLEX for block in structure.stored_blocks)
-            else Ring.REAL
-        )
+        if structure.irreps is not None:
+            target = BlockStructure.spatial(
+                Ring.COMPLEX if structure.is_complex else Ring.REAL
+            ).with_irreps(structure.irreps)
+            return BlockMatrix.from_sectors(
+                target, [sector.spin_trace() for sector in self.sectors()]
+            )
+        ring = Ring.COMPLEX if structure.is_complex else Ring.REAL
         target = BlockStructure.spatial(ring).with_k_axis(structure.k_axis)
         (block,) = target.stored_blocks
         parts = dense.spin_blocks_at(
@@ -453,6 +565,24 @@ def _batched(
     """Prepend the stored k count of ``block`` to ``shape`` when there is a k axis."""
     stored = structure.stored_kpoints(block)
     return shape if stored is None else (len(stored), *shape)
+
+
+def _sector_shapes(
+    structure: BlockStructure, shape: tuple[int, int]
+) -> tuple[tuple[int, int], ...]:
+    """Spatial shape of every stored block for a matrix of spatial ``shape``."""
+    sectors = structure.irreps
+    size = structure.sector_structure.n_stored
+    if sectors is None:
+        return (shape,) * size
+    if shape != (sectors.n_functions, sectors.n_functions):
+        raise StructureError(
+            "a matrix over irrep sectors is built as a square operator over the "
+            f"{sectors.n_functions} functions of the basis, got shape {list(shape)}"
+        )
+    return tuple(
+        (dimension, dimension) for dimension in sectors.dimensions for _ in range(size)
+    )
 
 
 def _kramers_adaptation(

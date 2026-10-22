@@ -1,9 +1,18 @@
 """Validation of block structures."""
 
+import numpy as np
 import pytest
 
 from hafnium.errors import StructureError
-from hafnium.structured import Block, BlockStructure, Partner, Ring, Spin
+from hafnium.structured import (
+    Block,
+    BlockStructure,
+    IrrepSectors,
+    KAxis,
+    Partner,
+    Ring,
+    Spin,
+)
 
 
 def test_constructors_describe_themselves() -> None:
@@ -80,3 +89,95 @@ def test_invalid_structures_are_rejected() -> None:
                 Block(Spin.BETA, Ring.COMPLEX, derived_from=0, partner=Partner.COPY),
             )
         )
+
+
+def sectors(dimensions: tuple[int, ...]) -> IrrepSectors:
+    """Irrep sectors of a basis split into blocks of ``dimensions`` functions."""
+    n = sum(dimensions)
+    eye = np.eye(n)
+    start = 0
+    blocks: list[np.ndarray] = []
+    for dimension in dimensions:
+        blocks.append(eye[:, start : start + dimension])
+        start += dimension
+    return IrrepSectors("C2v", ("A1", "B1", "B2")[: len(dimensions)], tuple(blocks))
+
+
+def test_irrep_sectors_repeat_the_spin_pattern() -> None:
+    pattern = BlockStructure.restricted()
+    structure = pattern.with_irreps(sectors((3, 1, 2)))
+    assert structure.n_sectors == 3
+    assert structure.sector_structure == pattern
+    assert structure.with_irreps(None) == pattern
+    assert structure.describe() == "restricted (real) in C2v"
+    assert [block.irrep for block in structure.blocks] == [0, 0, 1, 1, 2, 2]
+    assert [block.derived_from for block in structure.blocks] == [
+        None,
+        0,
+        None,
+        2,
+        None,
+        4,
+    ]
+    assert structure.irrep_labels == ("A1", "B1", "B2")
+    assert structure.sector_slice(1) == slice(1, 2)
+    assert BlockStructure.unrestricted().with_irreps(sectors((2, 2))).sector_slice(
+        1
+    ) == slice(2, 4)
+    assert structure.with_ring(Ring.COMPLEX) == BlockStructure.restricted(
+        Ring.COMPLEX
+    ).with_irreps(sectors((3, 1, 2)))
+    assert pattern.irrep_labels == (None,)
+    assert pattern.n_sectors == 1
+    assert pattern.sector_slice(0) == slice(0, 1)
+
+
+def test_irrep_sectors_compare_by_value() -> None:
+    assert sectors((2, 1)) == sectors((2, 1))
+    assert hash(sectors((2, 1))) == hash(sectors((2, 1)))
+    assert sectors((2, 1)) != sectors((1, 2))
+    assert BlockStructure.restricted().with_irreps(
+        sectors((2, 1))
+    ) == BlockStructure.restricted().with_irreps(sectors((2, 1)))
+    with pytest.raises(StructureError, match="orthogonal"):
+        IrrepSectors("Cs", ("A'", "A''"), (np.ones((2, 1)), np.ones((2, 1))))
+    with pytest.raises(StructureError, match="at least one column"):
+        IrrepSectors("Cs", ("A'", "A''"), (np.eye(2), np.zeros((2, 0))))
+    with pytest.raises(StructureError, match="every spanned irrep"):
+        IrrepSectors("Cs", ("A'",), (np.eye(3)[:, :2],))
+    with pytest.raises(StructureError, match="distinct"):
+        IrrepSectors("Cs", ("A'", "A'"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]))
+    with pytest.raises(StructureError, match="labelled"):
+        sectors((2, 1)).index("A2")
+
+
+def test_irrep_sectors_are_validated() -> None:
+    two = sectors((2, 1))
+    with pytest.raises(StructureError, match="only in a structure with irrep"):
+        BlockStructure((Block(Spin.NONE, Ring.REAL, irrep=0),))
+    with pytest.raises(StructureError, match="molecular"):
+        BlockStructure.restricted().with_k_axis(KAxis.gamma()).with_irreps(two)
+    with pytest.raises(StructureError, match="do not repeat"):
+        BlockStructure((Block(Spin.NONE, Ring.REAL, irrep=0),), irreps=two)
+    with pytest.raises(StructureError, match="irrep index"):
+        BlockStructure(
+            (
+                Block(Spin.NONE, Ring.REAL, irrep=0),
+                Block(Spin.NONE, Ring.REAL, irrep=0),
+            ),
+            irreps=two,
+        )
+    with pytest.raises(StructureError, match="does not repeat the spin pattern"):
+        BlockStructure(
+            (
+                Block(Spin.ALPHA, Ring.REAL, irrep=0),
+                Block(
+                    Spin.BETA, Ring.REAL, derived_from=0, partner=Partner.COPY, irrep=0
+                ),
+                Block(Spin.ALPHA, Ring.REAL, irrep=1),
+                Block(Spin.BETA, Ring.REAL, irrep=1),
+            ),
+            irreps=two,
+        )
+    with pytest.raises(StructureError, match="non-negative"):
+        Block(Spin.NONE, Ring.REAL, irrep=-1)

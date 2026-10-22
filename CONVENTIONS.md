@@ -178,6 +178,18 @@ Spin never appears as an explicit index in method code; it is part of the
   two. A molecule is oriented into the standard frame explicitly
   (`PointGroupDetection.orient`); the frame rules follow PySCF so that
   labels agree, and symmetric results refer to that frame.
+- Irrep sectors (ADR-0023): a `BlockStructure` with `irreps` repeats
+  its spin pattern once per irrep the basis spans, in the group's order,
+  each block acting on the SALCs of its irrep, `[salc, mo]`; sectors and
+  a k axis are exclusive. The dense form of a matrix over sectors is in
+  the atomic basis, operators transformed on both sides and orbital
+  coefficients on the rows (`to_dense(orbitals=True)`), with the entries
+  of a spin block running over its sectors in order. One-electron
+  matrices and the Coulomb and exchange matrices enter the sectors by
+  projection, which drops couplings bounded by the symmetry tolerance.
+  Electrons fixed per irrep follow PySCF's `irrep_nelec`: a total is
+  split equally by restricted and paired classes and with the odd
+  electron in alpha by unrestricted ones.
 - Periodic systems (ADR-0007): `Lattice.vectors[i]` is the i-th
   translation vector, shape `[d, 3]` in Bohr with `d` in {1, 2, 3} and no
   vacuum padding of open directions. Reciprocal vectors obey

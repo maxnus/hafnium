@@ -1,6 +1,7 @@
 """Point groups, frames and orbital irreps against PySCF."""
 
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -8,7 +9,14 @@ import pytest
 from hafnium.basis import BasisSet
 from hafnium.integrals import overlap
 from hafnium.molecule import Molecule
-from hafnium.scf import hartree_fock
+from hafnium.scf import (
+    AufbauOccupation,
+    ExactCoulombExchange,
+    Hamiltonian,
+    atomic_density_guess,
+    hartree_fock,
+    solve_scf,
+)
 from hafnium.symmetry import (
     DEFAULT_DEGENERACY_TOLERANCE,
     SymmetryAdaptation,
@@ -19,7 +27,7 @@ from hafnium.symmetry import (
 from tests import molecules
 from tests.hamiltonians import ENGINE
 from tests.shell_tables import LIBRARY
-from tests.tolerances import ENERGY_TOL, GEOMETRY_TOL
+from tests.tolerances import ENERGY_TOL, GEOMETRY_TOL, MO_ENERGY_TOL, SPIN_TOL
 from tests.unit.test_point_group_detection import moved
 
 # PySCF keeps the linear groups and the full rotation group; their
@@ -99,3 +107,84 @@ def test_point_groups_and_orbital_irreps_match_pyscf(
         # arbitrary, so the sets are compared as multisets.
         for start, end in degenerate_sets(energies, DEFAULT_DEGENERACY_TOLERANCE):
             assert sorted(ours[start:end]) == sorted(labels[start:end])
+
+
+# (molecule, class, electrons fixed per irrep, basis): the blocked SCF of
+# ADR-0023 against PySCF's symmetry-adapted classes, including configurations
+# fixed per irrep (PySCF's ``irrep_nelec``) and the generalized class.
+SCF_CASES: list[tuple[Callable[[], Molecule], str, dict[str, Any] | None, str]] = [
+    (molecules.water, "rhf", None, "def2-svp"),
+    (molecules.water, "rhf", {"A1": 4, "B2": 4}, "sto-3g"),
+    (molecules.water_cation, "uhf", None, "def2-svp"),
+    (molecules.water_cation, "uhf", {"B2": (1, 0)}, "sto-3g"),
+    (molecules.water_cation, "ghf", None, "sto-3g"),
+    (molecules.methane, "rhf", None, "sto-3g"),
+    (molecules.ammonia, "rhf", None, "sto-3g"),
+    (molecules.benzene, "rhf", None, "sto-3g"),
+    (molecules.ethylene, "rhf", None, "sto-3g"),
+    (molecules.diazene, "rhf", None, "sto-3g"),
+    (molecules.nitrogen, "rhf", None, "sto-3g"),
+]
+
+
+@pytest.mark.reference
+@pytest.mark.parametrize(("build", "kind", "irrep_nelec", "basis_name"), SCF_CASES)
+def test_blocked_scf_matches_pyscf(
+    build: Callable[[], Molecule],
+    kind: str,
+    irrep_nelec: dict[str, Any] | None,
+    basis_name: str,
+) -> None:
+    from tests.reference.pyscf_oracle import symmetric_scf_reference
+
+    detection = detect_point_group(build())
+    molecule = detection.orient(build())
+    basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+    expected = symmetric_scf_reference(
+        molecule,
+        basis,
+        kind,
+        subgroup=PYSCF_SUBGROUP.get(detection.full_group),
+        irrep_nelec=irrep_nelec,
+    )
+    assert expected["group"] == detection.group.name
+    spec = SymmetrySpec.from_name(kind, point_group=detection.group)
+    if irrep_nelec is None:
+        result = hartree_fock(ENGINE, basis, molecule, symmetry=spec)
+    else:
+        two_body = ExactCoulombExchange.from_molecule(ENGINE, basis, molecule)
+        hamiltonian = Hamiltonian.from_molecule(
+            ENGINE, basis, molecule, two_body, point_group=detection.group
+        )
+        result = solve_scf(
+            hamiltonian,
+            spec,
+            occupation=AufbauOccupation(molecule.n_alpha, molecule.n_beta, irrep_nelec),
+            guess=atomic_density_guess(ENGINE, basis, hamiltonian.structure(spec)),
+        )
+    assert result.energy == pytest.approx(expected["energy"], abs=ENERGY_TOL)
+    assert result.spin.square == pytest.approx(expected["spin_square"], abs=SPIN_TOL)
+    assert result.electrons_per_irrep() == expected["electrons"]
+    structure = result.structure
+    base = structure.sector_structure
+    for index, (energies, labels) in enumerate(expected["spins"]):
+        ours: list[tuple[float, str]] = []
+        for sector in range(structure.n_sectors):
+            position = sector * base.n_stored + index
+            ours.extend(
+                (float(energy), str(structure.irrep_labels[position]))
+                for energy in result.mo_energies.blocks[position]
+            )
+        ours.sort()
+        # PySCF lists the occupied orbitals first, so both are sorted by energy.
+        theirs = sorted(zip((float(e) for e in energies), labels, strict=True))
+        sorted_energies = np.asarray([energy for energy, _ in ours])
+        np.testing.assert_allclose(
+            sorted_energies, [energy for energy, _ in theirs], atol=MO_ENERGY_TOL
+        )
+        for start, end in degenerate_sets(
+            sorted_energies, DEFAULT_DEGENERACY_TOLERANCE
+        ):
+            assert sorted(label for _, label in ours[start:end]) == sorted(
+                label for _, label in theirs[start:end]
+            )

@@ -968,9 +968,16 @@ the standard frame of the Abelian subgroup following PySCF's frame
 rules, orientation as an explicit step, the signed-permutation
 representation on the basis with SALCs, irrep blocks, orbital labels and
 the symmetrization of degenerate sets; full groups, frames, SALC counts
-and labels match PySCF for twenty molecules. Part two adds the irrep
-sectors to `BlockStructure`, the blocked SCF and per-irrep occupations;
-part three the space groups.
+and labels match PySCF for twenty molecules. Part two done 2026-10-22
+(ADR-0023): the irrep sectors multiply the spin pattern of
+`BlockStructure`, the dense form stays in the atomic basis, the SCF is
+blocked over the sectors with the two-electron terms built in the atomic
+basis and the one-electron matrices projected onto the sectors,
+occupations are shared over the sectors of a spin block or fixed per
+irrep, and `SymmetrySpec.point_group` asks for it; all eight classes
+reproduce the unconstrained results for symmetric molecules, and
+energies, orbital energies, labels and electrons per irrep match PySCF's
+symmetry-adapted classes. Part three adds the space groups.
 
 **M7 DFT.** Grids and basis-on-grid in Rust, libxc binding, RKS and UKS
 with LDA/GGA/meta-GGA/hybrid/range-separated functionals, then periodic
