@@ -149,4 +149,17 @@ uses [Semantic Versioning](https://semver.org/).
   convention), the k-point set on `SymmetrySpec` (`with_kpoints`), and
   `hartree_fock` for cells; `canonical_orthogonalizer` per k-point in its
   own module, built over the storage ring of the block (ADR-0020).
+- Periodic Hartree–Fock (M5, part four): the reciprocal-space kernels of
+  slabs and chains by quadrature over the perpendicular components of the
+  three-dimensional transform with the finite part of ADR-0012 on the
+  `G_∥ = 0` line, `RangeSeparation.reciprocal_sum` with `ReciprocalSum`
+  and `PerpendicularProfile` replacing `reciprocal_vectors` and
+  `long_range_kernel`, `Lattice.perpendicular_vectors`, the dimension of
+  the bound on `reciprocal_cutoff`, three lattice coordinates in every
+  dimension from `integer_coordinates`; the fitting metric signed along
+  the charge of the auxiliary functions (`signed_inverse_square_root`,
+  `PeriodicDensityFitting.signature`, the `signature` of
+  `KPointDensityFittedCoulombExchange`); the nuclear attraction, the
+  density fitting and the Hartree–Fock classes of cells in one to three
+  dimensions, with a slab KRHF reference against PySCF (ADR-0021).
 

@@ -19,7 +19,7 @@ from hafnium.scf import (
     solve_scf,
 )
 from hafnium.symmetry import KPoints, SymmetrySpec
-from tests.cells import box, helium
+from tests.cells import box, helium, helium_slab
 from tests.tolerances import ENERGY_TOL, MO_ENERGY_TOL, SPIN_TOL
 
 LIBRARY = BasisLibrary(offline=True)
@@ -43,19 +43,23 @@ def helium_hydride_box() -> Cell:
 CELLS = {
     "helium_triclinic": lambda: helium(3),
     "helium_hydride_box": helium_hydride_box,
+    "helium_slab": helium_slab,
 }
 MESHES = {
     "helium_triclinic": KPoints.mesh((3, 1, 1)),
     "helium_hydride_box": KPoints.mesh((2, 2, 2)),
+    "helium_slab": KPoints.mesh((2, 2)),
 }
-# (cell, basis, kind): the closed shell in the restricted class, the doublet
-# in the unrestricted and generalized classes.
+# (cell, basis, kind): the closed shells in the restricted class, the doublet
+# in the unrestricted and generalized classes; the slab exercises the
+# reduced-dimension kernels (ADR-0021) against PySCF's two-dimensional ones.
 CASES = [
     ("helium_triclinic", "cc-pvdz", "krhf"),
     ("helium_hydride_box", "cc-pvdz", "kuhf"),
     ("helium_hydride_box", "cc-pvdz", "kghf"),
+    ("helium_slab", "cc-pvdz", "krhf"),
 ]
-STORED_CASES = CASES[:2]
+STORED_CASES = [case for case in CASES if case[2] != "kghf"]
 # Converged to the gradient tolerance of the reference, so that the orbital
 # energies, first order in the residual orbital error, compare at MO_ENERGY_TOL.
 OPTIONS = ScfOptions(gradient_tolerance=1e-8)

@@ -79,3 +79,14 @@ ILL_CONDITIONED_FITTING_TOL = 1e-4
 # Below this ratio of the smallest to the largest metric eigenvalue the
 # auxiliary basis counts as near-linearly dependent.
 METRIC_CONDITION_LIMIT = 1e-10
+# A slab against a three-dimensional box with vacuum L along its normal:
+# after the Madelung term the nuclear attractions differ by the background's
+# −(2π/(AL)) Σ_A Z_A <μ|(z − z_A)²|ν> up to terms exponentially small in L,
+# so the residual times L agrees between boxes of 20 and 40 Bohr.
+LARGE_VACUUM_SLAB_TOL = 1e-9
+# A chain against a box with vacuum L × L: after the Madelung term the
+# residual is the background's (π/(aL²)) Σ_A Z_A <(r − A)_⊥²> plus a quartic
+# term, so it falls off with the inverse square of L; the ratio between
+# boxes of 40 and 20 Bohr is 1/4 with room for the quartic term.
+LARGE_VACUUM_RESIDUAL_TOL = 0.05
+LARGE_VACUUM_RATIO_WINDOW = (0.24, 0.26)

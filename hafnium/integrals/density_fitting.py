@@ -127,3 +127,28 @@ def inverse_square_root(metric: Array, threshold: float) -> Array:
     safe = xp.where(keep, eigenvalues, xp.ones_like(eigenvalues))
     inverse_root = xp.where(keep, 1.0 / xp.sqrt(safe), xp.zeros_like(eigenvalues))
     return (eigenvectors * inverse_root) @ adjoint(eigenvectors)
+
+
+def signed_inverse_square_root(metric: Array, threshold: float) -> tuple[Array, Array]:
+    """``|Λ|^{-1/2} U†`` and the signs of a Hermitian indefinite ``metric``.
+
+    With ``M = U Λ U†`` the fitted tensor ``B = |Λ|^{-1/2} U† b`` satisfies
+    ``b† M^{-1} b = Σ_P s_P B_P† B_P`` for the signs ``s_P`` of the
+    eigenvalues, so an indefinite metric fits like a positive one once the
+    signs ride along (ADR-0021). Eigenvalues of magnitude below
+    ``threshold`` times the largest are dropped as in
+    :func:`inverse_square_root`, their rows of the result and their signs
+    set to zero. Returns the half ``[aux, aux]`` in the eigenbasis and the
+    signature ``[aux]`` of ``+1``, ``−1`` and ``0``.
+    """
+    xp = array_namespace(metric)
+    eigenvalues, eigenvectors = eigh(metric)
+    magnitudes = xp.abs(eigenvalues)
+    keep = magnitudes > threshold * xp.max(magnitudes)
+    dropped = int(metric.shape[0]) - int(xp.sum(keep))
+    if dropped:
+        logger.info("density fitting dropped %d near-null metric eigenvalues", dropped)
+    safe = xp.where(keep, magnitudes, xp.ones_like(magnitudes))
+    inverse_root = xp.where(keep, 1.0 / xp.sqrt(safe), xp.zeros_like(magnitudes))
+    signature = xp.where(keep, xp.sign(eigenvalues), xp.zeros_like(eigenvalues))
+    return xp.expand_dims(inverse_root, 1) * adjoint(eigenvectors), signature

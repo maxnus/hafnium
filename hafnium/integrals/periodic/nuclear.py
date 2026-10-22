@@ -8,12 +8,15 @@ over the nuclear images ``L`` that reach the basis functions, with the
 kernel's screening (ADR-0018). The long-range part is the plane-wave
 expansion of the periodic potential, ``(1/Ω) Σ_G ṽ(G) S(G) exp(iG·r)``
 with the structure factor ``S(G) = Σ_A −Z_A exp(−iG·A)`` and the kernel
-``ṽ`` of :meth:`RangeSeparation.long_range_kernel`, whose matrix elements
+``ṽ`` of :meth:`RangeSeparation.reciprocal_sum`, whose matrix elements
 are ``(1/Ω) Σ_G ṽ(G) S(−G) ρ̃_T(G)`` over the pair transforms
 ``ρ̃_T(G) = ∫ φ_u(r) φ_v(r − T) exp(−iG·r) dr`` of the engine; the ``G = 0``
 term carries the finite part of the kernel, which makes the matrices
-independent of ``omega`` on their own. The matrices at ``k`` are Bloch
-sums over the ket images ``T`` of :func:`lattice_images`.
+independent of ``omega`` on their own. For a slab or a chain the sum over
+``G`` runs over the vectors and weights of
+:meth:`RangeSeparation.reciprocal_sum`, the quadrature over the open
+directions of ADR-0021. The matrices at ``k`` are Bloch sums over the ket
+images ``T`` of :func:`lattice_images`.
 """
 
 from __future__ import annotations
@@ -30,8 +33,8 @@ from hafnium.integrals.periodic.bloch import (
     require_kpoints_for_lattice,
 )
 from hafnium.integrals.periodic.coulomb import (
+    PerpendicularProfile,
     RangeSeparation,
-    require_three_dimensions,
 )
 from hafnium.integrals.shell_table import ShellTable
 from hafnium.molecule import Cell
@@ -105,7 +108,6 @@ def nuclear_attraction_images(
     The real arrays whose Bloch sum :func:`nuclear_attraction_k` returns,
     for the ket ``translations`` ``[image, 3]`` in Bohr.
     """
-    require_three_dimensions(cell.lattice)
     table = ShellTable.from_basis(basis, cell)
     # Every element of a Bloch sum collects one term per image, so each
     # image's sum is converged to the precision divided by their number.
@@ -114,7 +116,14 @@ def nuclear_attraction_images(
     )
     return _short_range_images(
         engine, table, basis, cell, translations, per_image
-    ) + _long_range_images(engine, table, cell, translations, per_image)
+    ) + _long_range_images(
+        engine,
+        table,
+        cell,
+        translations,
+        per_image,
+        PerpendicularProfile.from_functions(cell, basis),
+    )
 
 
 def _short_range_images(
@@ -164,11 +173,12 @@ def _long_range_images(
     cell: Cell,
     translations: Array,
     separation: RangeSeparation,
+    profile: PerpendicularProfile,
 ) -> Array:
     """Return ``(1/Ω) Σ_G ṽ(G) S(−G) ρ̃_T(G)`` as a real array ``[image, ao, ao]``.
 
-    The reciprocal vectors reach the cutoff for the nuclear charge against
-    a pair transform of magnitude at most one. The transforms are evaluated
+    The reciprocal sum reaches the cutoff for the nuclear charge against a
+    pair transform of magnitude at most one. The transforms are evaluated
     in batches of images within a memory budget and contracted with the
     weights ``ṽ(G) S(−G) / Ω``; the pairs screened in the engine are those
     bounded below the precision divided by the sum of the weights'
@@ -180,14 +190,14 @@ def _long_range_images(
     positions = cell.positions_array(xp)
     charges = xp.asarray(cell.nuclear_charges, dtype=xp.float64)
     n_images = int(translations.shape[0])
-    g_vectors = separation.reciprocal_vectors(
-        lattice, charge_product=float(xp.sum(charges))
+    total = separation.reciprocal_sum(
+        lattice, profile, charge_product=float(xp.sum(charges))
     )
-    kernel = separation.long_range_kernel(lattice, g_vectors)
+    g_vectors = total.vectors
     angles = g_vectors @ xp.linalg.matrix_transpose(positions)
     phases = xp.exp(1j * xp.astype(angles, xp.complex128))
     structure = phases @ xp.astype(-charges, xp.complex128)
-    weights = xp.astype(kernel, xp.complex128) * structure / lattice.volume
+    weights = xp.astype(total.weights, xp.complex128) * structure / lattice.volume
     threshold = separation.precision / max(float(xp.sum(xp.abs(weights))), 1.0)
     n_ao = table.n_functions
     per_image = int(g_vectors.shape[0]) * n_ao * n_ao * 16

@@ -3,11 +3,15 @@
 The pair density ``conj(φ_u^{k1}) φ_v^{k2}`` of two Bloch functions has
 the character of the momentum transfer ``q = k2 − k1`` and is fitted in
 the Bloch sums ``χ_P^q`` of the auxiliary functions with the Coulomb
-metric, so that ``(u k1 v k2 | w k3 x k4) ≈ Σ_P B[k1, k2, P, u, v]
+metric, so that ``(u k1 v k2 | w k3 x k4) ≈ Σ_P s_P B[k1, k2, P, u, v]
 conj(B[k4, k3, P, x, w])`` for ``k3 − k4 = q`` (chemists' notation with the
 first function of each pair conjugated, CONVENTIONS.md §3) and
-``B = (M^q)^{-1/2} b`` with the metric ``M^q = (P^q | Q^q)`` and the
-three-centre integrals ``b[k1, k2] = (P^q | u k1 v k2)``.
+``B = |Λ^q|^{-1/2} (U^q)† b`` in the eigenbasis ``M^q = U^q Λ^q (U^q)†`` of
+the metric ``M^q = (P^q | Q^q)``, with the three-centre integrals
+``b[k1, k2] = (P^q | u k1 v k2)`` and the signs ``s_P`` of the eigenvalues.
+The signs matter for a slab or a chain, whose metric at ``q = 0`` has one
+negative eigenvalue along the charge of the auxiliary functions
+(ADR-0021); in three dimensions every sign is positive.
 
 Both are lattice sums split by the range separation of
 :class:`~hafnium.integrals.periodic.RangeSeparation`. The short-range
@@ -17,7 +21,10 @@ three-centre integrals as the sum over the image pairs of the orbital
 functions with the auxiliary function in the home cell. The long-range
 parts are reciprocal-space sums over ``q + G`` of the kernel of ADR-0012
 with the Fourier transforms of the auxiliary functions and of the Bloch
-pair densities, the finite part at ``q + G = 0`` included.
+pair densities, the finite part at ``q + G = 0`` included; for a slab or a
+chain they run over the vectors and weights of
+:meth:`RangeSeparation.reciprocal_sum`, the quadrature over the open
+directions of ADR-0021.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.integrals.density_fitting import (
     DEFAULT_METRIC_THRESHOLD,
-    inverse_square_root,
+    signed_inverse_square_root,
 )
 from hafnium.integrals.engine import BlochImages, CoulombKernel, IntegralEngine
 from hafnium.integrals.periodic.bloch import (
@@ -42,8 +49,9 @@ from hafnium.integrals.periodic.bloch import (
     require_kpoints_for_lattice,
 )
 from hafnium.integrals.periodic.coulomb import (
+    PerpendicularProfile,
     RangeSeparation,
-    require_three_dimensions,
+    ReciprocalSum,
 )
 from hafnium.integrals.shell_table import ShellTable
 from hafnium.molecule import Cell
@@ -108,16 +116,15 @@ class PeriodicDensityFitting:
     def df_tensor(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
         """``df_tensor[kpt, kpt, aux, ao, ao]`` with the metric absorbed.
 
-        ``(M^q)^{-1/2} b[k1, k2]`` for the transfer ``q`` of each pair; metric
-        eigenvalues below ``threshold`` times the largest are dropped, see
-        :func:`hafnium.integrals.density_fitting.inverse_square_root`.
+        ``|Λ^q|^{-1/2} (U^q)† b[k1, k2]`` for the transfer ``q`` of each pair,
+        in the eigenbasis of the metric; eigenvalues of magnitude below
+        ``threshold`` times the largest are dropped, see
+        :func:`hafnium.integrals.density_fitting.signed_inverse_square_root`.
+        Contractions carry the :meth:`signature` of the same threshold.
         """
         xp = array_namespace(self.metric)
         n_kpt, n_aux = self.kpoints.n_kpt, self.n_aux
-        halves = [
-            inverse_square_root(self.metric[q], threshold)
-            for q in range(self.transfers.n_kpt)
-        ]
+        halves = [half for half, _ in self._halves(threshold)]
         rows: list[Array] = []
         for k1 in range(n_kpt):
             fitted: list[Array] = []
@@ -127,6 +134,26 @@ class PeriodicDensityFitting:
                 fitted.append(xp.reshape(half @ flat, self.three_center.shape[2:]))
             rows.append(xp.stack(fitted))
         return xp.stack(rows)
+
+    def signature(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
+        """Signs ``[kpt, kpt, aux]`` of the metric eigenvalues behind :meth:`df_tensor`.
+
+        ``+1``, ``−1`` or ``0`` for a dropped eigenvalue, at the transfer of
+        every pair of k-points; a fitted integral is
+        ``Σ_P signature[k1, k2, P] B[k1, k2, P] conj(B[k4, k3, P])``.
+        """
+        xp = array_namespace(self.metric)
+        signs = xp.stack([sign for _, sign in self._halves(threshold)])
+        n_kpt = self.kpoints.n_kpt
+        flat = xp.take(signs, xp.reshape(self.transfer_index, (-1,)), axis=0)
+        return xp.reshape(flat, (n_kpt, n_kpt, self.n_aux))
+
+    def _halves(self, threshold: float) -> list[tuple[Array, Array]]:
+        """Return the signed inverse square root of the metric at every transfer."""
+        return [
+            signed_inverse_square_root(self.metric[q], threshold)
+            for q in range(self.transfers.n_kpt)
+        ]
 
     def eri(
         self,
@@ -147,7 +174,7 @@ class PeriodicDensityFitting:
                 "k2 − k1 must equal k3 − k4"
             )
         xp = array_namespace(self.metric)
-        half = inverse_square_root(
+        half, signs = signed_inverse_square_root(
             self.metric[int(self.transfer_index[k1, k2])], threshold
         )
         n_aux = self.n_aux
@@ -159,7 +186,9 @@ class PeriodicDensityFitting:
             half @ xp.reshape(self.three_center[k4, k3], (n_aux, -1)),
             (n_aux, self.n_ao, self.n_ao),
         )
-        return xp.einsum("Puv,Pxw->uvwx", first, xp.conj(second))
+        return xp.einsum(
+            "P,Puv,Pxw->uvwx", xp.astype(signs, xp.complex128), first, xp.conj(second)
+        )
 
 
 def density_fitting_k(
@@ -176,7 +205,6 @@ def density_fitting_k(
     of the lattice sums; by default :meth:`RangeSeparation.for_lattice` of
     the cell's lattice.
     """
-    require_three_dimensions(cell.lattice)
     require_kpoints_for_lattice(kpoints, cell.lattice)
     if separation is None:
         separation = RangeSeparation.for_lattice(cell.lattice)
@@ -217,10 +245,11 @@ class _Builder:
         )
         total = bloch_sum(short, images, self.transfers, lattice)
         charge = max(function_absolute_integral(shell) for shell in auxiliary.shells)
+        profile = PerpendicularProfile.from_functions(self.cell, auxiliary)
         rows: list[Array] = []
         for q in range(self.transfers.n_kpt):
-            vectors = self._vectors(q, charge * charge)
-            weights, transform = self._auxiliary_weights(fitting, vectors)
+            reciprocal = self._reciprocal_sum(q, charge * charge, profile)
+            weights, transform = self._auxiliary_weights(fitting, reciprocal)
             rows.append(total[q] + weights @ transform)
         return xp.stack(rows)
 
@@ -268,6 +297,7 @@ class _Builder:
             threshold=per_pair,
         )
         charge = max(function_absolute_integral(shell) for shell in auxiliary.shells)
+        profile = PerpendicularProfile.from_functions(self.cell, basis, auxiliary)
         n_images = int(pair_images.shape[0])
         pair_angles = xp.astype(
             kpts @ xp.linalg.matrix_transpose(pair_images), xp.complex128
@@ -278,13 +308,13 @@ class _Builder:
             for k1 in range(self.kpoints.n_kpt)
         ]
         for q in range(self.transfers.n_kpt):
-            vectors = self._vectors(q, charge)
-            weights, _ = self._auxiliary_weights(fitting, vectors)
+            reciprocal = self._reciprocal_sum(q, charge, profile)
+            weights, _ = self._auxiliary_weights(fitting, reciprocal)
             summed = self._pair_transforms(
                 orbital,
                 pair_images,
                 pair_phases,
-                vectors,
+                reciprocal.vectors,
                 precision / (n_images * self._weight_norm(weights)),
             )
             for k2 in range(self.kpoints.n_kpt):
@@ -294,31 +324,30 @@ class _Builder:
                 )
         return xp.stack([xp.stack(row) for row in parts])
 
-    def _vectors(self, q: int, charge_product: float) -> Array:
-        """Return the vectors ``q + G`` of the long-range sum at transfer ``q``."""
+    def _reciprocal_sum(
+        self, q: int, charge_product: float, profile: PerpendicularProfile
+    ) -> ReciprocalSum:
+        """Return the vectors ``q + G`` and weights of the sum at transfer ``q``."""
         xp = default_namespace()
         lattice = self.cell.lattice
         q_cartesian = xp.asarray(self.transfers.cartesian(lattice))[q]
-        reciprocal = self.separation.reciprocal_vectors(
-            lattice,
-            charge_product=charge_product,
-            margin=float(xp.linalg.vector_norm(q_cartesian)),
+        return self.separation.reciprocal_sum(
+            lattice, profile, charge_product=charge_product, transfer=q_cartesian
         )
-        return reciprocal + q_cartesian
 
     def _auxiliary_weights(
-        self, fitting: ShellTable, vectors: Array
+        self, fitting: ShellTable, reciprocal: ReciprocalSum
     ) -> tuple[Array, Array]:
         """Return the weights ``ṽ(q+G) conj(χ̂_P(q+G)) / Ω`` ``[aux, G]`` and ``χ̂``.
 
-        The transform ``χ̂_Q(q+G)`` comes as ``[G, aux]``.
+        The transform ``χ̂_Q(q+G)`` comes as ``[G, aux]``; the kernel carries
+        the quadrature weights of the open directions.
         """
-        xp = array_namespace(vectors)
-        kernel = self.separation.long_range_kernel(self.cell.lattice, vectors)
-        transform = self.engine.fourier_transform(fitting, vectors)
+        xp = array_namespace(reciprocal.vectors)
+        transform = self.engine.fourier_transform(fitting, reciprocal.vectors)
         weights = (
             xp.linalg.matrix_transpose(xp.conj(transform))
-            * xp.astype(kernel, xp.complex128)
+            * xp.astype(reciprocal.weights, xp.complex128)
             / self.cell.lattice.volume
         )
         return weights, transform

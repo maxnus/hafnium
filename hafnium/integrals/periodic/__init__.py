@@ -4,9 +4,9 @@ The image lists and the real-space cutoffs are chosen here, in Python,
 from the Gaussian tails of the basis at a precision, and the integrals
 over the images run in the compiled layer with the screening of ADR-0018
 (ADR-0016). The range separation of the Coulomb kernel and its
-reciprocal-space part serve the nuclear attraction and, in the rest of M5,
-the density fitting; the probe-charge correction of the exchange
-divergence is ADR-0017.
+reciprocal-space part serve the nuclear attraction and the density
+fitting, in one to three dimensions (ADR-0021); the probe-charge
+correction of the exchange divergence is ADR-0017.
 """
 
 from hafnium.integrals.periodic.bloch import (
@@ -21,7 +21,11 @@ from hafnium.integrals.periodic.bloch import (
     overlap_k,
     reaching_images,
 )
-from hafnium.integrals.periodic.coulomb import RangeSeparation
+from hafnium.integrals.periodic.coulomb import (
+    PerpendicularProfile,
+    RangeSeparation,
+    ReciprocalSum,
+)
 from hafnium.integrals.periodic.exchange import madelung_constant
 from hafnium.integrals.periodic.fitting import (
     PeriodicDensityFitting,
@@ -36,7 +40,9 @@ from hafnium.integrals.periodic.nuclear import (
 __all__ = [
     "DEFAULT_LATTICE_SUM_PRECISION",
     "PeriodicDensityFitting",
+    "PerpendicularProfile",
     "RangeSeparation",
+    "ReciprocalSum",
     "atom_radii",
     "bloch_sum",
     "core_hamiltonian_k",

@@ -1,7 +1,5 @@
 """Periodic nuclear attraction: large box, band folding, range separation."""
 
-import math
-
 import numpy as np
 import pytest
 
@@ -23,7 +21,13 @@ from hafnium.integrals.periodic import (
     nuclear_attraction_images,
     reaching_images,
 )
-from hafnium.molecule import AtomicSystem, Cell, Lattice, default_omega
+from hafnium.molecule import (
+    AtomicSystem,
+    Cell,
+    Lattice,
+    default_omega,
+    ewald_energy,
+)
 from hafnium.symmetry import KPoints
 from tests.cells import CUBIC, box, helium
 from tests.molecules import water
@@ -32,6 +36,9 @@ from tests.tolerances import (
     INTEGRAL_TOL,
     LARGE_BOX_RATIO_WINDOW,
     LARGE_BOX_RESIDUAL_TOL,
+    LARGE_VACUUM_RATIO_WINDOW,
+    LARGE_VACUUM_RESIDUAL_TOL,
+    LARGE_VACUUM_SLAB_TOL,
     LATTICE_SUM_LOOSE_PRECISION,
     LATTICE_SUM_LOOSE_TOL,
     SPECTRUM_TOL,
@@ -40,6 +47,17 @@ from tests.unit.test_ewald import POINT_CHARGE_CUBIC
 
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
+# Meshes with partner points off the time-reversal invariant momenta, by dimension.
+MESHES = {
+    3: KPoints.mesh((3, 2, 1)),
+    2: KPoints.mesh((3, 2)),
+    1: KPoints.mesh((3,)),
+}
+SHIFTED_MESHES = {
+    3: KPoints.mesh((2, 2, 2), shift=(0.5, 0.5, 0.5)),
+    2: KPoints.mesh((2, 2), shift=(0.5, 0.5)),
+    1: KPoints.mesh((2,), shift=(0.5,)),
+}
 
 
 def basis_for(system: AtomicSystem, name: str) -> BasisSet:
@@ -96,10 +114,11 @@ def test_supercell_at_one_point_folds_the_primitive_bands(
     np.testing.assert_allclose(folded, primitive, atol=SPECTRUM_TOL)
 
 
-def test_matrix_is_independent_of_the_range_separation() -> None:
-    cell = helium(3)
+@pytest.mark.parametrize("dimension", [3, 2, 1])
+def test_matrix_is_independent_of_the_range_separation(dimension: int) -> None:
+    cell = helium(dimension)
     basis = basis_for(cell, "cc-pvdz")
-    mesh = KPoints.mesh((2, 2, 2), shift=(0.5, 0.5, 0.5))
+    mesh = SHIFTED_MESHES[dimension]
     reference = nuclear_attraction_k(ENGINE, basis, cell, mesh)
     omega = default_omega(cell.lattice)
     for factor in (0.5, 2.0):
@@ -107,10 +126,63 @@ def test_matrix_is_independent_of_the_range_separation() -> None:
         np.testing.assert_allclose(other, reference, atol=INTEGRAL_TOL)
 
 
-def test_matrices_are_hermitian_and_time_reversal_conjugates_them() -> None:
-    cell = helium(3)
+def vacuum_box(cell: Cell, length: float) -> Cell:
+    """``cell`` with vectors of ``length`` Bohr added along its open directions."""
+    vectors = cell.lattice.vectors + tuple(
+        (length * direction[0], length * direction[1], length * direction[2])
+        for direction in cell.lattice.perpendicular_vectors
+    )
+    return Cell(
+        cell.atoms, charge=cell.charge, spin=cell.spin, lattice=Lattice(vectors)
+    )
+
+
+def madelung(lattice: Lattice) -> float:
+    return -2.0 * ewald_energy(lattice, np.ones(1), np.zeros((1, 3)))
+
+
+@pytest.mark.parametrize("dimension", [2, 1])
+def test_reduced_dimension_kernels_match_a_box_with_growing_vacuum(
+    dimension: int,
+) -> None:
+    # A box with vacuum L along the open directions adds to the potential of
+    # every nucleus its images and a background. Against the slab or the
+    # chain the difference is the Madelung constants' difference plus the
+    # background's quadratic term, (2π/(AL)) (z − z_A)² for a slab and
+    # (π/(aL²)) |r_⊥ − A_⊥|² for a chain, up to terms exponentially small in
+    # L for the slab and of order 1/L⁴ for the chain.
+    cell = helium(dimension)
     basis = basis_for(cell, "cc-pvdz")
-    mesh = KPoints.mesh((3, 2, 1))
+    gamma = KPoints.gamma(dimension)
+    reduced = np.real(nuclear_attraction_k(ENGINE, basis, cell, gamma)[0])
+    s = np.real(overlap_k(ENGINE, basis, cell, gamma)[0])
+    charge = sum(cell.nuclear_charges)
+    residuals: list[np.ndarray] = []
+    for length in (20.0, 40.0):
+        padded = vacuum_box(cell, length)
+        v = nuclear_attraction_k(
+            ENGINE, basis_for(padded, "cc-pvdz"), padded, KPoints.gamma()
+        )
+        constant = charge * (madelung(padded.lattice) - madelung(cell.lattice))
+        residuals.append(np.real(v[0]) - reduced - constant * s)
+    if dimension == 2:
+        np.testing.assert_allclose(
+            20.0 * residuals[0], 40.0 * residuals[1], atol=LARGE_VACUUM_SLAB_TOL
+        )
+    else:
+        assert np.max(np.abs(residuals[1])) < LARGE_VACUUM_RESIDUAL_TOL
+        index = np.argmax(np.abs(residuals[0]))
+        low, high = LARGE_VACUUM_RATIO_WINDOW
+        assert low < residuals[1].flat[index] / residuals[0].flat[index] < high
+
+
+@pytest.mark.parametrize("dimension", [3, 2, 1])
+def test_matrices_are_hermitian_and_time_reversal_conjugates_them(
+    dimension: int,
+) -> None:
+    cell = helium(dimension)
+    basis = basis_for(cell, "cc-pvdz")
+    mesh = MESHES[dimension]
     invariant = mesh.is_time_reversal_invariant
     partners = np.asarray(mesh.time_reversal_partners())
     v = nuclear_attraction_k(ENGINE, basis, cell, mesh)
@@ -159,25 +231,12 @@ def test_core_hamiltonian_is_the_kinetic_plus_the_attraction() -> None:
     )
 
 
-def test_range_separation_kernels_and_cutoffs() -> None:
+def test_short_range_radius_and_reaching_images() -> None:
     separation = RangeSeparation.for_lattice(CUBIC, precision=1e-10)
     assert separation.omega == pytest.approx(default_omega(CUBIC))
     radius = separation.short_range_radius
-    assert math.erfc(separation.omega * radius) <= 1e-10
-    assert math.erfc(separation.omega * 0.8 * radius) > 1e-10
-    g_vectors = separation.reciprocal_vectors(CUBIC, charge_product=4.0)
-    np.testing.assert_array_equal(g_vectors[0], 0.0)
-    lengths = np.linalg.norm(g_vectors, axis=1)
-    assert np.all(np.diff(lengths) >= -INTEGRAL_TOL)
-    more = separation.reciprocal_vectors(CUBIC, charge_product=4e6)
-    assert more.shape[0] > g_vectors.shape[0]
-    kernel = separation.long_range_kernel(CUBIC, g_vectors)
-    assert kernel[0] == pytest.approx(-math.pi / separation.omega**2)
-    g_squared = lengths[1:] ** 2
-    expected = (
-        4.0 * math.pi * np.exp(-g_squared / (4.0 * separation.omega**2)) / g_squared
-    )
-    np.testing.assert_allclose(kernel[1:], expected, atol=INTEGRAL_TOL)
+    assert np.exp(-((separation.omega * radius) ** 2)) <= 1e-10
+    assert np.exp(-((separation.omega * 0.8 * radius) ** 2)) > 1e-10
     # The real-space sum sees every nucleus the pair densities reach.
     positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
     images = reaching_images(CUBIC, positions[:1], (2.0,), positions[1:], (1.5,))
@@ -190,19 +249,11 @@ def test_inputs_are_validated() -> None:
     cell = helium(3)
     basis = basis_for(cell, "cc-pvdz")
     gamma = KPoints.gamma()
-    with pytest.raises(InputError, match="not implemented yet"):
-        nuclear_attraction_k(
-            ENGINE, basis_for(helium(2), "sto-3g"), helium(2), KPoints.gamma(2)
-        )
     with pytest.raises(InputError, match="omega is positive"):
         nuclear_attraction_k(ENGINE, basis, cell, gamma, omega=-1.0)
     with pytest.raises(InputError, match="precision"):
         core_hamiltonian_k(ENGINE, basis, cell, gamma, precision=0.0)
     with pytest.raises(InputError, match="do not fit"):
         nuclear_attraction_k(ENGINE, basis, cell, KPoints.gamma(2))
-    with pytest.raises(InputError, match="not implemented yet"):
-        RangeSeparation.for_lattice(Lattice(((3.0, 0.0, 0.0),))).long_range_kernel(
-            Lattice(((3.0, 0.0, 0.0),)), np.zeros((1, 3))
-        )
     with pytest.raises(InputError, match="one radius each"):
         reaching_images(CUBIC, np.zeros((1, 3)), (1.0, 2.0), np.zeros((1, 3)), (1.0,))

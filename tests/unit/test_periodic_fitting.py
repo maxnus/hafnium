@@ -16,6 +16,7 @@ from hafnium.integrals import (
     density_fitting_k,
     overlap,
 )
+from hafnium.integrals.density_fitting import signed_inverse_square_root
 from hafnium.integrals.periodic import (
     RangeSeparation,
     function_absolute_integral,
@@ -37,6 +38,10 @@ from tests.unit.test_ewald import POINT_CHARGE_CUBIC
 LIBRARY = BasisLibrary(offline=True)
 ENGINE = RustEngine()
 AUXILIARY = "def2-universal-jkfit"
+# One helium atom in three dimensions, two in a slab and a chain, with meshes
+# whose transfers include Γ and one more point.
+CELLS = {3: helium_atom, 2: lambda: helium(2), 1: lambda: helium(1)}
+MESHES = {3: KPoints.mesh((2, 2, 1)), 2: KPoints.mesh((2, 1)), 1: KPoints.mesh((2,))}
 
 
 def basis_for(system: AtomicSystem, name: str) -> BasisSet:
@@ -84,9 +89,10 @@ def test_metric_and_tensor_are_hermitian_and_the_metric_is_positive() -> None:
     np.testing.assert_allclose(np.imag(gamma.three_center), 0.0, atol=INTEGRAL_TOL)
 
 
-def test_integrals_are_independent_of_the_range_separation() -> None:
-    cell = helium_atom()
-    mesh = KPoints.mesh((2, 2, 1))
+@pytest.mark.parametrize("dimension", [3, 2, 1])
+def test_integrals_are_independent_of_the_range_separation(dimension: int) -> None:
+    cell = CELLS[dimension]()
+    mesh = MESHES[dimension]
     reference = fitting_for(cell, "cc-pvdz", mesh)
     omega = default_omega(cell.lattice)
     for factor in (0.5, 2.0):
@@ -149,17 +155,72 @@ def test_large_box_at_gamma_approaches_the_molecular_fitting() -> None:
         assert low < far / near < high
 
 
+@pytest.mark.parametrize("dimension", [3, 2, 1])
+def test_metric_is_signed_along_the_charge_at_zero_transfer(dimension: int) -> None:
+    # The kernels of a slab and a chain give charged distributions an
+    # unbounded self-energy (ADR-0021): the metric at q = 0 has one negative
+    # eigenvalue, along the charge of the auxiliary functions, and is
+    # positive on neutral combinations and at every other transfer.
+    cell = CELLS[dimension]()
+    mesh = MESHES[dimension]
+    fit = fitting_for(cell, "cc-pvdz", mesh)
+    signature = np.asarray(fit.signature())
+    assert signature.shape == (mesh.n_kpt, mesh.n_kpt, fit.n_aux)
+    assert np.all(signature != 0.0)
+    gamma = next(
+        q for q, point in enumerate(fit.transfers.fractional) if not any(point)
+    )
+    for k1 in range(mesh.n_kpt):
+        for k2 in range(mesh.n_kpt):
+            negative = int(np.count_nonzero(signature[k1, k2] < 0.0))
+            at_gamma = int(fit.transfer_index[k1, k2]) == gamma
+            assert negative == (1 if at_gamma and dimension < 3 else 0)
+    charges = np.real(
+        ENGINE.fourier_transform(
+            ShellTable.from_basis(basis_for(cell, AUXILIARY), cell), np.zeros((1, 3))
+        )[0]
+    )
+    neutral = np.eye(fit.n_aux) - np.outer(charges, charges) / np.dot(charges, charges)
+    projected = np.linalg.eigvalsh(neutral @ fit.metric[gamma] @ neutral)
+    assert np.sum(projected < -INTEGRAL_TOL) == 0
+
+
+def test_signed_inverse_square_root_inverts_an_indefinite_metric() -> None:
+    generator = np.random.default_rng(7)
+    rotation, _ = np.linalg.qr(
+        generator.normal(size=(4, 4)) + 1j * generator.normal(size=(4, 4))
+    )
+    metric = rotation @ np.diag([3.0, -1.0, 0.5, 2.0]) @ rotation.conj().T
+    vectors = generator.normal(size=(4, 6)) + 1j * generator.normal(size=(4, 6))
+    half, signs = signed_inverse_square_root(metric, 1e-12)
+    np.testing.assert_array_equal(np.sort(signs), [-1.0, 1.0, 1.0, 1.0])
+    fitted = half @ vectors
+    np.testing.assert_allclose(
+        fitted.conj().T @ (signs[:, None] * fitted),
+        vectors.conj().T @ np.linalg.inv(metric) @ vectors,
+        atol=INTEGRAL_TOL,
+    )
+    # A near-null eigenvalue is dropped with its sign.
+    singular = rotation @ np.diag([3.0, -1.0, 1e-14, 2.0]) @ rotation.conj().T
+    _, signs = signed_inverse_square_root(singular, 1e-10)
+    assert int(np.count_nonzero(signs == 0.0)) == 1
+
+
 def test_fitted_integrals_conserve_momentum_and_follow_the_tensor() -> None:
     cell = helium_atom()
     mesh = KPoints.mesh((2, 1, 2))
     fit = fitting_for(cell, "cc-pvdz", mesh)
     tensor = fit.df_tensor()
+    signature = fit.signature()
     assert tensor.shape == fit.three_center.shape
+    np.testing.assert_array_equal(signature, 1.0)
     quadruple = (1, 3, 2, 0)
     k1, k2, k3, k4 = quadruple
     assert int(fit.transfer_index[k1, k2]) == int(fit.transfer_index[k4, k3])
     eri = fit.eri(quadruple)
-    expected = np.einsum("Puv,Pxw->uvwx", tensor[k1, k2], np.conj(tensor[k4, k3]))
+    expected = np.einsum(
+        "P,Puv,Pxw->uvwx", signature[k1, k2], tensor[k1, k2], np.conj(tensor[k4, k3])
+    )
     np.testing.assert_allclose(eri, expected, atol=INTEGRAL_TOL)
     # (u k1 v k2 | w k3 x k4) = conj((v k2 u k1 | x k4 w k3)).
     swapped = fit.eri((k2, k1, k4, k3))
@@ -237,9 +298,6 @@ def test_absolute_integral_bounds_the_transform() -> None:
 
 
 def test_inputs_are_validated() -> None:
-    cell = helium(2)
-    with pytest.raises(InputError, match="not implemented yet"):
-        fitting_for(cell, "sto-3g", KPoints.gamma(2))
     cell = helium_atom()
     with pytest.raises(InputError, match="do not fit"):
         fitting_for(cell, "sto-3g", KPoints.gamma(2))

@@ -27,3 +27,4 @@ ADR that supersedes it.
 | [0018](0018-screened-lattice-sums-in-the-kernels.md) | Screened lattice sums in the kernels and the regularized nuclear attraction | accepted 2026-10-22 |
 | [0019](0019-density-fitting-with-momentum-transfer.md) | Density fitting with momentum transfer | accepted 2026-10-22 |
 | [0020](0020-k-point-hartree-fock-assembly.md) | k-point Hartree–Fock through the structured matrices | accepted 2026-10-22 |
+| [0021](0021-reduced-dimension-kernels-by-quadrature.md) | Reduced-dimension reciprocal-space kernels by quadrature | accepted 2026-10-22 |

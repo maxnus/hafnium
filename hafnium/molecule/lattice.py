@@ -117,6 +117,28 @@ class Lattice:
         """The reciprocal lattice, so that its translations are the ``G`` vectors."""
         return Lattice(self.reciprocal_vectors)
 
+    @property
+    def perpendicular_vectors(self) -> tuple[Vector, ...]:
+        """Orthonormal vectors spanning the open directions, ``3 − d`` of them.
+
+        The unit normal of a slab; for a chain two unit vectors orthogonal to
+        its axis and to each other; none for a three-dimensional lattice.
+        """
+        if len(self.vectors) == 3:
+            return ()
+        if len(self.vectors) == 2:
+            normal = _cross(self.vectors[0], self.vectors[1])
+            return (_scaled(normal, 1.0 / math.sqrt(_dot(normal, normal))),)
+        (a,) = self.vectors
+        axis = _scaled(a, 1.0 / math.sqrt(_dot(a, a)))
+        # The coordinate axis least aligned with the chain gives a first
+        # perpendicular direction that is never degenerate.
+        least = min(range(3), key=lambda k: abs(axis[k]))
+        trial = tuple(1.0 if k == least else 0.0 for k in range(3))
+        first = _cross(axis, (trial[0], trial[1], trial[2]))
+        first = _scaled(first, 1.0 / math.sqrt(_dot(first, first)))
+        return (first, _cross(axis, first))
+
     def vectors_array(self, xp: Namespace | None = None) -> Array:
         """Return the translation vectors as an array ``[d, 3]`` in Bohr."""
         xp = default_namespace() if xp is None else xp
@@ -126,6 +148,14 @@ class Lattice:
         """Return the reciprocal vectors as an array ``[d, 3]`` in inverse Bohr."""
         xp = default_namespace() if xp is None else xp
         return xp.asarray(self.reciprocal_vectors, dtype=xp.float64)
+
+    def perpendicular_vectors_array(self, xp: Namespace | None = None) -> Array:
+        """Return :attr:`perpendicular_vectors` as an array ``[3 − d, 3]``."""
+        xp = default_namespace() if xp is None else xp
+        return xp.reshape(
+            xp.asarray(self.perpendicular_vectors, dtype=xp.float64),
+            (3 - self.dimension, 3),
+        )
 
     def fractional_coordinates(self, positions: Array) -> Array:
         """Coordinates ``[n, d]`` of ``positions`` ``[n, 3]`` in the lattice basis.

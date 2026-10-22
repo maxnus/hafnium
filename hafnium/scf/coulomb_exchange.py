@@ -177,10 +177,11 @@ class KPointDensityFittedCoulombExchange:
     """Contractions with the fitted tensor over k-points and the exchange correction.
 
     With ``B = df_tensor[k1, k2]`` of momentum transfer ``k2 − k1``
-    (ADR-0019) and the weights ``w`` of the k-points,
-    ``J(k) = Σ_P B[k, k, P] Σ_k' w_k' ⟨B[k', k', P], D(k')⟩`` with the
+    (ADR-0019), its signs ``s = signature[k1, k2]`` (ADR-0021) and the
+    weights ``w`` of the k-points,
+    ``J(k) = Σ_P s_P B[k, k, P] Σ_k' w_k' ⟨B[k', k', P], D(k')⟩`` with the
     Frobenius inner product ``⟨A, D⟩ = Σ_xw conj(A[x, w]) D[x, w]``, and
-    ``K(k) = Σ_k' w_k' Σ_P B[k, k', P] D(k') B[k, k', P]† + ξ S(k) D(k) S(k)``,
+    ``K(k) = Σ_k' w_k' Σ_P s_P B[k, k', P] D(k') B[k, k', P]† + ξ S(k) D(k) S(k)``,
     the last term the probe-charge correction of the exchange divergence
     with the Madelung constant ``ξ`` (ADR-0017).
 
@@ -189,6 +190,9 @@ class KPointDensityFittedCoulombExchange:
     df_tensor : Array[kpt, kpt, aux, ao, ao]
         The fitted tensor of
         :meth:`hafnium.integrals.PeriodicDensityFitting.df_tensor`.
+    signature : Array[kpt, kpt, aux]
+        The signs of the metric eigenvalues behind it,
+        :meth:`hafnium.integrals.PeriodicDensityFitting.signature`.
     weights : Array[kpt]
         The k-point weights, summing to one.
     overlap : Array[kpt, ao, ao]
@@ -198,6 +202,7 @@ class KPointDensityFittedCoulombExchange:
     """
 
     df_tensor: Array
+    signature: Array
     weights: Array
     overlap: Array
     madelung: float
@@ -208,6 +213,8 @@ class KPointDensityFittedCoulombExchange:
         n_ao = shape[3] if self.df_tensor.ndim == 5 else -1
         if self.df_tensor.ndim != 5 or shape[1] != n_kpt or shape[4] != n_ao:
             raise InputError("the fitted tensor has shape [kpt, kpt, aux, ao, ao]")
+        if self.signature.shape != shape[:3]:
+            raise InputError("the signature has shape [kpt, kpt, aux]")
         if self.weights.shape != (n_kpt,) or self.overlap.shape != (n_kpt, n_ao, n_ao):
             raise InputError("weights have shape [kpt] and the overlap [kpt, ao, ao]")
 
@@ -239,7 +246,11 @@ class KPointDensityFittedCoulombExchange:
         """Build from a periodic fitting, the overlaps and the Madelung constant."""
         xp = array_namespace(overlap)
         return cls(
-            fitting.df_tensor(), fitting.kpoints.weights_array(xp), overlap, madelung
+            fitting.df_tensor(),
+            fitting.signature(),
+            fitting.kpoints.weights_array(xp),
+            overlap,
+            madelung,
         )
 
     @property
@@ -261,17 +272,20 @@ class KPointDensityFittedCoulombExchange:
         """``J(k)`` for the total ``density[kpt, ao, ao]`` over the full k set."""
         xp = array_namespace(self.df_tensor, density)
         diagonal = xp.stack([self.df_tensor[k, k] for k in range(self.n_kpt)])
+        signs = xp.stack([self.signature[k, k] for k in range(self.n_kpt)])
         inner = xp.sum(
             xp.conj(diagonal) * xp.expand_dims(density, axis=1), axis=(-2, -1)
         )
         charges = xp.sum(inner * xp.expand_dims(self.weights, axis=1), axis=0)
-        return xp.sum(diagonal * charges[None, :, None, None], axis=1)
+        signed = xp.astype(signs, xp.complex128) * charges[None, :]
+        return xp.sum(diagonal * signed[:, :, None, None], axis=1)
 
     def exchange(self, density: Array) -> Array:
         """``K(k)`` for one spin block ``density[kpt, ao, ao]`` over the full k set."""
         xp = array_namespace(self.df_tensor, density)
         half = self.df_tensor @ density[None, :, None, :, :]
-        product = xp.sum(half @ adjoint(self.df_tensor), axis=2)
+        signed = half * xp.astype(self.signature, xp.complex128)[..., None, None]
+        product = xp.sum(signed @ adjoint(self.df_tensor), axis=2)
         weighted = xp.sum(product * self.weights[None, :, None, None], axis=1)
         return weighted + self.madelung * (self.overlap @ density @ self.overlap)
 

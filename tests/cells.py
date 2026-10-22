@@ -31,6 +31,17 @@ def helium(dimension: int) -> Cell:
     return Cell.from_molecule(molecule, Lattice(GENERAL_VECTORS[:dimension]))
 
 
+def helium_slab() -> Cell:
+    """Two helium atoms, one above the layer, on an oblique lattice in the ``xy`` plane.
+
+    PySCF's two-dimensional Coulomb terms assume that orientation.
+    """
+    molecule = Molecule.from_atoms(
+        [("He", (0.0, 0.0, 0.0)), ("He", (1.9, 2.1, 1.2))], unit="bohr"
+    )
+    return Cell.from_molecule(molecule, Lattice(((4.0, 0.3, 0.0), (-0.2, 4.2, 0.0))))
+
+
 def box(molecule: Molecule, length: float, dimension: int = 3) -> Cell:
     """``molecule`` repeated on an orthogonal lattice of side ``length`` in Bohr."""
     vectors = tuple(tuple(row) for row in (length * np.eye(3))[:dimension].tolist())

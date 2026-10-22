@@ -168,15 +168,18 @@ def reaching_images(
 
 
 def integer_coordinates(lattice: Lattice, translations: Array) -> Array:
-    """Return the integer lattice coordinates ``[image, d]`` of ``translations``.
+    """Return the integer lattice coordinates ``[image, 3]`` of ``translations``.
 
     The translations ``[image, 3]`` in Bohr are lattice vectors; their
     fractional coordinates are rounded to the nearest integers, which label
-    the images for the pair lookup of the compiled layer (ADR-0019).
+    the images for the pair lookup of the compiled layer (ADR-0019). The
+    open directions of a slab or a chain carry zeros.
     """
     xp = array_namespace(translations)
     fractional = lattice.fractional_coordinates(translations)
-    return xp.astype(xp.floor(fractional + 0.5), xp.int64)
+    coordinates = xp.astype(xp.floor(fractional + 0.5), xp.int64)
+    padding = xp.zeros((coordinates.shape[0], 3 - lattice.dimension), dtype=xp.int64)
+    return xp.concat([coordinates, padding], axis=1)
 
 
 def require_kpoints_for_lattice(kpoints: KPoints, lattice: Lattice) -> None:

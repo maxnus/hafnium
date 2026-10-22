@@ -32,6 +32,22 @@ def test_reciprocal_vectors_are_dual_to_the_lattice(name: str) -> None:
     np.testing.assert_allclose(again.vectors_array(), a, atol=STRUCTURE_TOL)
 
 
+@pytest.mark.parametrize("name", sorted(LATTICES))
+def test_perpendicular_vectors_complete_the_lattice(name: str) -> None:
+    lattice = LATTICES[name]
+    perpendicular = lattice.perpendicular_vectors_array()
+    assert perpendicular.shape == (3 - lattice.dimension, 3)
+    assert len(lattice.perpendicular_vectors) == 3 - lattice.dimension
+    np.testing.assert_allclose(
+        perpendicular @ perpendicular.T,
+        np.eye(3 - lattice.dimension),
+        atol=STRUCTURE_TOL,
+    )
+    np.testing.assert_allclose(
+        perpendicular @ lattice.vectors_array().T, 0.0, atol=STRUCTURE_TOL
+    )
+
+
 def test_volume_is_length_area_or_volume() -> None:
     assert CHAIN.volume == pytest.approx(math.sqrt(4 + 0.25 + 0.09))
     a, b = SLAB.vectors_array()
