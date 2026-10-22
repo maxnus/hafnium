@@ -91,6 +91,17 @@ uses [Semantic Versioning](https://semver.org/).
   `SymmetrySpec.structure(kpoints)` build the structures. The property
   tests run for all eight classes over k-point sets, and the half-zone
   storage is checked against the full-zone storage.
+- Periodic foundations (M4, part three): Bloch sums of the overlap and
+  kinetic integrals at k-points (ADR-0016). `lattice_images` chooses the
+  translations from the radii at which the basis functions fall below a
+  precision, `bloch_sum` forms `Σ_T exp(i k·T) M_T` from any engine output
+  with an image axis, and `overlap_k` and `kinetic_k` return the
+  `[kpt, ao, ao]` matrices of a cell over its k-points. Tests: a large box
+  at Γ against the molecular matrices in one to three dimensions, band
+  folding of the kinetic bands between a supercell and the primitive mesh,
+  Hermiticity and time reversal, independence of the precision and of the
+  cutoff, and PySCF's `pbc_intor` in one to three dimensions with recorded
+  data. M4 is complete.
 - SCF robustness: spin expectation values `⟨S⟩` and `⟨S²⟩` of any class on
   the result, level shifting and density damping options, and canonical
   orthogonalization that removes linearly dependent basis combinations.

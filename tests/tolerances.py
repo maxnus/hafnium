@@ -40,3 +40,7 @@ CONVERGED_DENSITY_TOL = 1e-6
 # Spin expectation values of converged states against PySCF: first order in
 # the residual orbital error, like the orbital energies.
 SPIN_TOL = 1e-7
+# Lattice sums cut off at a loose precision against the default cutoff: the
+# precision bounds the neglected images up to their Gaussian prefactors.
+LATTICE_SUM_LOOSE_PRECISION = 1e-4
+LATTICE_SUM_LOOSE_TOL = 1e-3

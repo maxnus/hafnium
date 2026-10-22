@@ -22,3 +22,4 @@ ADR that supersedes it.
 | [0013](0013-molecule-and-cell-as-siblings.md) | `Molecule` and `Cell` are siblings under `AtomicSystem` | accepted 2026-10-21 |
 | [0014](0014-no-libcint-adapter.md) | No libcint adapter | accepted 2026-10-21 |
 | [0015](0015-k-axis-of-structured-matrices.md) | The k axis of structured matrices | accepted 2026-10-22 |
+| [0016](0016-lattice-sums-of-one-electron-integrals.md) | Lattice sums of one-electron integrals | accepted 2026-10-22 |

@@ -5,8 +5,8 @@
 Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``density_fitting_<molecule>_<basis>.json``,
 ``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
-``scf_<molecule>_<basis>.json`` and ``ewald_<cell>_nuclei.json`` with the
-PySCF values and their provenance.
+``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json`` and
+``bloch_<cell>_<basis>.json`` with the PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from hafnium.basis import BasisSet
 from hafnium.molecule import AtomicSystem
 from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
+    bloch_one_electron_reference,
     density_fitting_reference,
     ewald_reference,
     four_center_reference,
@@ -30,6 +31,9 @@ from tests.reference.pyscf_oracle import (
     pyscf,
     scf_reference,
 )
+from tests.reference.test_bloch_reference import CELLS as BLOCH_CELLS
+from tests.reference.test_bloch_reference import MESHES as BLOCH_MESHES
+from tests.reference.test_bloch_reference import STORED_CASES as BLOCH_CASES
 from tests.reference.test_density_fitting_reference import AUXILIARY
 from tests.reference.test_density_fitting_reference import (
     STORED_CASES as DENSITY_FITTING_CASES,
@@ -158,6 +162,28 @@ def main() -> None:
             {"energy": np.asarray(ewald_reference(cell))},
             dimension=cell.dimension,
             lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
+        )
+    for name, basis_name in BLOCH_CASES:
+        cell = BLOCH_CELLS[name]()
+        basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
+        mesh = BLOCH_MESHES[name]
+        matrices = bloch_one_electron_reference(cell, basis, mesh)
+        parts = {
+            f"{key}_{part}": getattr(np, part)(value)
+            for key, value in matrices.items()
+            for part in ("real", "imag")
+        }
+        record(
+            "bloch",
+            cell,
+            name,
+            basis_name,
+            "pbc_intor int1e_ovlp and int1e_kin at Cartesian kpts; precision=1e-14; "
+            "low_dim_ft_type=inf_vacuum; cart=False; Bohr",
+            parts,
+            dimension=cell.dimension,
+            lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
+            kpoints_fractional=[list(point) for point in mesh.fractional],
         )
 
 

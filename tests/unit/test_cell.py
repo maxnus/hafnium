@@ -12,17 +12,8 @@ from hafnium.molecule import (
     Molecule,
     ewald_energy,
 )
+from tests.cells import CUBIC, lithium_hydride
 from tests.tolerances import ENERGY_TOL, STRUCTURE_TOL
-
-CUBIC = Lattice(((4.0, 0.0, 0.0), (0.0, 4.0, 0.0), (0.0, 0.0, 4.0)))
-
-
-def lithium_hydride() -> Cell:
-    """A rocksalt-like LiH cell in Bohr."""
-    molecule = Molecule.from_atoms(
-        [("Li", (0.0, 0.0, 0.0)), ("H", (2.0, 2.0, 2.0))], unit="bohr"
-    )
-    return Cell.from_molecule(molecule, CUBIC)
 
 
 def test_cell_and_molecule_are_siblings_under_the_atomic_system() -> None:

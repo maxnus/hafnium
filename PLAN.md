@@ -901,8 +901,12 @@ pairing, and the Ewald nuclear repulsion in one to three dimensions
 range-separation parameter. The k axis on `BlockStructure` and
 `BlockMatrix` with half-zone storage done 2026-10-22 (ADR-0015): the
 property tests pass for all eight classes with k-points and the half-zone
-and full-zone storage agree. The lattice-summed one-electron integrals
-follow.
+and full-zone storage agree. The Bloch sums of the overlap and kinetic
+integrals done 2026-10-22 (ADR-0016), with the images chosen from the
+basis at a precision: the large-box test reproduces the molecular
+matrices in one to three dimensions, the band-folding test holds for the
+kinetic bands, and the matrices match PySCF's `pbc_intor`. M4 is
+complete.
 
 **M5 Periodic Hartree–Fock.** First item: an ADR choosing the treatment
 of the exchange divergence (probe-charge Ewald, truncated Coulomb or
