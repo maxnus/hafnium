@@ -33,7 +33,9 @@ def hartree_fock(
     ----------
     symmetry
         Fukutome class of the state; real RHF by default. For a cell it
-        carries the k-point set, :meth:`SymmetrySpec.with_kpoints`; for a
+        carries the k-point set, :meth:`SymmetrySpec.with_kpoints`, and
+        may name the cell's space group, :meth:`SymmetrySpec.with_space_group`,
+        to store the irreducible wedge of the set (ADR-0024); for a
         molecule it may impose an Abelian point group,
         :meth:`SymmetrySpec.with_point_group`, in whose standard frame the
         molecule must be given (ADR-0022, ADR-0023).
@@ -70,12 +72,25 @@ def _hamiltonian(
                 "a cell needs an auxiliary basis: its two-electron terms are "
                 "density-fitted"
             )
+        if symmetry.space_group is not None:
+            # Fails fast on a k-point set the group does not map onto itself,
+            # before the fitted integrals are built.
+            symmetry.space_group.kpoint_images(symmetry.kpoints)
         two_body = KPointDensityFittedCoulombExchange.from_cell(
             engine, basis, auxiliary, system, symmetry.kpoints
         )
-        return Hamiltonian.from_cell(engine, basis, system, symmetry.kpoints, two_body)
-    if symmetry.kpoints is not None:
-        raise InputError("a molecule has no k-points; drop them from the symmetry")
+        return Hamiltonian.from_cell(
+            engine,
+            basis,
+            system,
+            symmetry.kpoints,
+            two_body,
+            space_group=symmetry.space_group,
+        )
+    if symmetry.kpoints is not None or symmetry.space_group is not None:
+        raise InputError(
+            "a molecule has no k-points or space group; drop them from the symmetry"
+        )
     molecular: CoulombExchange = (
         ExactCoulombExchange.from_molecule(engine, basis, system)
         if auxiliary is None

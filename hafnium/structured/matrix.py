@@ -171,27 +171,34 @@ class BlockMatrix:
         ring: Ring = Ring.REAL,
         tolerance: float = 1e-10,
         irreps: IrrepSectors | None = None,
+        check: bool = True,
     ) -> BlockMatrix:
         """Build a spatial operator from its matrix, ``[n, n]`` or ``[kpt, n, n]``.
 
         With ``k_axis`` the matrix runs over the full k set. The structure
-        is :meth:`BlockStructure.spatial` over ``ring`` with the axis. A
-        real ring stores the half zone (ADR-0015) and requires the matrix at
-        ``−k`` to be the complex conjugate of the matrix at ``k`` to within
-        ``tolerance``, relative to the largest entry, which makes it real at
-        the time-reversal invariant points; the overlap, the core
-        Hamiltonian and the Coulomb matrix of a time-reversal symmetric
-        density have that property. With ``irreps`` the matrix is projected
-        onto the sectors (ADR-0023): the blocks ``U_Γᵀ X U_Γ`` are kept and
-        the couplings between irreps dropped, which vanish for an operator
-        that commutes with the group and are bounded by the tolerance of
-        the symmetry adaptation otherwise.
+        is :meth:`BlockStructure.spatial` over ``ring`` with the axis, and
+        the matrix is reduced to the points that structure stores
+        (ADR-0015, ADR-0024): each stored point is averaged over the points
+        derived from it, mapped back by their point operations and by time
+        reversal. With ``check`` the derived points must reproduce the
+        matrix to within ``tolerance``, relative to the largest entry, so a
+        real ring requires the matrix at ``−k`` to be the complex conjugate
+        of the matrix at ``k``, which makes it real at the time-reversal
+        invariant points, and an axis with point operations requires the
+        matrix at ``Rk`` to be the rotation of the matrix at ``k``; the
+        overlap, the core Hamiltonian and the Coulomb matrix of a symmetric
+        density have these properties. Without ``check`` the matrix is
+        projected. With ``irreps`` the matrix is projected onto the sectors
+        (ADR-0023): the blocks ``U_Γᵀ X U_Γ`` are kept and the couplings
+        between irreps dropped, which vanish for an operator that commutes
+        with the group and are bounded by the tolerance of the symmetry
+        adaptation otherwise.
 
         Raises
         ------
         StructureError
-            If the shape does not fit the axis, or a real ring is requested
-            for a matrix that is not time-reversal symmetric.
+            If the shape does not fit the axis, or ``check`` finds the
+            matrix without the symmetry of the ring and the axis.
         """
         structure = BlockStructure.spatial(ring).with_k_axis(k_axis)
         (block,) = structure.stored_blocks
@@ -201,26 +208,28 @@ class BlockMatrix:
                 raise StructureError(
                     "a spatial matrix without a k axis is two-dimensional, [n, m]"
                 )
-            kept, mirrored = matrix, xp.conj(matrix)
-        else:
-            if matrix.ndim != 3 or int(matrix.shape[0]) != k_axis.n_kpt:
-                raise StructureError(
-                    "a spatial matrix over a k axis is [kpt, n, m] with "
-                    f"{k_axis.n_kpt} k-points"
-                )
-            stored = structure.stored_kpoints(block)
-            assert stored is not None
-            kept = xp.take(matrix, xp.asarray(stored, dtype=xp.int64), axis=0)
-            partners = xp.asarray([k_axis.partners[k] for k in stored], dtype=xp.int64)
-            mirrored = xp.conj(xp.take(matrix, partners, axis=0))
-        if ring is Ring.REAL:
+        elif matrix.ndim != 3 or int(matrix.shape[0]) != k_axis.n_kpt:
+            raise StructureError(
+                "a spatial matrix over a k axis is [kpt, n, m] with "
+                f"{k_axis.n_kpt} k-points"
+            )
+        kept = dense.reduce_k(
+            structure, block, matrix, check=False, tolerance=tolerance
+        )
+        if check:
+            symmetry = (
+                "time-reversal symmetric"
+                if k_axis is None or k_axis.operations is None
+                else "symmetric under time reversal and the point operations"
+            )
             dense.require_close(
                 xp,
-                mirrored,
-                kept,
+                dense.expand_k(structure, block, kept, structure.all_kpoints),
+                matrix,
                 tolerance,
-                "the matrix is not time-reversal symmetric, so it is not a real "
-                "spatial operator; use the complex ring",
+                f"the matrix is not {symmetry}, so it is not a {ring.value} spatial "
+                "operator over this k axis; use the complex ring, or project with "
+                "check=False",
             )
         storage = structure.storage_ring(block)
         if irreps is None:
@@ -340,14 +349,41 @@ class BlockMatrix:
         return self.map_blocks(adjoint)
 
     def conj(self) -> BlockMatrix:
-        """Complex conjugate of every block."""
+        """Complex conjugate of every block, the conjugate of the dense form.
+
+        Raises
+        ------
+        StructureError
+            Over a k axis with point operations: the conjugate of a matrix
+            at ``Rk`` is the rotation of the conjugate at ``k`` by the
+            conjugate Bloch phases, those of ``−k``, so the elementwise
+            conjugate is not a member of the structure (``adjoint`` is).
+        """
+        self._require_no_operations("conjugate")
         xp = array_namespace(*self.blocks)
         return self.map_blocks(xp.conj)
 
     def transpose(self) -> BlockMatrix:
-        """Transpose of every block."""
+        """Transpose of every block, the transpose of the dense form.
+
+        Raises
+        ------
+        StructureError
+            Over a k axis with point operations, as for :meth:`conj`.
+        """
+        self._require_no_operations("transpose")
         xp = array_namespace(*self.blocks)
         return self.map_blocks(xp.linalg.matrix_transpose)
+
+    def _require_no_operations(self, operation: str) -> None:
+        axis = self.structure.k_axis
+        if axis is not None and axis.operations is not None:
+            raise StructureError(
+                f"the elementwise {operation} of a matrix over the wedge of "
+                f"{axis.operations.group} is not a member of its structure, since "
+                "the Bloch phases of the rotated points are complex; take the "
+                "adjoint, or work on the dense form"
+            )
 
     # ------------------------------------------------------------------ traces
 
@@ -442,11 +478,12 @@ class BlockMatrix:
     def embed(self, target: BlockStructure) -> BlockMatrix:
         """Re-express the matrix in a less symmetric structure, losslessly.
 
-        Pairs within the Fukutome hierarchy with the same irrep sectors are
-        converted block by block. Other pairs go through the dense
-        representation and are verified; across different sectors this
-        serves square operators only, since the dense form cannot assign
-        the columns of orbital coefficients to sectors.
+        Pairs within the Fukutome hierarchy with the same k axis and irrep
+        sectors are converted block by block. Other pairs, among them axes
+        over the same k-points with different point operations, go through
+        the dense representation and are verified; across different
+        sectors this serves square operators only, since the dense form
+        cannot assign the columns of orbital coefficients to sectors.
 
         Raises
         ------
@@ -486,7 +523,11 @@ class BlockMatrix:
             )
 
     def _require_same_k_axis(self, target: BlockStructure) -> None:
-        if target.k_axis != self.structure.k_axis:
+        """Both structures hold the same k-point set; their operations may differ."""
+        mine = self.structure.k_axis
+        if (mine is None and target.k_axis is not None) or (
+            mine is not None and not mine.same_points(target.k_axis)
+        ):
             raise StructureError(
                 "cannot change the k-point set of a matrix by embedding or "
                 "projection; the structures carry different k axes"

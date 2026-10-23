@@ -86,7 +86,8 @@ def atomic_density_guess(
     atomic densities are placed on the diagonal of the molecular density in
     the order of the atoms, which is then embedded into ``structure``; over
     k-points the same density is placed at every point, and onto irrep
-    sectors it is projected, which loses nothing for a symmetric molecule.
+    sectors or the irreducible wedge of a space group it is projected,
+    which loses nothing for a symmetric system.
     """
     densities: dict[tuple[str, tuple[Shell, ...]], Array] = {}
     blocks: list[Array] = []
@@ -113,6 +114,6 @@ def atomic_density_guess(
         # Atomic densities carry no coherence between cells, so the Bloch
         # density matrix is the same at every k-point.
         total = xp.asarray(xp.broadcast_to(total, (axis.n_kpt, n, n)))
-    return BlockMatrix.from_spatial(total, axis, irreps=structure.irreps).embed(
-        structure
-    )
+    return BlockMatrix.from_spatial(
+        total, axis, irreps=structure.irreps, check=False
+    ).embed(structure)

@@ -1,4 +1,4 @@
-"""Symmetry specifications, their block structures, point groups and k-point sets."""
+"""Symmetry specifications, block structures, point and space groups, k-point sets."""
 
 from hafnium.symmetry.adaptation import (
     DEFAULT_DEGENERACY_TOLERANCE,
@@ -18,6 +18,13 @@ from hafnium.symmetry.point_group import (
     Operation,
     PointGroup,
     solid_harmonic_parity,
+)
+from hafnium.symmetry.rotations import basis_rotation, solid_harmonic_rotation
+from hafnium.symmetry.space_group import (
+    SpaceGroup,
+    SpaceGroupAdaptation,
+    SpaceGroupOperation,
+    detect_space_group,
 )
 from hafnium.symmetry.spec import (
     FUKUTOME_CLASSES,
@@ -40,10 +47,16 @@ __all__ = [
     "Operation",
     "PointGroup",
     "PointGroupDetection",
+    "SpaceGroup",
+    "SpaceGroupAdaptation",
+    "SpaceGroupOperation",
     "SpinSymmetry",
     "SymmetryAdaptation",
     "SymmetrySpec",
+    "basis_rotation",
     "degenerate_sets",
     "detect_point_group",
+    "detect_space_group",
     "solid_harmonic_parity",
+    "solid_harmonic_rotation",
 ]

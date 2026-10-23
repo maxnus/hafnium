@@ -50,6 +50,7 @@ nav:
       - adr/0021-reduced-dimension-kernels-by-quadrature.md
       - adr/0022-molecular-point-groups-in-the-standard-frame.md
       - adr/0023-irrep-sectors-of-the-structured-matrices.md
+      - adr/0024-space-groups-reduce-the-k-point-set.md
   - API reference: api.md
 
 markdown_extensions:

@@ -398,7 +398,10 @@ class BlockStructure:
         if self.k_axis is None:
             return name
         n = self.k_axis.n_kpt
-        return f"{name} at {n} k-point{'' if n == 1 else 's'}"
+        name = f"{name} at {n} k-point{'' if n == 1 else 's'}"
+        if self.k_axis.operations is None:
+            return name
+        return f"{name} in {self.k_axis.operations.group}"
 
     def _describe_spin(self) -> str:
         ring = self.stored_blocks[0].ring.value

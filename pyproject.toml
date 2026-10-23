@@ -26,6 +26,7 @@ dependencies = [
   "numpy>=2.0",
   "array-api-compat>=1.9",
   "platformdirs>=4",
+  "spglib>=2.5",
 ]
 
 [project.optional-dependencies]

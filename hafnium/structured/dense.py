@@ -4,8 +4,9 @@ The dense form has ``2n`` rows with the alpha components first; a spatial
 block ``X`` expands to ``block_diag(X, X)``, collinear blocks to
 ``block_diag(alpha, beta)`` and a spinor block is already dense. With a k
 axis the dense form carries every k-point of the set as a leading axis,
-``[kpt, 2n, m]``, the blocks that are stored for a half zone being
-expanded by the antiunitary map of their ring (ADR-0015). With irrep
+``[kpt, 2n, m]``, the points a block does not store being derived from
+their stored source by the unitary rotation of a point operation and the
+antiunitary map of the block's ring (ADR-0015, ADR-0024). With irrep
 sectors the dense form is in the atomic basis (ADR-0023): the sector
 blocks of an operator are assembled as ``Σ_Γ U_Γ X_Γ U_Γᵀ`` and those of
 orbital coefficients placed side by side as ``U_Γ C_Γ``, so the dense form
@@ -33,23 +34,30 @@ from hafnium.structured.validation import cast_to_ring
 # ----------------------------------------------------------------- k partners
 
 
-def antiunitary(ring: Ring, array: Array, *, matrix: bool) -> Array:
+def antiunitary(
+    ring: Ring, array: Array, *, matrix: bool, orbitals: bool = False
+) -> Array:
     """Map a block at ``k`` to its time-reversal partner at ``−k``.
 
     Real blocks are conjugated. Square quaternionic blocks are operators and
-    receive the Kramers map ``Θ X Θ⁻¹``; rectangular ones are coefficient
-    matrices whose columns are time-reversed, ``Θ C``. Vectors
-    (``matrix=False``) hold per-orbital real data and are conjugated, which
-    leaves them unchanged.
+    receive the Kramers map ``Θ X Θ⁻¹``; rectangular ones, and square ones
+    marked as ``orbitals``, are coefficient matrices whose columns are
+    time-reversed, ``Θ C``. Vectors (``matrix=False``) hold per-orbital
+    real data and are conjugated, which leaves them unchanged.
     """
     xp = array_namespace(array)
     if ring is Ring.COMPLEX:
         raise StructureError("a complex block has no time-reversal partner")
     if ring is Ring.REAL or not matrix:
         return xp.conj(array)
-    if array.shape[-2] == array.shape[-1]:
+    if _is_operator(array, orbitals):
         return time_reverse_operator(array)
     return time_reverse(array)
+
+
+def _is_operator(array: Array, orbitals: bool) -> bool:
+    """Whether a block is transformed on both sides: square and not ``orbitals``."""
+    return not orbitals and int(array.shape[-2]) == int(array.shape[-1])
 
 
 def expand_k(
@@ -59,12 +67,17 @@ def expand_k(
     wanted: Sequence[int] | None,
     *,
     matrix: bool = True,
+    orbitals: bool = False,
 ) -> Array:
     """Return the stored ``array`` of ``block`` at the full-set indices ``wanted``.
 
     Points the block stores are taken as they are, the others are derived
-    from their stored partner by :func:`antiunitary`. Without a k axis the
-    array is returned unchanged.
+    from their stored source as the axis says (:meth:`KAxis.derivation`):
+    rotated by the point operation, ``U X U†`` for an operator and ``U C``
+    for orbital coefficients (``orbitals``, or a rectangular block), then
+    mapped by :func:`antiunitary` when time reversal is involved. Vectors
+    (``matrix`` false) are copied. Without a k axis the array is returned
+    unchanged.
     """
     axis = structure.k_axis
     if axis is None or wanted is None:
@@ -73,19 +86,25 @@ def expand_k(
     assert stored is not None
     if tuple(wanted) == stored:
         return array
+    half_zone = structure.half_zone(block)
     position = {k: index for index, k in enumerate(stored)}
-    source = [
-        position[k] if k in position else position[axis.partners[k]] for k in wanted
-    ]
-    flip = [k not in position for k in wanted]
     xp = array_namespace(array)
-    taken = xp.take(array, xp.asarray(source, dtype=xp.int64), axis=0)
-    if not any(flip):
-        return taken
-    mask = xp.reshape(
-        xp.asarray(flip, dtype=xp.bool), (len(flip),) + (1,) * (array.ndim - 1)
-    )
-    return xp.where(mask, antiunitary(block.ring, taken, matrix=matrix), taken)
+    parts: list[Array] = []
+    for k in wanted:
+        derivation = axis.derivation(k, half_zone)
+        part = array[position[derivation.source]]
+        if derivation.operation and matrix:
+            assert axis.operations is not None
+            part = axis.operations.rotate(
+                derivation.operation,
+                derivation.source,
+                part,
+                operator=_is_operator(part, orbitals),
+            )
+        if derivation.conjugate:
+            part = antiunitary(block.ring, part, matrix=matrix, orbitals=orbitals)
+        parts.append(part)
+    return xp.stack(parts, axis=0)
 
 
 def materialize_at(
@@ -107,11 +126,17 @@ def materialize_at(
     """
     sectors = structure.irreps
     if sectors is None:
-        return _materialize_sector(structure, stored, wanted, matrix=matrix)
+        return _materialize_sector(
+            structure, stored, wanted, matrix=matrix, orbitals=orbitals
+        )
     base = structure.sector_structure
     per_sector = [
         _materialize_sector(
-            base, stored[structure.sector_slice(sector)], wanted, matrix=matrix
+            base,
+            stored[structure.sector_slice(sector)],
+            wanted,
+            matrix=matrix,
+            orbitals=orbitals,
         )
         for sector in range(sectors.n_irreps)
     ]
@@ -136,6 +161,7 @@ def _materialize_sector(
     wanted: Sequence[int] | None,
     *,
     matrix: bool,
+    orbitals: bool,
 ) -> tuple[Array, ...]:
     """One array per block of a structure without sectors at ``wanted``."""
     axis = structure.k_axis
@@ -145,7 +171,11 @@ def _materialize_sector(
         if block.derived_from is None:
             positions[index] = len(positions)
             source = stored[positions[index]]
-            arrays.append(expand_k(structure, block, source, wanted, matrix=matrix))
+            arrays.append(
+                expand_k(
+                    structure, block, source, wanted, matrix=matrix, orbitals=orbitals
+                )
+            )
             continue
         if block.partner is Partner.COPY:
             arrays.append(arrays[block.derived_from])
@@ -157,7 +187,16 @@ def _materialize_sector(
             flipped = [axis.partners[k] for k in wanted]
         xp = array_namespace(source)
         arrays.append(
-            xp.conj(expand_k(structure, source_block, source, flipped, matrix=matrix))
+            xp.conj(
+                expand_k(
+                    structure,
+                    source_block,
+                    source,
+                    flipped,
+                    matrix=matrix,
+                    orbitals=orbitals,
+                )
+            )
         )
     return tuple(arrays)
 
@@ -291,8 +330,9 @@ def blocks_from_dense(
     With ``check`` the result must reproduce ``dense`` to within
     ``tolerance`` (a lossless embedding); without it the matrix is projected
     (alpha and beta averaged, real part taken, Kramers-symmetrized, the
-    block at ``k`` averaged with the partner map of the block at ``−k``,
-    and the couplings between irrep sectors dropped). Only square
+    stored block at ``k`` averaged over the points derived from it, each
+    mapped back by its point operation and time reversal, and the
+    couplings between irrep sectors dropped). Only square
     operators enter a structure with irrep sectors: the columns of orbital
     coefficients carry no irrep to assign them by.
     """
@@ -329,7 +369,7 @@ def blocks_from_dense(
     if structure.is_spinor:
         (block,) = structure.stored_blocks
         parts: tuple[Array, ...] = (
-            _reduce_k(structure, block, dense, check=check, tolerance=tolerance),
+            reduce_k(structure, block, dense, check=check, tolerance=tolerance),
         )
     else:
         parts = _collinear_from_dense(
@@ -401,7 +441,7 @@ def _collinear_from_dense(
     blocks = structure.stored_blocks
     if partner is None and not structure.is_spatial:
         return tuple(
-            _reduce_k(structure, block, part, check=check, tolerance=tolerance)
+            reduce_k(structure, block, part, check=check, tolerance=tolerance)
             for block, part in zip(blocks, (alpha, beta), strict=True)
         )
     if m_alpha != m_beta:
@@ -411,15 +451,23 @@ def _collinear_from_dense(
         axis = structure.k_axis
         if axis is not None:
             beta = xp.take(beta, xp.asarray(axis.partners, dtype=xp.int64), axis=0)
-        return ((alpha + xp.conj(beta)) / 2,)
+        return (
+            reduce_k(
+                structure,
+                blocks[0],
+                (alpha + xp.conj(beta)) / 2,
+                check=check,
+                tolerance=tolerance,
+            ),
+        )
     return (
-        _reduce_k(
+        reduce_k(
             structure, blocks[0], (alpha + beta) / 2, check=check, tolerance=tolerance
         ),
     )
 
 
-def _reduce_k(
+def reduce_k(
     structure: BlockStructure,
     block: Block,
     full: Array,
@@ -429,41 +477,79 @@ def _reduce_k(
 ) -> Array:
     """Reduce a block given at every k-point to what ``block`` stores.
 
-    Blocks over the complex ring store everything. Real and quaternionic
-    operators keep the half zone, each stored point averaged with the
-    antiunitary image of its partner, which at a time-reversal invariant
-    point is the real part or the Kramers symmetrization. Rectangular
-    quaternionic blocks (coefficients) are only checked, at the invariant
-    points, for a Θ-invariant column space.
+    Each stored point is the average over the group of the axis (the point
+    operations, combined with time reversal for a half-zone block) of the
+    block at the image of the point mapped back to it, by the antiunitary
+    map of the ring where time reversal is involved and by the inverse
+    rotation of the point operation, ``U† X U``. Elements that leave the
+    point where it is symmetrize the block itself: at a time-reversal
+    invariant point this takes the real part or Kramers-symmetrizes. A
+    block over the complex ring without point operations is returned as it
+    is. Rectangular quaternionic blocks (coefficients) are only checked,
+    at the invariant points, for a Θ-invariant column space.
     """
-    if block.ring is Ring.COMPLEX:
-        return full
     axis = structure.k_axis
     xp = array_namespace(full)
-    stored = structure.stored_kpoints(block)
     if block.ring is Ring.QUATERNION and full.shape[-2] != full.shape[-1]:
-        if not check:
-            raise StructureError(
-                "projecting a rectangular matrix onto a paired structure is not defined"
-            )
-        kept = (
-            full
-            if stored is None
-            else xp.take(full, xp.asarray(stored, dtype=xp.int64), axis=0)
+        return _kept_kramers_columns(
+            structure, block, full, check=check, tolerance=tolerance
         )
-        for position in structure.invariant_positions(block):
-            matrix = kept if stored is None else kept[position]
-            if not _has_kramers_invariant_range(matrix, tolerance):
-                raise StructureError(
-                    "the column space is not invariant under time reversal"
-                )
-        return kept
-    if axis is None or stored is None:
+    if axis is None:
+        if block.ring is Ring.COMPLEX:
+            return full
         return (full + antiunitary(block.ring, full, matrix=True)) / 2
-    own = xp.take(full, xp.asarray(stored, dtype=xp.int64), axis=0)
-    partners = xp.asarray([axis.partners[k] for k in stored], dtype=xp.int64)
-    mirrored = antiunitary(block.ring, xp.take(full, partners, axis=0), matrix=True)
-    return (own + mirrored) / 2
+    half_zone = structure.half_zone(block)
+    operations = axis.operations
+    if operations is None and not half_zone:
+        return full
+    parts: list[Array] = []
+    for source in axis.stored(half_zone):
+        total: Array | None = None
+        for operation, row in enumerate(axis.images):
+            members = [full[row[source]]]
+            if half_zone:
+                members.append(
+                    antiunitary(
+                        block.ring, full[axis.partners[row[source]]], matrix=True
+                    )
+                )
+            for part in members:
+                if operation:
+                    assert operations is not None
+                    part = operations.unrotate(operation, source, part, operator=True)
+                total = part if total is None else total + part
+        assert total is not None
+        parts.append(total / (len(axis.images) * (2 if half_zone else 1)))
+    return xp.stack(parts, axis=0)
+
+
+def _kept_kramers_columns(
+    structure: BlockStructure,
+    block: Block,
+    full: Array,
+    *,
+    check: bool,
+    tolerance: float,
+) -> Array:
+    """Return the stored points of a rectangular quaternionic block, checked."""
+    if not check:
+        raise StructureError(
+            "projecting a rectangular matrix onto a paired structure is not defined"
+        )
+    xp = array_namespace(full)
+    stored = structure.stored_kpoints(block)
+    kept = (
+        full
+        if stored is None
+        else xp.take(full, xp.asarray(stored, dtype=xp.int64), axis=0)
+    )
+    for position in structure.invariant_positions(block):
+        matrix = kept if stored is None else kept[position]
+        if not _has_kramers_invariant_range(matrix, tolerance):
+            raise StructureError(
+                "the column space is not invariant under time reversal"
+            )
+    return kept
 
 
 def require_close(

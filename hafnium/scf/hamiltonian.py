@@ -21,7 +21,14 @@ from hafnium.scf.orthogonalization import (
     canonical_orthogonalizer,
 )
 from hafnium.structured import BlockMatrix, BlockStructure
-from hafnium.symmetry import KPoints, PointGroup, SymmetryAdaptation, SymmetrySpec
+from hafnium.symmetry import (
+    KPoints,
+    PointGroup,
+    SpaceGroup,
+    SpaceGroupAdaptation,
+    SymmetryAdaptation,
+    SymmetrySpec,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,8 +76,9 @@ class Hamiltonian:
         The k-point set of a cell; ``None`` for a molecule.
     adaptation
         The symmetry adaptation of the basis to an Abelian point group of
-        the molecule, which a specification imposing that group needs
-        (ADR-0023); ``None`` when no group is imposed.
+        the molecule (ADR-0023), or the space-group adaptation of the basis
+        of a cell over its k-points (ADR-0024), which a specification
+        naming that group needs; ``None`` when no group is imposed.
     """
 
     overlap: Array
@@ -80,7 +88,9 @@ class Hamiltonian:
     n_alpha: int
     n_beta: int
     kpoints: KPoints | None = field(default=None, kw_only=True)
-    adaptation: SymmetryAdaptation | None = field(default=None, kw_only=True)
+    adaptation: SymmetryAdaptation | SpaceGroupAdaptation | None = field(
+        default=None, kw_only=True
+    )
 
     def __post_init__(self) -> None:
         n = self.two_body.n_ao
@@ -92,14 +102,21 @@ class Hamiltonian:
             )
         if self.n_alpha < 0 or self.n_beta < 0:
             raise InputError("electron counts must be non-negative")
-        if self.adaptation is not None:
-            if self.kpoints is not None:
-                raise InputError("a point group is imposed on a molecule, not a cell")
-            if self.adaptation.n_functions != n:
-                raise InputError(
-                    f"the symmetry adaptation covers {self.adaptation.n_functions} "
-                    f"functions, the integrals {n}"
-                )
+        adaptation = self.adaptation
+        if isinstance(adaptation, SymmetryAdaptation) and self.kpoints is not None:
+            raise InputError("a point group is imposed on a molecule, not a cell")
+        if isinstance(adaptation, SpaceGroupAdaptation) and (
+            adaptation.kpoints != self.kpoints
+        ):
+            raise InputError(
+                "the space-group adaptation is built over other k-points than the "
+                "Hamiltonian's"
+            )
+        if adaptation is not None and adaptation.n_functions != n:
+            raise InputError(
+                f"the symmetry adaptation covers {adaptation.n_functions} "
+                f"functions, the integrals {n}"
+            )
 
     @classmethod
     def from_molecule(
@@ -140,14 +157,23 @@ class Hamiltonian:
         cell: Cell,
         kpoints: KPoints,
         two_body: CoulombExchange,
+        *,
+        space_group: SpaceGroup | None = None,
     ) -> Hamiltonian:
         """Evaluate the one-electron integrals of a cell at its k-points.
 
         The nuclear attraction is the regularized periodic potential of
         ADR-0018 and the nuclear repulsion the Ewald sum of ADR-0012, so the
         energy of a neutral cell is well defined; ``two_body`` carries the
-        exchange correction of ADR-0017.
+        exchange correction of ADR-0017. With ``space_group`` the basis is
+        adapted to the group over ``kpoints``, which must be closed under
+        its point operations (ADR-0024).
         """
+        adaptation = (
+            None
+            if space_group is None
+            else SpaceGroupAdaptation.from_basis(basis, cell, space_group, kpoints)
+        )
         return cls(
             overlap_k(engine, basis, cell, kpoints),
             core_hamiltonian_k(engine, basis, cell, kpoints),
@@ -156,6 +182,7 @@ class Hamiltonian:
             cell.n_alpha,
             cell.n_beta,
             kpoints=kpoints,
+            adaptation=adaptation,
         )
 
     @property
@@ -175,8 +202,8 @@ class Hamiltonian:
         ------
         InputError
             If the specification carries a k-point set other than the
-            Hamiltonian's, or imposes a point group the Hamiltonian is not
-            adapted to.
+            Hamiltonian's, or names a group the Hamiltonian is not adapted
+            to.
         """
         if symmetry.kpoints != self.kpoints:
             raise InputError(
@@ -191,7 +218,10 @@ class Hamiltonian:
         With irrep sectors the matrix is projected onto them, as every
         one-electron matrix is (ADR-0023): the couplings between irreps,
         which vanish for a molecule exactly in the standard frame, are
-        bounded by the tolerance of the symmetry adaptation.
+        bounded by the tolerance of the symmetry adaptation. Over a k axis
+        the matrix is likewise projected onto the stored points, each the
+        average over its orbit under time reversal and the point operations
+        (ADR-0024), which changes nothing for a symmetric cell.
         """
         return self._embed_spatial(self.overlap, structure)
 
@@ -215,7 +245,7 @@ class Hamiltonian:
         """
         self._require_matching_sectors(structure)
         overlap = BlockMatrix.from_spatial(
-            self.overlap, structure.k_axis, irreps=structure.irreps
+            self.overlap, structure.k_axis, irreps=structure.irreps, check=False
         )
         return overlap.map_blocks(
             lambda block: canonical_orthogonalizer(block, threshold)
@@ -236,18 +266,36 @@ class Hamiltonian:
     def _embed_spatial(self, matrix: Array, structure: BlockStructure) -> BlockMatrix:
         self._require_matching_sectors(structure)
         return BlockMatrix.from_spatial(
-            matrix, structure.k_axis, irreps=structure.irreps
+            matrix, structure.k_axis, irreps=structure.irreps, check=False
         ).embed(structure)
 
     def _require_matching_sectors(self, structure: BlockStructure) -> None:
-        expected = None if self.kpoints is None else self.kpoints.axis()
-        if structure.k_axis != expected:
+        axis = structure.k_axis
+        if (axis is None) != (self.kpoints is None) or (
+            axis is not None
+            and self.kpoints is not None
+            and not axis.same_points(self.kpoints.axis())
+        ):
             raise InputError(
                 "the structure's k-points do not match the Hamiltonian's: build the "
                 "structure from a SymmetrySpec with the Hamiltonian's k-point set"
             )
+        adaptation = self.adaptation
+        if (
+            axis is not None
+            and axis.operations is not None
+            and (
+                not isinstance(adaptation, SpaceGroupAdaptation)
+                or axis.operations != adaptation.operations()
+            )
+        ):
+            raise InputError(
+                "the structure's point operations do not match the Hamiltonian's "
+                "space-group adaptation: build the structure with Hamiltonian.structure"
+            )
         if structure.irreps is not None and (
-            self.adaptation is None or structure.irreps != self.adaptation.irreps()
+            not isinstance(adaptation, SymmetryAdaptation)
+            or structure.irreps != adaptation.irreps()
         ):
             raise InputError(
                 "the structure's irrep sectors do not match the Hamiltonian's "

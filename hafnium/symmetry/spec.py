@@ -6,7 +6,8 @@ treatment of time reversal (real orbitals, complex orbitals, or complex
 orbitals with Kramers pairing). The table follows Table I of Henderson,
 Jiménez-Hoyos and Scuseria, arXiv:1710.00932, where Θ = −iσ_y K is time
 reversal and K is complex conjugation. A specification may add the
-k-point set of a periodic system or an Abelian point group of a molecule
+k-point set of a periodic system, reduced to the irreducible wedge by the
+cell's space group (ADR-0024), or an Abelian point group of a molecule
 (ADR-0023).
 """
 
@@ -21,6 +22,7 @@ from hafnium.structured import BlockStructure, Ring
 from hafnium.symmetry.adaptation import SymmetryAdaptation
 from hafnium.symmetry.kpoints import KPoints
 from hafnium.symmetry.point_group import PointGroup
+from hafnium.symmetry.space_group import SpaceGroup, SpaceGroupAdaptation
 
 
 class SpinSymmetry(Enum):
@@ -109,6 +111,10 @@ class SymmetrySpec:
         under time reversal can always be chosen real, so it is ``REAL``.
     kpoints
         The k-point set of a periodic system.
+    space_group
+        The space group of the cell, whose point operations reduce the
+        k-point set to its irreducible wedge (ADR-0024); the set must be
+        closed under them. Only with k-points.
     point_group
         An Abelian point group imposed on a molecule, which must be in the
         group's standard frame (ADR-0022): the state is then blocked over
@@ -123,6 +129,7 @@ class SymmetrySpec:
     spin: SpinSymmetry = SpinSymmetry.RESTRICTED
     field: Field = Field.REAL
     kpoints: KPoints | None = dataclass_field(default=None, kw_only=True)
+    space_group: SpaceGroup | None = dataclass_field(default=None, kw_only=True)
     point_group: PointGroup | None = dataclass_field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -135,6 +142,11 @@ class SymmetrySpec:
             raise InputError(
                 "a point group blocks the state of a molecule; a cell carries its "
                 "space group through the k-point set instead"
+            )
+        if self.space_group is not None and self.point_group is not None:
+            raise InputError(
+                "a space group reduces the k-point set of a cell, a point group "
+                "blocks the state of a molecule; give one of them"
             )
 
     @classmethod
@@ -172,7 +184,24 @@ class SymmetrySpec:
         if isinstance(group, str):
             group = PointGroup.named(group)
         return SymmetrySpec(
-            self.spin, self.field, kpoints=self.kpoints, point_group=group
+            self.spin,
+            self.field,
+            kpoints=self.kpoints,
+            space_group=self.space_group,
+            point_group=group,
+        )
+
+    def with_space_group(self, group: SpaceGroup | None) -> SymmetrySpec:
+        """Return the same class with the k-point set reduced by ``group``.
+
+        ``None`` keeps the whole set; see :func:`hafnium.symmetry.detect_space_group`.
+        """
+        return SymmetrySpec(
+            self.spin,
+            self.field,
+            kpoints=self.kpoints,
+            space_group=group,
+            point_group=self.point_group,
         )
 
     @property
@@ -183,32 +212,48 @@ class SymmetrySpec:
     def with_kpoints(self, kpoints: KPoints | None) -> SymmetrySpec:
         """Return the same class over ``kpoints``, the translational sectors."""
         return SymmetrySpec(
-            self.spin, self.field, kpoints=kpoints, point_group=self.point_group
+            self.spin,
+            self.field,
+            kpoints=kpoints,
+            space_group=self.space_group,
+            point_group=self.point_group,
         )
 
-    def structure(self, adaptation: SymmetryAdaptation | None = None) -> BlockStructure:
+    def structure(
+        self, adaptation: SymmetryAdaptation | SpaceGroupAdaptation | None = None
+    ) -> BlockStructure:
         """Block structure of one-body operators (Fock, density) in this class.
 
         With ``kpoints`` the structure carries their k axis: the blocks
         become batches over the stored k-points, a half zone for the real
-        and paired classes (ADR-0007, ADR-0015). With a ``point_group`` the
-        blocks are multiplied by the irrep sectors of the basis, which the
-        symmetry ``adaptation`` of the basis provides (ADR-0023);
-        :meth:`hafnium.scf.Hamiltonian.structure` passes the adaptation of
-        its Hamiltonian.
+        and paired classes (ADR-0007, ADR-0015), and with a ``space_group``
+        the irreducible wedge of its point operations, which the
+        :class:`SpaceGroupAdaptation` of the basis provides (ADR-0024).
+        With a ``point_group`` the blocks are multiplied by the irrep
+        sectors of the basis, which the :class:`SymmetryAdaptation` of the
+        basis provides (ADR-0023). :meth:`hafnium.scf.Hamiltonian.structure`
+        passes the adaptation of its Hamiltonian.
 
         Raises
         ------
         InputError
-            If a point group is imposed without an adaptation, or with one
-            built for another group.
+            If a group is imposed without the matching adaptation, or a
+            space group without k-points.
         """
         structure = self._spin_structure()
         if self.kpoints is not None:
-            return structure.with_k_axis(self.kpoints.axis())
+            if self.space_group is None:
+                return structure.with_k_axis(self.kpoints.axis())
+            return structure.with_k_axis(
+                self.kpoints.axis(self._space_group_adaptation(adaptation).operations())
+            )
+        if self.space_group is not None:
+            raise InputError(
+                "a space group reduces a k-point set: pass SymmetrySpec.with_kpoints"
+            )
         if self.point_group is None:
             return structure
-        if adaptation is None:
+        if not isinstance(adaptation, SymmetryAdaptation):
             raise InputError(
                 f"imposing the point group {self.point_group.name} needs the "
                 "symmetry adaptation of the basis: pass Hamiltonian.adaptation, or "
@@ -220,6 +265,23 @@ class SymmetrySpec:
                 f"adaptation is built for {adaptation.group.name}"
             )
         return structure.with_irreps(adaptation.irreps())
+
+    def _space_group_adaptation(
+        self, adaptation: SymmetryAdaptation | SpaceGroupAdaptation | None
+    ) -> SpaceGroupAdaptation:
+        assert self.space_group is not None
+        if not isinstance(adaptation, SpaceGroupAdaptation):
+            raise InputError(
+                f"reducing the k-points by {self.space_group.name} needs the "
+                "space-group adaptation of the basis: pass Hamiltonian.adaptation, "
+                "or build the structure with Hamiltonian.structure(spec)"
+            )
+        if adaptation.group != self.space_group or adaptation.kpoints != self.kpoints:
+            raise InputError(
+                "the space-group adaptation is built for another group or k-point "
+                "set than the specification names"
+            )
+        return adaptation
 
     def _spin_structure(self) -> BlockStructure:
         if self.field is Field.PAIRED:

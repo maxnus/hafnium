@@ -190,6 +190,21 @@ Spin never appears as an explicit index in method code; it is part of the
   Electrons fixed per irrep follow PySCF's `irrep_nelec`: a total is
   split equally by restricted and paired classes and with the odd
   electron in alpha by unrestricted ones.
+- Space groups (ADR-0024): a `SpaceGroup` holds the operations found by
+  spglib, each as the integer matrix `W` and fractional translation `w`
+  of the lattice basis (`x' = x Wᵀ + w` for row vectors) and as the
+  Cartesian `R` and `t` (`r' = R r + t`); k-points map as `k' = k W⁻¹` in
+  the reciprocal basis. The Wigner matrix of a shell is
+  `S_lm(R⁻¹ r) = Σ_m' D^l[m', m] S_lm'(r)` in the storage order of the
+  shell, so `D¹ = R` for p shells. The operation carries the Bloch
+  functions at `k` to `Rk` by `U_g(k) = Π_g diag(exp(−i (Rk)·T_A))`, with
+  `T_A = R r_A + t − r_{g(A)}` the lattice vector the atom picks up;
+  operators map as `U X U†`, coefficients as `U C`. On a k axis with
+  operations the real and quaternionic rings store one representative
+  per orbit of the operations with time reversal, the complex ring one
+  per orbit of the operations alone, each derived point by one
+  operation and conjugated only when no operation reaches it; the
+  projection onto the stored points is the group average.
 - Periodic systems (ADR-0007): `Lattice.vectors[i]` is the i-th
   translation vector, shape `[d, 3]` in Bohr with `d` in {1, 2, 3} and no
   vacuum padding of open directions. Reciprocal vectors obey

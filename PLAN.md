@@ -426,7 +426,8 @@ path.
   stored set shrinks to the irreducible wedge of the Brillouin zone with
   weights, and the blocks at the other k follow by the unitary rotation of
   the AO basis: a third partner rule (`ROTATE`) added in the symmetry
-  milestone, with space-group detection delegated to spglib (§12).
+  milestone, with space-group detection delegated to spglib (§12,
+  ADR-0024).
 - **Two-electron terms.** Crystal momentum is conserved: (μk₁ νk₂|λk₃ σk₄)
   vanishes unless k₁ − k₂ + k₃ − k₄ is a reciprocal lattice vector. The DF
   tensor is labelled by the momentum transfer q = k₂ − k₁; the Coulomb
@@ -977,7 +978,19 @@ occupations are shared over the sectors of a spin block or fixed per
 irrep, and `SymmetrySpec.point_group` asks for it; all eight classes
 reproduce the unconstrained results for symmetric molecules, and
 energies, orbital energies, labels and electrons per irrep match PySCF's
-symmetry-adapted classes. Part three adds the space groups.
+symmetry-adapted classes. Part three done 2026-10-23 (ADR-0024): space
+groups through spglib, now a dependency, the Wigner matrices of
+real solid harmonics from their polynomial table, the action of the
+group on the Bloch basis with lattice phases, the point operations as an
+attribute of the k axis so that every class stores the irreducible wedge
+and derives the rotated points, projection onto the wedge as the group
+average, and `SymmetrySpec.with_space_group`; all eight classes
+reproduce the full-zone results for a non-symmorphic crystal, a
+hexagonal slab and a chain, and energies, wedge sizes, weights and
+orbital energies match PySCF's symmetric KRHF. Later: the fitted tensor
+over wedge × full set and the exchange and the one-electron integrals at
+the wedge alone, which the projection does not yet save; little-group
+blocking at high-symmetry points.
 
 **M7 DFT.** Grids and basis-on-grid in Rust, libxc binding, RKS and UKS
 with LDA/GGA/meta-GGA/hybrid/range-separated functionals, then periodic
@@ -1055,6 +1068,10 @@ for periodic results.
    crystal symmetry, C with Python bindings, BSD-3-Clause) as an optional
    dependency, versus an own implementation. Molecular point groups stay
    in-house either way, since spglib does not treat finite systems.
+   Decided 2026-10-23 (ADR-0024): spglib, as a required dependency
+   rather than an extra, since it is a small wheel and the periodic
+   systems it serves are a primary target; chains and slabs are padded
+   for it.
 4. The nuclear charge model for relativistic calculations (§5.10): point
    nuclei (PySCF's default, the simplest oracle comparison) versus the
    Gaussian model of Visscher and Dyall (DIRAC's default, what the
