@@ -180,6 +180,14 @@ def solve_scf(
     """
     options = ScfOptions() if options is None else options
     structure = hamiltonian.structure(symmetry)
+    axis = structure.k_axis
+    if axis is not None and axis.operations is not None:
+        logger.info(
+            "scf stores %d of %d k-points, the irreducible wedge of %s",
+            len(axis.stored(half_zone=structure.half_zone(structure.stored_blocks[0]))),
+            axis.n_kpt,
+            axis.operations.group,
+        )
     if occupation is None:
         symmetry.validate_electrons(hamiltonian.n_alpha, hamiltonian.n_beta)
         occupation = AufbauOccupation(hamiltonian.n_alpha, hamiltonian.n_beta)

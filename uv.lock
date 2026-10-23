@@ -368,6 +368,9 @@ jax = [
     { name = "jax", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "jax", version = "0.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
+symmetry = [
+    { name = "spglib" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -378,6 +381,7 @@ dev = [
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "spglib" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -395,8 +399,9 @@ requires-dist = [
     { name = "jax", marker = "extra == 'jax'", specifier = ">=0.4.31" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "platformdirs", specifier = ">=4" },
+    { name = "spglib", marker = "extra == 'symmetry'", specifier = ">=2.5" },
 ]
-provides-extras = ["jax", "cuda"]
+provides-extras = ["jax", "symmetry", "cuda"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -407,6 +412,7 @@ dev = [
     { name = "pyright", specifier = ">=1.1.400" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.17" },
+    { name = "spglib", specifier = ">=2.5" },
 ]
 docs = [
     { name = "mkdocs", specifier = ">=1.6,<2" },
@@ -1631,6 +1637,54 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
+]
+
+[[package]]
+name = "spglib"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e0/12/571ccea78d63718030194972062a64f4a6ab9f09a4fb329c110d56766563/spglib-2.8.0.tar.gz", hash = "sha256:12a224434b5659793353937625fd7eb91c00c8952c18ca729a7a8117b1e29e8f", size = 2369219, upload-time = "2026-10-10T01:32:54.772Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/ac/b008ccb4d9738259a7bdddbde63d94382603aa5d923508e37b5779bc7c1b/spglib-2.8.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:3e38f41273d8d12e1cb804490501c0c526fae0a36666c4dd1952232d66af650c", size = 921784, upload-time = "2026-10-10T01:31:56.705Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/26/29e5ae1db917ab7ce657fcc2175d93d4e953b7dbc979dff0e241bf52db42/spglib-2.8.0-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fd23455671be7d5d19cf1edb2d07055a1bde3be77b5daf885e66cd5cdc2667a1", size = 957007, upload-time = "2026-10-10T01:31:58.664Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/e9/a9dc6671b45d0b52c58f620c189d712c1a2eef18d94005e9661ba0e4a85b/spglib-2.8.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:018f1ffb204983af8140ae6542748242692cf56121651baced627893d04bae5f", size = 974064, upload-time = "2026-10-10T01:32:00.543Z" },
+    { url = "https://files.pythonhosted.org/packages/99/93/d124b403920172c8ce1ad4f67da7d0afdc9889158784b625f3ef9f5179df/spglib-2.8.0-cp311-cp311-win_amd64.whl", hash = "sha256:f169a0c195013ccbca02df1b0ed0ed16d362e083c45229090c0c96ec2e155d97", size = 877087, upload-time = "2026-10-10T01:32:02.767Z" },
+    { url = "https://files.pythonhosted.org/packages/af/45/c5233c2c0caaff0661cdfd811532d8509165bfdde8b02164b41e7dc8b2ea/spglib-2.8.0-cp311-cp311-win_arm64.whl", hash = "sha256:d7cb0d8308e082139b7951efde42dc924010f4311ba3fe3f7cbf1b27995b4924", size = 1037148, upload-time = "2026-10-10T01:32:04.498Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/3b/f05fc2d3718c51edc2917a680eba598cac6015cc14e2d91e29f873fca52d/spglib-2.8.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:bbcbb07692314b2ffaa17fcfc13b6078b299e4a37f815989aad86c614bc434e2", size = 922936, upload-time = "2026-10-10T01:32:05.962Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/d2/14018bcba4939a2155a867289c7304d335b9dfb75751584a63bcc1c75bfc/spglib-2.8.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:02f0a84c99d5f89fffec79868b35faa455c472e614125fe3a11b38f2a28fbc20", size = 960737, upload-time = "2026-10-10T01:32:07.716Z" },
+    { url = "https://files.pythonhosted.org/packages/ad/9f/4e6e0e177bd69425f7492dae3f45f49b657e435a38854ba3e42e7534cf23/spglib-2.8.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bf42690e47077fe47b71e70f1d1d22db628f3f07313a2977ca6195b176148bd7", size = 979045, upload-time = "2026-10-10T01:32:09.559Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/4f/90df7116e82c37e42be071877ecb35097b1a4d906216a240c399beaac45f/spglib-2.8.0-cp312-cp312-win_amd64.whl", hash = "sha256:08f7e479fe09a4c791e7b654f30701c14f607b1bf30ac148745f5e8a46e6e934", size = 881956, upload-time = "2026-10-10T01:32:11.306Z" },
+    { url = "https://files.pythonhosted.org/packages/82/05/204ba06dce3cb36a73868a5cf37805990521df81d479a1be079e070e61fa/spglib-2.8.0-cp312-cp312-win_arm64.whl", hash = "sha256:20f43273495b7fb520623600c5264aa4a80c4912f1a6c213b3efc5189f2a0931", size = 1037331, upload-time = "2026-10-10T01:32:12.926Z" },
+    { url = "https://files.pythonhosted.org/packages/45/77/ea7e4d2c5a4c194f390af77e40d532e296e389844b8ae629a67933a8f51e/spglib-2.8.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:c1c77f618af57511598f89a2e733834e2f7ce15f14ece7f67eba50b13c5cb4d8", size = 922997, upload-time = "2026-10-10T01:32:14.38Z" },
+    { url = "https://files.pythonhosted.org/packages/64/81/2e82e211ffd09b5ac1fe835e8ee85bcf9bc54f4cd0dedb6fb59f818ecd06/spglib-2.8.0-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:23fac9c64f0c7fa640203b32a659a30ba7d6489b6df713ecf91f6ade78b66d12", size = 960833, upload-time = "2026-10-10T01:32:15.806Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/d5/ecbc31db684932b92095f1d396c71c5ff45781b3cbf87c283273d46e872a/spglib-2.8.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:afd9eaaec730e49e86ae6d4b721057cb09be971bbdcea6efa54e9c47c294b5d9", size = 979078, upload-time = "2026-10-10T01:32:17.484Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/06/01f99f8df26fdeef61e0b8ede7d75afa7ac418c20fbd2e5403489cec17a1/spglib-2.8.0-cp313-cp313-win_amd64.whl", hash = "sha256:a908447b6328ef7690b3e49e9b6e4e25fc6894ebe8d15be9eb5d5aa680738551", size = 881995, upload-time = "2026-10-10T01:32:19Z" },
+    { url = "https://files.pythonhosted.org/packages/67/60/f10c5a4e464b37204dc991135807a3fb9f38d1f02709ed64e117869e684e/spglib-2.8.0-cp313-cp313-win_arm64.whl", hash = "sha256:031f692435aefcc507fd4c68a62b63314c42c6ac954b25d41f89e23642168bb7", size = 1037341, upload-time = "2026-10-10T01:32:20.657Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/0f/62e7b75f54da784ba8dfcaba942a01123cdc402f070beeb17e65743c2411/spglib-2.8.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:ddb72969edc9c45673656040892c021b515c1fa0571042a9b5336c5d2ed4d551", size = 923486, upload-time = "2026-10-10T01:32:22.097Z" },
+    { url = "https://files.pythonhosted.org/packages/65/ce/65e8cf10e0320feceef8ba9e3279675cf444fa77b8bda01355c86bc5549b/spglib-2.8.0-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c45316330e2dcf268a6094b3c999cd61882feae4815b0c0d19e3d3b4ef4b5900", size = 961004, upload-time = "2026-10-10T01:32:23.788Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/5c/bb63f920f012e2cdf52b85e1f2568005ee8e67a36882453eef738ec002b6/spglib-2.8.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:38609a81fb1c95491a9c4ad04d2e84747f1785dd97d3d0a226cba00a5d45fc22", size = 979092, upload-time = "2026-10-10T01:32:25.217Z" },
+    { url = "https://files.pythonhosted.org/packages/27/cd/7def971d2b16ead3a4475325a6b1a046f45a68d4bfee6a0431018ef1edaa/spglib-2.8.0-cp314-cp314-win_amd64.whl", hash = "sha256:a98e428554ddd85fbf52f460806dc5f803378a555841a513727bb566049488ce", size = 897913, upload-time = "2026-10-10T01:32:26.694Z" },
+    { url = "https://files.pythonhosted.org/packages/12/1d/4de1025091c9adf39bbdf7c615d50ad4e086506ceb21e5a0584ff2abcc0b/spglib-2.8.0-cp314-cp314-win_arm64.whl", hash = "sha256:c2622e16dfb63fe2d4350c063712a716ae954afb93bccd97d5b8e9eab402cf34", size = 1059421, upload-time = "2026-10-10T01:32:28.192Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/4b/d536124c13c312cb6ba15be8636ab4b6ffd168071609ec8a46ca4a35a90c/spglib-2.8.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:237507f7b248408a6594449349118819e708312df0b2f51943ca4b9f2de2e826", size = 934239, upload-time = "2026-10-10T01:32:29.93Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/c6/4214ceb56ad03b0fdfb8322d4deeed418b22ab28319a0a28fefe8daeb06c/spglib-2.8.0-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:de94297bbc21e9a63de40869c4b8f4223ee354a02d9f700759140594ac9c12c5", size = 961201, upload-time = "2026-10-10T01:32:31.354Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/6d/4cab1801de51dc14f2744b22830a429eac582eed343c1879f1602930f2ef/spglib-2.8.0-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:42bd2a6e112d393180c4b7827dd92576b55dc6576927c38b89b7e735d564fd1b", size = 979601, upload-time = "2026-10-10T01:32:32.868Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/74/df948fbf7356061715dd7a433a05718a5d9a481d2177c364416e963b3517/spglib-2.8.0-cp314-cp314t-win_amd64.whl", hash = "sha256:ad430f898e909d67c8990c42e29042d76ad7fc9eaa2696f086272a28109b01c5", size = 907281, upload-time = "2026-10-10T01:32:34.274Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/35/223b016ad31c8e99d7a4777033beacb5c1ed5c9941452138790d2b4b840c/spglib-2.8.0-cp314-cp314t-win_arm64.whl", hash = "sha256:ad292c5a3c239888ab7248b1b3e3395ba1df8d8bd1e5e5838db9437cb7c283d4", size = 1069246, upload-time = "2026-10-10T01:32:35.817Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/98/36d73540d7d0e7cdc982583cccf1c6db8858a8504d553bde78b8028af39f/spglib-2.8.0-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:5b274fde8e92fb783dbab524aa713250a80257f04c9af9e5f162e48603ff6283", size = 923495, upload-time = "2026-10-10T01:32:37.217Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/ec/746303421059c34e2847863184c6003a06d24978fa1cbf28598160215108/spglib-2.8.0-cp315-cp315-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:371d623c68a9353323c5030a556f919cb34e14a762432b23372c7f14d86bc77d", size = 961005, upload-time = "2026-10-10T01:32:38.77Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/c9/8d992c0ac045bbda18fe652a69a215f496c32a508c351108690f4366dc1b/spglib-2.8.0-cp315-cp315-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:270428c63ea76030cdb662ca1fba6b77297015d539ada87c525cc76fb5a90fe2", size = 979090, upload-time = "2026-10-10T01:32:40.42Z" },
+    { url = "https://files.pythonhosted.org/packages/92/12/10247a1fbfe5129ca94cc23c4f396e1714352376582429a4ab0cd086ce32/spglib-2.8.0-cp315-cp315-win_amd64.whl", hash = "sha256:956964c9dee3c9301478b280886c68a48bc732ad48e0dbbe949fb0ea287ba465", size = 897903, upload-time = "2026-10-10T01:32:41.968Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/4d/449929de9318c2df98b78dc7401c5398563072edc7222518b344eab6f889/spglib-2.8.0-cp315-cp315-win_arm64.whl", hash = "sha256:220d717ba6974aa90aae48e8863c0f75df4e74021befac90b5938f7f8fb97a16", size = 1059399, upload-time = "2026-10-10T01:32:43.539Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/f3/5aa5b47017acc46420b41fe734bbbf7e41fe069f5a9d9bc8b5b831b63a35/spglib-2.8.0-cp315-cp315t-macosx_11_0_arm64.whl", hash = "sha256:b77d1ef6f21ba8b3ead98478d9632f27e4a4ed7e5b9eadd55579e86d9083428e", size = 934214, upload-time = "2026-10-10T01:32:47.334Z" },
+    { url = "https://files.pythonhosted.org/packages/97/77/99cd284f3c04504c5fdbef494119df60dacd66db8569cbd41048bcefa88a/spglib-2.8.0-cp315-cp315t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:16d76ade0f2f9c3b0c59a5cee48a742b31e3f2d71d035618a8b660320c08b017", size = 962664, upload-time = "2026-10-10T01:32:48.862Z" },
+    { url = "https://files.pythonhosted.org/packages/08/b4/23f4b477b26f33a8eab621612f487f570dad986ab0b3d5594853e00ef003/spglib-2.8.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8b192b0a1aca320c26e3ae4f7ddcc0936016935cb48518ee30e301a6679f82b1", size = 980988, upload-time = "2026-10-10T01:32:50.253Z" },
+    { url = "https://files.pythonhosted.org/packages/93/65/a7625a2a61c5af8754ea74143d59ca8c4055f312dd28322337f7fdf0daca/spglib-2.8.0-cp315-cp315t-win_amd64.whl", hash = "sha256:61a9eb8b103027f48d4f4f25667f3ee683dab43301114c727bcc4e6ee8b5a28e", size = 907295, upload-time = "2026-10-10T01:32:51.638Z" },
+    { url = "https://files.pythonhosted.org/packages/99/4d/7126cd62c55d7fd86bd9cb938666074dc75a27662cbb2c2974fab2d6d0cf/spglib-2.8.0-cp315-cp315t-win_arm64.whl", hash = "sha256:d008e2aec22f2ba3bdfa4cb8c8d2fa6f7a6e6e007e222704f63beebbd7199ef5", size = 1069212, upload-time = "2026-10-10T01:32:53.276Z" },
 ]
 
 [[package]]

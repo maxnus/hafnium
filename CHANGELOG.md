@@ -184,4 +184,19 @@ uses [Semantic Versioning](https://semver.org/).
   `ScfResult.electrons_per_irrep`; all eight classes reproduce the
   unconstrained results for symmetric molecules and energies, orbital
   energies, labels and electrons per irrep match PySCF (ADR-0023).
+- Spatial symmetry (M6, part three): space groups of crystals through
+  spglib, an optional dependency (`hafnium[symmetry]`; `SpaceGroup`,
+  `detect_space_group`, `SpaceGroup.restricted_to`), the Wigner matrices
+  of real solid harmonics from their polynomial table
+  (`solid_harmonic_rotation`, `basis_rotation`,
+  `hafnium.basis.solid_harmonic_coefficients`), the action of the group
+  on the Bloch basis with lattice phases (`SpaceGroupAdaptation`), the
+  point operations as an attribute of the k axis (`KPointOperations`,
+  `KAxis.operations`, `KAxis.derivations`) so that every class stores
+  the irreducible wedge and derives the rotated points, projection onto
+  the wedge as the group average (`BlockMatrix.from_spatial(check=)`),
+  `SymmetrySpec.with_space_group`, `Hamiltonian.from_cell(space_group=)`;
+  all eight classes reproduce the full-zone results for a non-symmorphic
+  crystal, a hexagonal slab and a chain, and energies, wedge sizes,
+  weights and orbital energies match PySCF's symmetric KRHF (ADR-0024).
 

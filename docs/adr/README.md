@@ -30,3 +30,4 @@ ADR that supersedes it.
 | [0021](0021-reduced-dimension-kernels-by-quadrature.md) | Reduced-dimension reciprocal-space kernels by quadrature | accepted 2026-10-22 |
 | [0022](0022-molecular-point-groups-in-the-standard-frame.md) | Molecular point groups in the standard frame | accepted 2026-10-22 |
 | [0023](0023-irrep-sectors-of-the-structured-matrices.md) | Irrep sectors of the structured matrices | accepted 2026-10-22 |
+| [0024](0024-space-groups-reduce-the-k-point-set.md) | Space groups reduce the k-point set | accepted 2026-10-23 |

@@ -566,3 +566,48 @@ def symmetric_scf_reference(
         "spins": spins,
         "spin_square": 0.0 if kind == "rhf" else float(mf.spin_square()[0]),
     }
+
+
+def symmetric_kscf_reference(
+    cell: Cell, basis: BasisSet, auxiliary: BasisSet, mesh: tuple[int, ...]
+) -> dict[str, Any]:
+    """Converged ``KRHF`` over the irreducible wedge of ``mesh`` from PySCF.
+
+    PySCF reduces the Γ-centred mesh by the symmorphic point operations
+    its own search finds (``cell.symmorphic``, which it also forces for
+    chains and slabs) and by time reversal, and runs the SCF at the
+    points of the wedge with their weights (``kpts_ibz``, ``weights_ibz``).
+    A slab needs a three-dimensional mesh with one point along the padded
+    direction. The orbital energies are those of the wedge points, in the
+    order of ``kpts_scaled_ibz``, whose periodic coordinates are returned.
+    """
+    pbc_scf: Any = pytest.importorskip("pyscf.pbc.scf")
+    space_group: Any = pytest.importorskip("pyscf.pbc.symm.space_group")
+    reference = pyscf_cell(cell, basis)
+    group = space_group.SpaceGroup(reference)
+    group.verbose = 0
+    group.build(dump_info=False)
+    reference.space_group_symmetry = True
+    reference.symmorphic = True
+    reference.build()
+    padded_mesh = tuple(mesh) + (1,) * (3 - len(mesh))
+    kpts = reference.make_kpts(
+        padded_mesh, space_group_symmetry=True, time_reversal_symmetry=True
+    )
+    mean_field = pbc_scf.KRHF(reference, kpts).density_fit(
+        auxbasis=basis_input(cell, auxiliary)
+    )
+    mean_field.conv_tol = 1e-12
+    mean_field.conv_tol_grad = 1e-8
+    mean_field.max_cycle = 200
+    energy = float(mean_field.kernel())
+    assert mean_field.converged
+    return {
+        "energy": energy,
+        "n_operations": int(group.nop),
+        "point_group": str(group.groupname["point_group_symbol"]),
+        "n_wedge": int(kpts.nkpts_ibz),
+        "weights": np.asarray(kpts.weights_ibz),
+        "fractional": np.asarray(kpts.kpts_scaled_ibz)[:, : cell.dimension],
+        "mo_energies": np.asarray(mean_field.mo_energy),
+    }

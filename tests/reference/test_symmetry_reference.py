@@ -1,4 +1,4 @@
-"""Point groups, frames and orbital irreps against PySCF."""
+"""Point groups, frames, orbital irreps and k-point wedges against PySCF."""
 
 from collections.abc import Callable
 from typing import Any
@@ -8,23 +8,28 @@ import pytest
 
 from hafnium.basis import BasisSet
 from hafnium.integrals import overlap
-from hafnium.molecule import Molecule
+from hafnium.molecule import Cell, Molecule
 from hafnium.scf import (
     AufbauOccupation,
     ExactCoulombExchange,
     Hamiltonian,
+    KPointDensityFittedCoulombExchange,
+    ScfOptions,
     atomic_density_guess,
     hartree_fock,
     solve_scf,
 )
 from hafnium.symmetry import (
     DEFAULT_DEGENERACY_TOLERANCE,
+    KPoints,
     SymmetryAdaptation,
     SymmetrySpec,
     degenerate_sets,
     detect_point_group,
+    detect_space_group,
 )
 from tests import molecules
+from tests.cells import diamond_helium, hexagonal_helium
 from tests.hamiltonians import ENGINE
 from tests.shell_tables import LIBRARY
 from tests.tolerances import ENERGY_TOL, GEOMETRY_TOL, MO_ENERGY_TOL, SPIN_TOL
@@ -188,3 +193,90 @@ def test_blocked_scf_matches_pyscf(
             assert sorted(label for _, label in ours[start:end]) == sorted(
                 label for _, label in theirs[start:end]
             )
+
+
+# (cell, mesh): the wedge of a Γ-centred mesh under the space group against
+# PySCF's symmetric KRHF, a non-symmorphic crystal and a hexagonal slab.
+WEDGE_CASES: list[tuple[Callable[[], Cell], tuple[int, ...]]] = [
+    (diamond_helium, (2, 2, 2)),
+    (hexagonal_helium, (3, 3)),
+]
+
+
+@pytest.mark.reference
+@pytest.mark.parametrize(("build", "mesh_size"), WEDGE_CASES)
+def test_wedge_matches_pyscf(
+    build: Callable[[], Cell], mesh_size: tuple[int, ...]
+) -> None:
+    from tests.reference.pyscf_oracle import symmetric_kscf_reference
+
+    cell = build()
+    basis = BasisSet.for_atoms(cell, "cc-pvdz", library=LIBRARY)
+    auxiliary = BasisSet.for_atoms(cell, "def2-universal-jkfit", library=LIBRARY)
+    mesh = KPoints.mesh(mesh_size)
+    expected = symmetric_kscf_reference(cell, basis, auxiliary, mesh_size)
+    group = detect_space_group(cell)
+    # PySCF keeps the symmorphic operations, which form the site group of
+    # the atom at the origin; for a slab its search omits the operations
+    # that flip the normal, which do not change the wedge.
+    symmorphic = [op for op in group.operations if not op.has_translation]
+    if cell.dimension == 3:
+        assert len(symmorphic) == expected["n_operations"]
+    two_body = KPointDensityFittedCoulombExchange.from_cell(
+        ENGINE, basis, auxiliary, cell, mesh
+    )
+    hamiltonian = Hamiltonian.from_cell(
+        ENGINE, basis, cell, mesh, two_body, space_group=group
+    )
+    spec = SymmetrySpec.from_name("RHF").with_kpoints(mesh).with_space_group(group)
+    result = solve_scf(
+        hamiltonian,
+        spec,
+        guess=atomic_density_guess(ENGINE, basis, hamiltonian.structure(spec)),
+        options=ScfOptions(gradient_tolerance=1e-8),
+    )
+    assert result.energy == pytest.approx(expected["energy"], abs=ENERGY_TOL)
+    axis = result.structure.k_axis
+    assert axis is not None
+    stored = axis.stored(half_zone=True)
+    assert len(stored) == expected["n_wedge"]
+    own, partner = axis.stored_weights(half_zone=True)
+    weights = [o + p for o, p in zip(own, partner, strict=True)]
+    np.testing.assert_allclose(sorted(weights), sorted(expected["weights"]))
+    # Match the wedge points by their fractional coordinates: the two
+    # programs choose different representatives of a star, whose orbital
+    # energies agree since the rotation is unitary.
+    ours = {k: np.asarray(mesh.fractional[k]) for k in stored}
+    for point, energies in zip(
+        expected["fractional"], expected["mo_energies"], strict=True
+    ):
+        images = [
+            np.asarray(mesh.fractional[axis.images[g][k]])
+            for k in stored
+            for g in range(len(axis.images))
+        ]
+        matches = [
+            k
+            for k in stored
+            for g in range(len(axis.images))
+            if np.allclose(
+                (np.asarray(mesh.fractional[axis.images[g][k]]) - point + 0.5) % 1.0
+                - 0.5,
+                0.0,
+                atol=GEOMETRY_TOL,
+            )
+            or np.allclose(
+                (-np.asarray(mesh.fractional[axis.images[g][k]]) - point + 0.5) % 1.0
+                - 0.5,
+                0.0,
+                atol=GEOMETRY_TOL,
+            )
+        ]
+        assert matches, (point, images)
+        position = stored.index(matches[0])
+        np.testing.assert_allclose(
+            np.sort(np.asarray(result.mo_energies.blocks[0][position])),
+            np.sort(np.asarray(energies)),
+            atol=MO_ENERGY_TOL,
+        )
+    assert ours

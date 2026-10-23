@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from hafnium.backend import Array, Namespace, default_namespace
 from hafnium.errors import InputError
 from hafnium.molecule import Lattice
-from hafnium.structured import KAxis
+from hafnium.structured import KAxis, KPointOperations
 
 WEIGHT_TOLERANCE = 1e-12
 """Allowed deviation of the weight sum from one."""
@@ -237,15 +237,19 @@ class KPoints:
             for point in self.fractional
         )
 
-    def axis(self) -> KAxis:
+    def axis(self, operations: KPointOperations | None = None) -> KAxis:
         """Build the k axis of structured matrices over this set (ADR-0015).
+
+        With ``operations``, the point operations of a space group on the
+        set from :meth:`hafnium.symmetry.SpaceGroupAdaptation.operations`,
+        the axis stores the irreducible wedge (ADR-0024).
 
         Raises
         ------
         InputError
             If the set is not closed under time reversal.
         """
-        return KAxis(self.time_reversal_partners(), self.weights)
+        return KAxis(self.time_reversal_partners(), self.weights, operations=operations)
 
     def time_reversal_partners(self) -> tuple[int, ...]:
         """Index of the partner ``(1 − k) mod 1`` of every point.

@@ -2,9 +2,13 @@
 
 Every test runs over the molecular structures and over structures with a
 k axis: the Γ point alone, an entirely time-reversal invariant mesh, a
-chain mesh with Γ and one pair, and a shifted mesh with pairs only. With
-an axis the dense form is ``[kpt, 2n, m]`` and a trace is the k-weighted
-sum of the traces at every point.
+chain mesh with Γ and one pair, a shifted mesh with pairs only, and two
+axes with point operations (ADR-0024): the invariant mesh with the
+operation swapping two of its points, and the chain mesh with an
+inversion that maps the pair onto itself, each an operation of order two
+represented by the reversal of the functions with random Bloch phases.
+With an axis the dense form is ``[kpt, 2n, m]`` and a trace is the
+k-weighted sum of the traces at every point.
 """
 
 import numpy as np
@@ -29,6 +33,7 @@ from hafnium.structured import (
 from hafnium.symmetry import KPoints
 from tests.random_matrices import random_hermitian, random_positive_definite
 from tests.tolerances import EIGEN_TOL, STRUCTURE_TOL
+from tests.unit.test_kaxis import SWAP, involution
 
 STRUCTURES: dict[str, BlockStructure] = {
     "spatial-real": BlockStructure.spatial(Ring.REAL),
@@ -81,28 +86,51 @@ FULL_ZONE: dict[str, str] = {
     "paired-generalized": "generalized-complex",
 }
 
-AXES: dict[str, KAxis | None] = {
+PLAIN_AXES: dict[str, KAxis | None] = {
     "molecular": None,
     "gamma": KAxis.gamma(),
     "invariant-mesh": KPoints.mesh((2, 2)).axis(),
     "chain-mesh": KPoints.mesh((3,)).axis(),
     "shifted-mesh": KPoints.mesh((2, 2), shift=(0.5, 0.5)).axis(),
 }
+# (plain axis, its mesh, the integer matrix of the operation besides the identity)
+ROTATED_AXES: dict[str, tuple[str, KPoints, np.ndarray]] = {
+    "rotated-mesh": ("invariant-mesh", KPoints.mesh((2, 2)), SWAP),
+    "inverted-chain": ("chain-mesh", KPoints.mesh((3,)), -np.eye(1, dtype=int)),
+}
+AXES = sorted(PLAIN_AXES) + sorted(ROTATED_AXES)
 
 seeds = st.integers(min_value=0, max_value=2**31 - 1)
 sizes = st.integers(min_value=1, max_value=4)
 names = st.sampled_from(sorted(STRUCTURES))
-axes = st.sampled_from(sorted(AXES))
-meshes = st.sampled_from(["chain-mesh", "shifted-mesh"])
+axes = st.sampled_from(AXES)
+meshes = st.sampled_from(
+    ["chain-mesh", "shifted-mesh", "rotated-mesh", "inverted-chain"]
+)
 
 
-def structure(name: str, axis: str) -> BlockStructure:
-    return STRUCTURES[name].with_k_axis(AXES[axis])
+def k_axis_for(axis: str, n: int) -> KAxis | None:
+    """The axis ``axis`` for ``n`` spatial functions.
+
+    A rotated axis carries an operation of order two represented as a
+    crystal's would be, with lattice shifts fixed by ``n``.
+    """
+    if axis in PLAIN_AXES:
+        return PLAIN_AXES[axis]
+    plain_name, mesh, rotation = ROTATED_AXES[axis]
+    plain = PLAIN_AXES[plain_name]
+    assert plain is not None
+    operations = involution(mesh, rotation, n, 1000 + n)
+    return KAxis(plain.partners, plain.weights, operations=operations)
+
+
+def structure(name: str, axis: str, n: int) -> BlockStructure:
+    return STRUCTURES[name].with_k_axis(k_axis_for(axis, n))
 
 
 def random_dense(rng: np.random.Generator, size: int, axis: str) -> np.ndarray:
     """A random Hermitian spin-orbital matrix, one per k-point of ``axis``."""
-    k_axis = AXES[axis]
+    k_axis = k_axis_for(axis, 1)
     if k_axis is None:
         return random_hermitian(rng, size)
     return np.stack([random_hermitian(rng, size) for _ in range(k_axis.n_kpt)])
@@ -111,13 +139,13 @@ def random_dense(rng: np.random.Generator, size: int, axis: str) -> np.ndarray:
 def member(name: str, n: int, rng: np.random.Generator, axis: str) -> BlockMatrix:
     """A random Hermitian member of the structure, obtained by projection."""
     return BlockMatrix.from_dense(
-        structure(name, axis), random_dense(rng, 2 * n, axis), check=False
+        structure(name, axis, n), random_dense(rng, 2 * n, axis), check=False
     )
 
 
 def overlap_member(n: int, rng: np.random.Generator, axis: str) -> BlockMatrix:
-    """A positive-definite spatial matrix ``S(k)`` with ``S(−k) = conj(S(k))``."""
-    k_axis = AXES[axis]
+    """A positive-definite spatial matrix with the symmetry of ``axis``."""
+    k_axis = k_axis_for(axis, n)
     count = 1 if k_axis is None else k_axis.n_kpt
     blocks: list[np.ndarray] = []
     for _ in range(count):
@@ -125,7 +153,9 @@ def overlap_member(n: int, rng: np.random.Generator, axis: str) -> BlockMatrix:
         s = x @ x.conj().T + n * np.eye(n)
         blocks.append(np.block([[s, np.zeros((n, n))], [np.zeros((n, n)), s]]))
     dense = blocks[0] if k_axis is None else np.stack(blocks)
-    return BlockMatrix.from_dense(structure("spatial-real", axis), dense, check=False)
+    return BlockMatrix.from_dense(
+        structure("spatial-real", axis, n), dense, check=False
+    )
 
 
 def each(array: np.ndarray, batched: bool) -> tuple[np.ndarray, ...]:
@@ -135,7 +165,7 @@ def each(array: np.ndarray, batched: bool) -> tuple[np.ndarray, ...]:
 
 def weighted(axis: str, values: np.ndarray) -> np.ndarray:
     """Sum per-k values with the weights of ``axis`` (identity without one)."""
-    k_axis = AXES[axis]
+    k_axis = k_axis_for(axis, 1)
     if k_axis is None:
         return values
     return np.sum(np.asarray(k_axis.weights) * values, axis=0)
@@ -172,7 +202,20 @@ def test_block_algebra_matches_dense_algebra(
     assert np.allclose((a + b).to_dense(), ad + bd, atol=STRUCTURE_TOL)
     assert np.allclose((a - 2 * b).to_dense(), ad - 2 * bd, atol=STRUCTURE_TOL)
     assert np.allclose(a.adjoint().to_dense(), adjoint(ad), atol=STRUCTURE_TOL)
-    assert np.allclose(a.conj().to_dense(), ad.conj(), atol=STRUCTURE_TOL)
+    if axis in ROTATED_AXES:
+        # The conjugate of a rotated point carries the phases of −k, so the
+        # elementwise conjugate is not a member of the structure.
+        with pytest.raises(StructureError, match="not a member"):
+            a.conj()
+        with pytest.raises(StructureError, match="not a member"):
+            a.transpose()
+    else:
+        assert np.allclose(a.conj().to_dense(), ad.conj(), atol=STRUCTURE_TOL)
+        assert np.allclose(
+            a.transpose().to_dense(),
+            np.swapaxes(ad, -1, -2),
+            atol=STRUCTURE_TOL,
+        )
     assert np.allclose(a.trace(), dense_trace(axis, ad), atol=STRUCTURE_TOL)
     assert np.allclose(
         a.trace_product(b), dense_trace(axis, ad @ bd), atol=STRUCTURE_TOL
@@ -186,9 +229,9 @@ def test_embedding_is_lossless_and_projection_inverts_it(
 ) -> None:
     lower, higher = pair
     a = member(lower, n, np.random.default_rng(seed), axis)
-    embedded = a.embed(structure(higher, axis))
+    embedded = a.embed(structure(higher, axis, n))
     assert np.allclose(embedded.to_dense(), a.to_dense(), atol=STRUCTURE_TOL)
-    assert close(embedded.project(structure(lower, axis)), a)
+    assert close(embedded.project(structure(lower, axis, n)), a)
 
 
 @settings(max_examples=60, deadline=None)
@@ -202,7 +245,7 @@ def test_projection_is_idempotent(seed: int, n: int, name: str, axis: str) -> No
 @given(seed=seeds, n=sizes, name=names, axis=axes)
 def test_eigh_diagonalizes_every_block(seed: int, n: int, name: str, axis: str) -> None:
     f = member(name, n, np.random.default_rng(seed), axis)
-    batched = AXES[axis] is not None
+    batched = k_axis_for(axis, 1) is not None
     values, vectors = f.eigh()
     for fb, wb, cb in zip(f.blocks, values.blocks, vectors.blocks, strict=True):
         for f_k, w, c in zip(
@@ -218,7 +261,7 @@ def test_eigh_diagonalizes_every_block(seed: int, n: int, name: str, axis: str) 
 def test_eigh_with_overlap(seed: int, n: int, name: str, axis: str) -> None:
     rng = np.random.default_rng(seed)
     f = member(name, n, rng, axis)
-    batched = AXES[axis] is not None
+    batched = k_axis_for(axis, 1) is not None
     s = overlap_member(n, rng, axis).embed(f.structure)
     values, vectors = f.eigh(s)
     for fb, sb, wb, cb in zip(
@@ -260,7 +303,7 @@ def test_paired_structures_give_kramers_pairs(
 ) -> None:
     rng = np.random.default_rng(seed)
     f = member(name, n, rng, axis)
-    k_axis = AXES[axis]
+    k_axis = k_axis_for(axis, n)
     invariant = (True,) if k_axis is None else k_axis.invariant
     dense = f.to_dense()
     for k, flag in enumerate(invariant):
@@ -308,12 +351,14 @@ def test_half_zone_storage_agrees_with_full_zone_storage(
 ) -> None:
     """ADR-0007: storing the half zone and the full zone give the same results."""
     rng = np.random.default_rng(seed)
-    k_axis = AXES[axis]
+    k_axis = k_axis_for(axis, n)
     assert k_axis is not None
     half = member(name, n, rng, axis)
-    full_structure = structure(FULL_ZONE[name], axis)
+    full_structure = structure(FULL_ZONE[name], axis, n)
     full = half.embed(full_structure)
-    assert full.blocks[0].shape[0] == k_axis.n_kpt
+    # The complex structure stores every point, or with point operations
+    # one representative per orbit of the operations alone.
+    assert full.blocks[0].shape[0] == len(k_axis.stored(half_zone=False))
     other = member(name, n, rng, axis)
     assert np.allclose(half.trace(), full.trace(), atol=STRUCTURE_TOL)
     assert np.allclose(
@@ -491,7 +536,7 @@ def test_paired_occupations_must_respect_kramers_pairs() -> None:
 
 
 def test_time_reversal_is_checked_at_the_invariant_k_points_only() -> None:
-    chain = AXES["chain-mesh"]
+    chain = PLAIN_AXES["chain-mesh"]
     assert chain is not None
     paired = BlockStructure.paired_generalized().with_k_axis(chain)
     _, vectors = BlockMatrix.identity(paired, 2).eigh()

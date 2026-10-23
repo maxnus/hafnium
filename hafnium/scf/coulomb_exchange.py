@@ -12,8 +12,10 @@ the structured matrices from them.
 
 With a k axis the contractions run over the full set of k-points
 (ADR-0020): the builder takes ``[kpt, ao, ao]`` arrays, the assembly
-materializes the partners the structure derives, and the results are
-stored back at the stored k-points in the ring of each block. The Bloch
+materializes the points the structure derives, and the results are
+projected back onto the stored k-points in the ring of each block, each
+averaged over its orbit under time reversal and the point operations of
+the space group (ADR-0024). The Bloch
 integrals conjugate the first function of each pair, so
 ``J[u, v](k) = Σ_k' w_k' Σ_wx (u k v k | w k' x k') D[x, w](k')``. With
 irrep sectors the contractions run in the atomic basis (ADR-0023): the
@@ -42,7 +44,7 @@ from hafnium.integrals.periodic import RangeSeparation
 from hafnium.integrals.two_electron import DEFAULT_SCHWARZ_THRESHOLD
 from hafnium.molecule import Cell, Molecule
 from hafnium.structured import BlockMatrix, Ring, Spin
-from hafnium.structured.dense import expand_k
+from hafnium.structured.dense import expand_k, reduce_k
 from hafnium.structured.validation import cast_to_ring
 from hafnium.symmetry import KPoints
 
@@ -303,8 +305,8 @@ def coulomb_exchange_matrices(
     antisymmetric and drops out of the contraction with the symmetric
     integrals; over k-points the full set of the spin trace. The exchange
     matrix of a stored block is the contraction of each of its spin
-    sub-blocks, over the full k set when there is a k axis, stored back at
-    the block's k-points in its ring.
+    sub-blocks, over the full k set when there is a k axis, projected back
+    onto the block's stored k-points in its ring.
     """
     n = density.n_spatial
     if n != two_body.n_ao:
@@ -371,13 +373,13 @@ def _periodic_matrices(
         if any(block.ring is Ring.COMPLEX for block in structure.stored_blocks)
         else Ring.REAL
     )
-    coulomb = BlockMatrix.from_spatial(coulomb_full, axis, ring=ring).embed(structure)
+    coulomb = BlockMatrix.from_spatial(
+        coulomb_full, axis, ring=ring, check=False
+    ).embed(structure)
     exchange: list[Array] = []
     for block, array in zip(structure.stored_blocks, density.blocks, strict=True):
         full = _exchange_block(two_body, expand_k(structure, block, array, wanted), n)
-        stored = structure.stored_kpoints(block)
-        assert stored is not None
-        kept = xp.take(full, xp.asarray(stored, dtype=xp.int64), axis=0)
+        kept = reduce_k(structure, block, full, check=False, tolerance=0.0)
         exchange.append(cast_to_ring(xp, kept, structure.storage_ring(block)))
     return coulomb, BlockMatrix(structure, tuple(exchange))
 
