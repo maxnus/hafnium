@@ -979,7 +979,7 @@ irrep, and `SymmetrySpec.point_group` asks for it; all eight classes
 reproduce the unconstrained results for symmetric molecules, and
 energies, orbital energies, labels and electrons per irrep match PySCF's
 symmetry-adapted classes. Part three done 2026-10-23 (ADR-0024): space
-groups through spglib as an optional dependency, the Wigner matrices of
+groups through spglib, now a dependency, the Wigner matrices of
 real solid harmonics from their polynomial table, the action of the
 group on the Bloch basis with lattice phases, the point operations as an
 attribute of the k axis so that every class stores the irreducible wedge
@@ -1068,8 +1068,10 @@ for periodic results.
    crystal symmetry, C with Python bindings, BSD-3-Clause) as an optional
    dependency, versus an own implementation. Molecular point groups stay
    in-house either way, since spglib does not treat finite systems.
-   Decided 2026-10-23 (ADR-0024): spglib as the optional `symmetry`
-   extra, chains and slabs padded for it.
+   Decided 2026-10-23 (ADR-0024): spglib, as a required dependency
+   rather than an extra, since it is a small wheel and the periodic
+   systems it serves are a primary target; chains and slabs are padded
+   for it.
 4. The nuclear charge model for relativistic calculations (§5.10): point
    nuclei (PySCF's default, the simplest oracle comparison) versus the
    Gaussian model of Visscher and Dyall (DIRAC's default, what the

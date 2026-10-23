@@ -30,7 +30,7 @@ detection to spglib if confirmed. Open were:
 
 ## Decision
 
-- **spglib detects the space group, as an optional dependency.**
+- **spglib detects the space group, as a dependency of the library.**
   `detect_space_group(cell, tolerance=1e-5)` passes the lattice, the
   fractional positions and the atomic numbers to spglib and returns a
   `SpaceGroup` with the Hermann–Mauguin symbol, the number, the crystal
@@ -48,8 +48,11 @@ detection to spglib if confirmed. Open were:
   onto the cell itself, not onto a padded image, are kept, the
   translation along an open direction being resolved between its two
   values within one padding; the names are those of the padded cell.
-  Without spglib (`hafnium[symmetry]`) detection raises; molecular point
-  groups stay in-house (ADR-0022).
+  spglib is required rather than optional: it is a small wheel with no
+  dependency beyond NumPy, the periodic systems it serves are a primary
+  target of the library, and an optional import would leave a code path
+  the test suite never runs. Molecular point groups stay in-house
+  (ADR-0022).
 - **The group acts on the Bloch basis by rotated functions and lattice
   phases.** A Wigner matrix of the real solid harmonics,
   `S_lm(R⁻¹ r) = Σ_m' D^l[m', m] S_lm'(r)`, is computed exactly from the

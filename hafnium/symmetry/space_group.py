@@ -1,9 +1,8 @@
 """Space groups of crystals and their action on the Bloch basis (ADR-0024).
 
-The space group of a cell is found by spglib, an optional dependency
-(``hafnium[symmetry]``). Its operations ``{R | t}`` map the crystal onto
-itself; the point operations ``R`` map a k-point to ``Rk`` and the Bloch
-functions at ``k`` to those at ``Rk``,
+The space group of a cell is found by spglib. Its operations ``{R | t}``
+map the crystal onto itself; the point operations ``R`` map a k-point to
+``Rk`` and the Bloch functions at ``k`` to those at ``Rk``,
 
 ``O_g φ_μ^k = exp(−i (Rk)·T_A) Σ_m' D^l(R)[m', m] φ_{g(A) m'}^{Rk}``,
 
@@ -28,6 +27,8 @@ import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Any
+
+import spglib
 
 from hafnium.backend import Array, Namespace, array_namespace, default_namespace
 from hafnium.basis import BasisSet
@@ -241,20 +242,13 @@ def detect_space_group(
     Raises
     ------
     InputError
-        If spglib is not installed, the tolerance is not positive, or the
-        basis does not cover the cell's atoms.
+        If the tolerance is not positive, or the basis does not cover the
+        cell's atoms.
     """
     if not tolerance > 0.0:
         raise InputError("the symmetry tolerance is positive")
     if basis is not None and basis.n_atoms != cell.n_atoms:
         raise InputError("the basis set and the cell have different atom counts")
-    try:
-        import spglib
-    except ImportError:
-        raise InputError(
-            "space-group detection needs spglib; install the 'symmetry' extra "
-            "(hafnium[symmetry])"
-        ) from None
     # spglib 2.x reports failures through exceptions once its old error
     # handling is switched off; the switch disappears in a later version.
     error_module: Any = getattr(spglib, "error", None)
