@@ -90,6 +90,22 @@ def test_lower_dimensional_cells_keep_their_open_directions() -> None:
             assert not np.any(w[:d, d:])
             assert not np.any(w[d:, :d])
             assert all(t == 0.0 for t in operation.translation[d:])
+    # A slab thicker than the in-plane constant: the padding grows with the
+    # extent of the atoms, so the layers are not confused with padded images.
+    thick = Cell.from_molecule(
+        Molecule.from_atoms(
+            [("He", (0.0, 0.0, 0.0)), ("He", (0.0, 0.0, 9.0))], unit="bohr"
+        ),
+        hexagonal_helium().lattice,
+    )
+    group = detect_space_group(thick)
+    assert group.name == "P6/mmm (191)"
+    assert group.order == 24
+    basis = BasisSet.for_atoms(thick, "sto-3g", library=LIBRARY)
+    adaptation = SpaceGroupAdaptation.from_basis(
+        basis, thick, group, KPoints.mesh((2, 2))
+    )
+    assert adaptation.atom_images[1] in ((0, 1), (1, 0))
 
 
 def test_k_point_images_and_the_restricted_subgroup() -> None:
@@ -200,6 +216,17 @@ def test_adaptations_are_validated() -> None:
     unequal = BasisSet("mixed", mixed.atom_symbols, shells, atoms)
     with pytest.raises(SymmetryError, match="different basis functions"):
         SpaceGroupAdaptation.from_basis(unequal, pair, pair_group, mesh)
+    # Typed by their bases, the two atoms are no longer equivalent: the
+    # cubic site group of each remains, and the adaptation accepts it.
+    lower = detect_space_group(pair, basis=unequal)
+    assert lower.order == 48
+    assert lower.name == "Pm-3m (221)"
+    assert SpaceGroupAdaptation.from_basis(unequal, pair, lower, mesh).group == lower
+    with pytest.raises(InputError, match="atom counts"):
+        detect_space_group(
+            pair,
+            basis=BasisSet.for_atoms(cells.helium_atom(), "sto-3g", library=LIBRARY),
+        )
     # A group of another cell does not map the atoms.
     with pytest.raises(SymmetryError, match="does not map atom"):
         SpaceGroupAdaptation.from_basis(

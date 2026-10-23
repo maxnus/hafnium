@@ -18,11 +18,13 @@ k-points from the irreducible wedge (:class:`hafnium.structured.KPointOperations
 
 A chain or a slab is padded with vectors along its open directions for
 spglib, and only the operations that keep the open directions apart from
-the periodic ones are kept.
+the periodic ones and map the atoms onto the cell itself, not onto a
+padded image of it, are kept.
 """
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,8 +34,8 @@ from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import Cell, atomic_number
 from hafnium.structured import KPointOperations
-from hafnium.symmetry.detection import DEFAULT_SYMMETRY_TOLERANCE
-from hafnium.symmetry.kpoints import PARTNER_TOLERANCE, KPoints
+from hafnium.symmetry.detection import DEFAULT_SYMMETRY_TOLERANCE, determinant
+from hafnium.symmetry.kpoints import KPoints, match_points
 from hafnium.symmetry.rotations import basis_rotation
 
 Vector = tuple[float, float, float]
@@ -42,10 +44,13 @@ IntegerMatrix = tuple[tuple[int, int, int], ...]
 
 PADDING_FACTOR = 1.37
 """The open directions of a chain or a slab are padded with vectors this
-many times the longest periodic vector, a length no periodic vector shares."""
+many times the longest periodic vector, a length no periodic vector shares,
+plus the extent of the atoms along the direction."""
 
 _TRANSLATION_TOLERANCE = 1e-8
-"""Fractional translation below which an operation counts as symmorphic."""
+"""Fractional translation below which an operation carries none; the
+translations spglib reports are first snapped to the integers they lie
+within the detection tolerance of."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +87,7 @@ class SpaceGroupOperation:
     @property
     def is_proper(self) -> bool:
         """Whether ``R`` is a rotation (determinant ``+1``) rather than improper."""
-        return _determinant(self.matrix) > 0.0
+        return determinant(self.matrix) > 0.0
 
     @property
     def is_inversion(self) -> bool:
@@ -212,27 +217,37 @@ class SpaceGroup:
             _integer_inverse(operation.rotation)[:d], dtype=xp.float64
         )[:, :d]
         points = kpoints.fractional_array(xp)
-        return _match_points(xp, points, points @ inverse)
+        indices, counts = match_points(points, points @ inverse)
+        return indices if all(count == 1 for count in counts) else None
 
 
 def detect_space_group(
-    cell: Cell, *, tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
+    cell: Cell,
+    *,
+    basis: BasisSet | None = None,
+    tolerance: float = DEFAULT_SYMMETRY_TOLERANCE,
 ) -> SpaceGroup:
     """Detect the space group of ``cell`` with spglib.
 
-    Atoms are equivalent when they are the same element; the basis set is
-    checked when the adaptation is built. Every operation must map each
-    atom onto an atom within ``tolerance`` Bohr. The operations of a chain
-    or a slab are those of the cell padded along its open directions that
-    keep the open directions apart from the periodic ones.
+    Atoms are equivalent when they are the same element and, with
+    ``basis``, carry the same shells, so a cell whose atoms of one element
+    differ in their basis sets gets the subgroup that respects them. Every
+    operation must map each atom onto an atom within ``tolerance`` Bohr.
+    The operations of a chain or a slab are those of the cell padded along
+    its open directions that keep the open directions apart from the
+    periodic ones and map the atoms onto the cell rather than onto one of
+    its padded images.
 
     Raises
     ------
     InputError
-        If spglib is not installed, or the tolerance is not positive.
+        If spglib is not installed, the tolerance is not positive, or the
+        basis does not cover the cell's atoms.
     """
     if not tolerance > 0.0:
         raise InputError("the symmetry tolerance is positive")
+    if basis is not None and basis.n_atoms != cell.n_atoms:
+        raise InputError("the basis set and the cell have different atom counts")
     try:
         import spglib
     except ImportError:
@@ -248,10 +263,10 @@ def detect_space_group(
     xp = default_namespace()
     padded = _padded_vectors(cell, xp)
     fractional = cell.positions_array(xp) @ xp.linalg.inv(padded)
-    numbers = [atomic_number(symbol) for symbol in cell.symbols]
     try:
         dataset: Any = spglib.get_symmetry_dataset(
-            (_rows(padded), _rows(fractional), numbers), symprec=tolerance
+            (_rows(padded), _rows(fractional), _atom_types(cell, basis)),
+            symprec=tolerance,
         )
     except spglib.SpglibError as error:
         raise SymmetryError(
@@ -260,12 +275,17 @@ def detect_space_group(
     if dataset is None:
         raise SymmetryError("spglib could not determine the space group of the cell")
     operations: list[SpaceGroupOperation] = []
+    lengths = [float(x) for x in xp.linalg.vector_norm(padded, axis=-1)]
+    snap = [tolerance / length for length in lengths]
     for rotation, translation in zip(
         dataset.rotations, dataset.translations, strict=True
     ):
-        operation = _operation(xp, padded, rotation, translation, cell.dimension)
-        if operation is not None:
-            operations.append(operation)
+        for candidate in _candidates(
+            xp, padded, rotation, translation, cell.dimension, snap
+        ):
+            if cell.dimension == 3 or _maps_atoms(cell, candidate, tolerance):
+                operations.append(candidate)
+                break
     operations.sort(key=lambda operation: not operation.is_identity)
     return SpaceGroup(
         str(dataset.international),
@@ -277,14 +297,47 @@ def detect_space_group(
     )
 
 
+def _atom_types(cell: Cell, basis: BasisSet | None) -> list[int]:
+    """Return a type per atom: the atomic number, split further by the shells."""
+    numbers = [atomic_number(symbol) for symbol in cell.symbols]
+    if basis is None:
+        return numbers
+    shells = [
+        tuple(
+            shell
+            for shell, centre in zip(basis.shells, basis.shell_atoms, strict=True)
+            if centre == atom
+        )
+        for atom in range(cell.n_atoms)
+    ]
+    kinds: dict[tuple[int, tuple[Any, ...]], int] = {}
+    types: list[int] = []
+    for number, own in zip(numbers, shells, strict=True):
+        key = (number, own)
+        if key not in kinds:
+            # Distinct types for spglib: the element plus a tag per basis,
+            # well apart from the atomic numbers.
+            kinds[key] = number + 1000 * sum(1 for other in kinds if other[0] == number)
+        types.append(kinds[key])
+    return types
+
+
 def _padded_vectors(cell: Cell, xp: Namespace) -> Array:
-    """Three lattice vectors ``[3, 3]``, the open directions padded."""
+    """Three lattice vectors ``[3, 3]``, the open directions padded.
+
+    Each padding vector is :data:`PADDING_FACTOR` times the longest
+    periodic vector plus the extent of the atoms along the direction, so
+    that no padded image of the cell interleaves with the cell itself.
+    """
     lattice = cell.lattice
     vectors = lattice.vectors_array(xp)
     if lattice.dimension == 3:
         return vectors
     longest = float(xp.max(xp.linalg.vector_norm(vectors, axis=-1)))
-    padding = PADDING_FACTOR * longest * lattice.perpendicular_vectors_array(xp)
+    normals = lattice.perpendicular_vectors_array(xp)
+    heights = cell.positions_array(xp) @ xp.linalg.matrix_transpose(normals)
+    extent = xp.max(heights, axis=0) - xp.min(heights, axis=0)
+    padding = (PADDING_FACTOR * longest + xp.expand_dims(extent, 1)) * normals
     return xp.concat([vectors, padding], axis=0)
 
 
@@ -292,28 +345,36 @@ def _rows(array: Array) -> list[list[float]]:
     return [[float(x) for x in row] for row in array]
 
 
-def _operation(
-    xp: Namespace, padded: Array, rotation: Any, translation: Any, dimension: int
-) -> SpaceGroupOperation | None:
-    """Build one operation from spglib's integer matrix and translation.
+def _candidates(
+    xp: Namespace,
+    padded: Array,
+    rotation: Any,
+    translation: Any,
+    dimension: int,
+    snap: list[float],
+) -> list[SpaceGroupOperation]:
+    """Build the operations spglib's integer matrix and translation may mean.
 
-    Returns ``None`` for an operation of the padded cell that mixes the
-    open directions of a chain or a slab with the periodic ones, or
-    translates along them.
+    A translation within ``snap`` (the detection tolerance in fractional
+    units of each vector) of an integer is taken as that integer, so the
+    noise of a nearly symmetric cell does not register as a fractional
+    translation. For a chain or a slab the translation along an open
+    direction is known modulo the padding only, so both of its values
+    within one padding of the origin are returned, and an operation of
+    the padded cell that mixes the open directions with the periodic ones
+    yields nothing.
     """
     w = [[int(x) for x in row] for row in rotation]
-    t = [float(x) for x in translation]
-    if dimension < 3:
-        for i in range(3):
-            for j in range(3):
-                if (i < dimension) != (j < dimension) and w[i][j] != 0:
-                    return None
-        if any(
-            abs(t[i] - round(t[i])) > _TRANSLATION_TOLERANCE
-            for i in range(dimension, 3)
-        ):
-            return None
-        t = [t[i] if i < dimension else 0.0 for i in range(3)]
+    if any(
+        (i < dimension) != (j < dimension) and w[i][j] != 0
+        for i in range(3)
+        for j in range(3)
+    ):
+        return []
+    t = [
+        float(round(x)) if abs(x - round(x)) <= within else float(x)
+        for x, within in zip(translation, snap, strict=True)
+    ]
     t = [x - math.floor(x + _TRANSLATION_TOLERANCE) for x in t]
     integer = xp.asarray(w, dtype=xp.float64)
     # r' = R r + t with r = x A: R = Aᵀ W (Aᵀ)⁻¹, orthogonalized by its
@@ -322,23 +383,32 @@ def _operation(
     transposed = xp.linalg.matrix_transpose(padded)
     raw = transposed @ integer @ xp.linalg.inv(transposed)
     left, _, right = xp.linalg.svd(raw)
-    matrix = left @ right
-    shift = xp.asarray(t, dtype=xp.float64) @ padded
-    return SpaceGroupOperation(
-        tuple(tuple(row) for row in w),  # type: ignore[arg-type]
-        (t[0], t[1], t[2]),
-        tuple(tuple(float(x) for x in row) for row in matrix),  # type: ignore[arg-type]
-        (float(shift[0]), float(shift[1]), float(shift[2])),
-    )
+    matrix = tuple(tuple(float(x) for x in row) for row in left @ right)
+    choices = [
+        (t[i],) if i < dimension or t[i] == 0.0 else (t[i], t[i] - 1.0)
+        for i in range(3)
+    ]
+    candidates: list[SpaceGroupOperation] = []
+    for fractional in itertools.product(*choices):
+        shift = xp.asarray(fractional, dtype=xp.float64) @ padded
+        candidates.append(
+            SpaceGroupOperation(
+                tuple(tuple(row) for row in w),  # type: ignore[arg-type]
+                fractional,  # type: ignore[arg-type]
+                matrix,  # type: ignore[arg-type]
+                (float(shift[0]), float(shift[1]), float(shift[2])),
+            )
+        )
+    return candidates
 
 
-def _determinant(frame: Frame) -> float:
-    a, b, c = frame
-    return (
-        a[0] * (b[1] * c[2] - b[2] * c[1])
-        - a[1] * (b[0] * c[2] - b[2] * c[0])
-        + a[2] * (b[0] * c[1] - b[1] * c[0])
-    )
+def _maps_atoms(cell: Cell, operation: SpaceGroupOperation, tolerance: float) -> bool:
+    """Whether ``operation`` maps every atom of ``cell`` onto an atom of the cell."""
+    try:
+        _atom_images(cell, operation, 0, tolerance)
+    except SymmetryError:
+        return False
+    return True
 
 
 def _integer_inverse(rotation: IntegerMatrix) -> IntegerMatrix:
@@ -351,19 +421,6 @@ def _integer_inverse(rotation: IntegerMatrix) -> IntegerMatrix:
             "a space-group rotation is an integer matrix of determinant ±1"
         )
     return tuple(tuple(row) for row in rounded)  # type: ignore[return-value]
-
-
-def _match_points(
-    xp: Namespace, points: Array, targets: Array
-) -> tuple[int, ...] | None:
-    """Index in ``points`` of each target modulo one, or ``None`` if one is missing."""
-    difference = xp.expand_dims(points, 0) - xp.expand_dims(targets, 1)
-    distance = xp.abs((difference + 0.5) % 1.0 - 0.5)
-    matches = xp.all(distance <= PARTNER_TOLERANCE, axis=-1)
-    counts = xp.sum(xp.astype(matches, xp.int64), axis=1)
-    if bool(xp.any(counts != 1)):
-        return None
-    return tuple(int(index) for index in xp.argmax(matches, axis=1))
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -449,7 +506,6 @@ class SpaceGroupAdaptation:
                 f"{kpoints.dimension}-dimensional k-points do not fit a "
                 f"{cell.dimension}-dimensional cell"
             )
-        group.kpoint_images(kpoints)
         xp = default_namespace()
         atom_images: list[tuple[int, ...]] = []
         shifts: list[Array] = []

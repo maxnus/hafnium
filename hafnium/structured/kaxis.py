@@ -355,14 +355,6 @@ class KAxis:
             if derivation.is_stored
         )
 
-    def orbit(self, source: int, half_zone: bool) -> tuple[int, ...]:
-        """Return the points derived from ``source``, the stored point included."""
-        return tuple(
-            k
-            for k, derivation in enumerate(self.derivations(half_zone))
-            if derivation.source == source
-        )
-
     def stored_weights(
         self, half_zone: bool
     ) -> tuple[tuple[float, ...], tuple[float, ...]]:
@@ -427,4 +419,6 @@ def _derivations(
             k = partners[row[source]]
             if table[k] is None:
                 table[k] = KDerivation(source, operation, True)
+    if any(derivation is None for derivation in table):
+        raise StructureError("the identity operation reaches every k-point")
     return tuple(derivation for derivation in table if derivation is not None)

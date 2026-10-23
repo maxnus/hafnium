@@ -126,7 +126,8 @@ def _improper(axis: Vector, order: int) -> Frame:
 _INVERSION: Frame = ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0))
 
 
-def _determinant(frame: Frame) -> float:
+def determinant(frame: Frame) -> float:
+    """Return the determinant of a ``[3, 3]`` matrix given as three rows."""
     return _dot(frame[0], _cross(frame[1], frame[2]))
 
 
@@ -138,7 +139,7 @@ def _make_frame(z: Vector, x: Vector) -> Frame:
 
 def _proper(frame: Frame) -> Frame:
     """Flip axes so the frame is right-handed and closest to the input axes."""
-    flip = -1.0 if _determinant(frame) < 0.0 else 1.0
+    flip = -1.0 if determinant(frame) < 0.0 else 1.0
     best: Frame | None = None
     best_trace = -math.inf
     for sx in (1.0, -1.0):

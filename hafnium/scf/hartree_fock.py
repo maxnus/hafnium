@@ -72,6 +72,10 @@ def _hamiltonian(
                 "a cell needs an auxiliary basis: its two-electron terms are "
                 "density-fitted"
             )
+        if symmetry.space_group is not None:
+            # Fails fast on a k-point set the group does not map onto itself,
+            # before the fitted integrals are built.
+            symmetry.space_group.kpoint_images(symmetry.kpoints)
         two_body = KPointDensityFittedCoulombExchange.from_cell(
             engine, basis, auxiliary, system, symmetry.kpoints
         )

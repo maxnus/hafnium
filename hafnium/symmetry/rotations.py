@@ -101,7 +101,9 @@ def basis_rotation(basis: BasisSet, matrix: Array, atom_images: Sequence[int]) -
     ``Π[ν, μ] = D^l(R)[m', m]``, so that ``Π`` is orthogonal and an
     operator commuting with the operation satisfies ``Π M Πᵀ = M`` for a
     molecule (the Bloch phases of a crystal are applied by the caller).
-    Atoms related by the operation must carry equal shells.
+    Atoms related by the operation must carry equal shells. ``Π`` is the
+    block-diagonal matrix of the Wigner matrices of every shell with its
+    rows moved to the functions of the image atoms.
 
     Raises
     ------
@@ -119,7 +121,7 @@ def basis_rotation(basis: BasisSet, matrix: Array, atom_images: Sequence[int]) -
         l: solid_harmonic_rotation(l, matrix)
         for l in {shell.angular_momentum for shell in basis.shells}
     }
-    blocks: list[tuple[int, int, Array]] = []
+    targets = [0] * basis.n_shells
     for atom, image in enumerate(atom_images):
         own, other = shells_of[atom], shells_of[image]
         if [basis.shells[s] for s in own] != [basis.shells[s] for s in other]:
@@ -128,18 +130,28 @@ def basis_rotation(basis: BasisSet, matrix: Array, atom_images: Sequence[int]) -
                 "different basis functions"
             )
         for source, target in zip(own, other, strict=True):
-            shell = basis.shells[source]
-            width = 2 * shell.angular_momentum + 1
-            for contraction in range(shell.n_contractions):
-                blocks.append(
-                    (
-                        offsets[target] + contraction * width,
-                        offsets[source] + contraction * width,
-                        rotations[shell.angular_momentum],
-                    )
+            targets[source] = target
+    # Rows of the block-diagonal matrix in the order of the functions, and
+    # the function each row lands on.
+    rows: list[Array] = []
+    landing: list[int] = []
+    for index, shell in enumerate(basis.shells):
+        width = 2 * shell.angular_momentum + 1
+        block = rotations[shell.angular_momentum]
+        for contraction in range(shell.n_contractions):
+            start = offsets[index] + contraction * width
+            rows.append(
+                xp.concat(
+                    [
+                        xp.zeros((width, start), dtype=xp.float64),
+                        block,
+                        xp.zeros((width, n - start - width), dtype=xp.float64),
+                    ],
+                    axis=1,
                 )
-    result = xp.zeros((n, n), dtype=xp.float64)
-    for row, column, block in blocks:
-        width = int(block.shape[0])
-        result[row : row + width, column : column + width] = block
-    return result
+            )
+            target = offsets[targets[index]] + contraction * width
+            landing.extend(range(target, target + width))
+    stacked = xp.concat(rows, axis=0)
+    order = sorted(range(n), key=lambda position: landing[position])
+    return xp.take(stacked, xp.asarray(order, dtype=xp.int64), axis=0)

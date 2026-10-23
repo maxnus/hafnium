@@ -110,6 +110,24 @@ def check_wedge_against_full_zone(
     projected = full.density.project(wedge.structure)
     for block, other in zip(projected.blocks, wedge.density.blocks, strict=True):
         np.testing.assert_allclose(block, other, atol=CONVERGED_DENSITY_TOL)
+    # The orbital coefficients derived at the rotated points, C(Rk) = U C(k),
+    # solve F C = S C ε there with the derived Fock matrix and the overlap
+    # of the Hamiltonian at the full set.
+    coefficients = wedge.mo_coefficients.spin_blocks(orbitals=True)
+    focks = wedge.fock.spin_blocks()
+    energies = wedge.mo_energies.materialized()
+    overlap = np.asarray(reduced.overlap)
+    spinor = wedge.structure.is_spinor
+    for spin, (c, f) in enumerate(zip(coefficients, focks, strict=True)):
+        s = np.kron(np.eye(2), overlap) if spinor else overlap
+        e = (
+            energies[0]
+            if wedge.structure.is_spatial
+            else energies[min(spin, len(energies) - 1)]
+        )
+        np.testing.assert_allclose(
+            f @ c, (s @ c) * e[:, None, :], atol=FINAL_FOCK_RESIDUAL_TOL
+        )
 
 
 @pytest.mark.parametrize("name", CLASSES)

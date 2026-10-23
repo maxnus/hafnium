@@ -18,7 +18,7 @@ from hafnium.structured import (
 )
 from hafnium.symmetry import KPoints, SymmetrySpec
 from tests.random_matrices import random_hermitian
-from tests.tolerances import EIGEN_TOL, STRUCTURE_TOL
+from tests.tolerances import EIGEN_TOL, GEOMETRY_TOL, STRUCTURE_TOL
 
 CHAIN = KPoints.mesh((3,)).axis()
 """Γ and one pair: partners (0, 2, 1)."""
@@ -231,7 +231,7 @@ def involution(
     images: list[int] = []
     for k in range(mesh.n_kpt):
         distance = np.abs((fractional - moved[k] + 0.5) % 1.0 - 0.5).max(axis=1)
-        assert distance.min() < 1e-10
+        assert distance.min() < GEOMETRY_TOL
         images.append(int(np.argmin(distance)))
     shifts = np.zeros((n, d), dtype=int)
     for i in range(n // 2):
@@ -274,7 +274,7 @@ def test_point_operations_reduce_the_stored_points() -> None:
     assert axis.stored(half_zone=False) == (0, 1, 3)
     assert axis.derivation(2, half_zone=False) == KDerivation(1, 1, False)
     assert axis.derivation(1, half_zone=True).is_stored
-    assert axis.orbit(1, half_zone=True) == (1, 2)
+    assert [d.source for d in axis.derivations(half_zone=True)] == [0, 1, 1, 3]
     own, partner = axis.stored_weights(half_zone=True)
     assert own == pytest.approx((0.25, 0.5, 0.25))
     assert partner == (0.0, 0.0, 0.0)

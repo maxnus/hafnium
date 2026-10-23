@@ -500,6 +500,8 @@ def reduce_k(
         return (full + antiunitary(block.ring, full, matrix=True)) / 2
     half_zone = structure.half_zone(block)
     operations = axis.operations
+    if operations is None and not half_zone:
+        return full
     parts: list[Array] = []
     for source in axis.stored(half_zone):
         total: Array | None = None

@@ -186,7 +186,8 @@ uses [Semantic Versioning](https://semver.org/).
   energies, labels and electrons per irrep match PySCF (ADR-0023).
 - Spatial symmetry (M6, part three): space groups of crystals through
   spglib, an optional dependency (`hafnium[symmetry]`; `SpaceGroup`,
-  `detect_space_group`, `SpaceGroup.restricted_to`), the Wigner matrices
+  `detect_space_group(cell, basis=)`, `SpaceGroup.restricted_to`), chains
+  and slabs padded along their open directions, the Wigner matrices
   of real solid harmonics from their polynomial table
   (`solid_harmonic_rotation`, `basis_rotation`,
   `hafnium.basis.solid_harmonic_coefficients`), the action of the group

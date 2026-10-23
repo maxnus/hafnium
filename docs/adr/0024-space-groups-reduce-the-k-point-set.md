@@ -38,13 +38,18 @@ detection to spglib if confirmed. Open were:
   fractional translation in the lattice basis and the Cartesian
   rotation and shift; the Cartesian matrix is taken from the polar
   decomposition of `Aᵀ W (Aᵀ)⁻¹`, so a lattice symmetric within the
-  tolerance gives exactly orthogonal operations. A chain or a slab is
-  padded along its open directions with vectors `1.37` times its longest
-  periodic vector, and only the operations that keep the open directions
-  apart from the periodic ones, without translating along them, are
-  kept; the names are those of the padded cell. Without spglib
-  (`hafnium[symmetry]`) detection raises; molecular point groups stay
-  in-house (ADR-0022).
+  tolerance gives exactly orthogonal operations, and translations within
+  the tolerance of an integer are taken as that integer. Atoms are
+  equivalent when they are the same element and, given the basis, carry
+  the same shells. A chain or a slab is padded along its open directions
+  with vectors `1.37` times its longest periodic vector plus the extent
+  of the atoms along the direction, and only the operations that keep
+  the open directions apart from the periodic ones and map the atoms
+  onto the cell itself, not onto a padded image, are kept, the
+  translation along an open direction being resolved between its two
+  values within one padding; the names are those of the padded cell.
+  Without spglib (`hafnium[symmetry]`) detection raises; molecular point
+  groups stay in-house (ADR-0022).
 - **The group acts on the Bloch basis by rotated functions and lattice
   phases.** A Wigner matrix of the real solid harmonics,
   `S_lm(R⁻¹ r) = Σ_m' D^l[m', m] S_lm'(r)`, is computed exactly from the

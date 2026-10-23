@@ -14,7 +14,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from hafnium.backend import Array, Namespace, default_namespace
+from hafnium.backend import Array, Namespace, array_namespace, default_namespace
 from hafnium.errors import InputError
 from hafnium.molecule import Lattice
 from hafnium.structured import KAxis, KPointOperations
@@ -261,20 +261,37 @@ class KPoints:
         """
         xp = default_namespace()
         points = self.fractional_array(xp)
-        partners: list[int] = []
-        for start in range(0, self.n_kpt, _PARTNER_CHUNK):
-            targets = (-points[start : start + _PARTNER_CHUNK, :]) % 1.0
-            difference = xp.expand_dims(points, 0) - xp.expand_dims(targets, 1)
-            distance = xp.abs((difference + 0.5) % 1.0 - 0.5)
-            matches = xp.all(distance <= PARTNER_TOLERANCE, axis=-1)
-            counts = xp.sum(xp.astype(matches, xp.int64), axis=1)
-            if bool(xp.any(counts == 0)):
-                missing = start + int(xp.argmin(counts))
+        indices, counts = match_points(points, (-points) % 1.0)
+        for k, count in enumerate(counts):
+            if count == 0:
                 raise InputError(
-                    f"k-point {missing} at {self.fractional[missing]} has no "
-                    "time-reversal partner in the set"
+                    f"k-point {k} at {self.fractional[k]} has no time-reversal "
+                    "partner in the set"
                 )
-            if bool(xp.any(counts > 1)):
+            if count > 1:
                 raise InputError("the k-point set holds duplicate points")
-            partners.extend(int(index) for index in xp.argmax(matches, axis=1))
-        return tuple(partners)
+        return indices
+
+
+def match_points(
+    points: Array, targets: Array
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Locate ``targets`` ``[m, d]`` among ``points`` ``[n, d]`` modulo one.
+
+    Returns the index in ``points`` of every target (the first match, or
+    the nearest point when there is none) and the number of points within
+    :data:`PARTNER_TOLERANCE` of it, zero for a missing target and more
+    than one for duplicates. The targets are matched in chunks, bounding
+    the work array.
+    """
+    xp = array_namespace(points, targets)
+    indices: list[int] = []
+    counts: list[int] = []
+    for start in range(0, int(targets.shape[0]), _PARTNER_CHUNK):
+        chunk = targets[start : start + _PARTNER_CHUNK, :]
+        difference = xp.expand_dims(points, 0) - xp.expand_dims(chunk, 1)
+        distance = xp.abs((difference + 0.5) % 1.0 - 0.5)
+        matches = xp.all(distance <= PARTNER_TOLERANCE, axis=-1)
+        counts.extend(int(c) for c in xp.sum(xp.astype(matches, xp.int64), axis=1))
+        indices.extend(int(index) for index in xp.argmax(matches, axis=1))
+    return tuple(indices), tuple(counts)
