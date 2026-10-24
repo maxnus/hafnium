@@ -961,10 +961,14 @@ part of version 1. The real-space three-centre sum rebuilt 2026-10-24
 (ADR-0025): image lists by the exponents with the neglected tail bounded,
 screening tabulated once per step, accumulation per Born–von Kármán class
 and each pair of images evaluated once, which builds the fitted tensor of
-a silicon cell (def2-SVP, 2×2×2) in 19 s instead of 129 s; the remaining
-cost is the primitive quartets, the phase scatter and the reciprocal-space
-pair transforms, and fitting pairs of diffuse functions in reciprocal
-space stays on the later list.
+a silicon cell (def2-SVP, 2×2×2) in 19 s instead of 129 s. ADR-0028
+(2026-10-24) folds the step phases as well, so the kernel accumulates
+real integrals per class of the image and of the step and applies both
+transforms once, and fits the Coulomb term alone for pure functionals
+from the blocks of zero momentum transfer; the remaining cost of the full
+tensor is the primitive quartets and the reciprocal-space pair
+transforms, one pass per momentum transfer, and fitting pairs of diffuse
+functions in reciprocal space stays on the later list.
 
 **M6 Spatial symmetry.** Molecular point groups: detection and
 orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.

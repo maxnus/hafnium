@@ -49,6 +49,10 @@ class BlochImages:
         The class of every image: ``exp(i (k2 − k1)·T)`` is the same for
         every image ``T`` of a class and every pair of k-points, which on a
         uniform mesh holds for the lattice coordinates modulo the mesh.
+    step_classes : Array[step]
+        The class of every step: ``exp(i k·T_s)`` is the same for every
+        step ``T_s`` of a class and every k-point, likewise the lattice
+        coordinates modulo the mesh (ADR-0028).
     kpoints : Array[kpt, 3]
         Cartesian k-points in inverse Bohr.
     """
@@ -57,6 +61,7 @@ class BlochImages:
     steps: Array
     coordinates: tuple[Array, Array]
     classes: Array
+    step_classes: Array
     kpoints: Array
 
     def __post_init__(self) -> None:
@@ -71,6 +76,8 @@ class BlochImages:
             raise InputError("every image and every step has three lattice coordinates")
         if self.classes.shape != (n_images,):
             raise InputError("classes have shape [image]")
+        if self.step_classes.shape != (n_steps,):
+            raise InputError("step classes have shape [step]")
         if self.kpoints.ndim != 2 or self.kpoints.shape[1] != 3:
             raise InputError("k-points have shape [kpt, 3]")
 
@@ -180,6 +187,7 @@ class IntegralEngine(Protocol):
         *,
         kernel: CoulombKernel = COULOMB,
         threshold: float = 0.0,
+        coulomb_only: bool = False,
     ) -> Array:
         """Bloch-summed three-centre integrals as complex ``[kpt, kpt, aux, ao, ao]``.
 
@@ -187,10 +195,13 @@ class IntegralEngine(Protocol):
         the pairs of ``images`` whose difference is one of its steps, the
         auxiliary function in the home cell: ``(P^q | u k1 v k2)`` of the
         density fitting with momentum transfer ``q = k2 − k1`` (ADR-0019),
-        with ``exp(i q·T_i)`` taken from the class of every image
-        (ADR-0025). Shell pairs, shell triples and primitive quartets whose
-        bounds fall below ``threshold`` are left out; when the bra and the
-        ket coincide every pair of images is evaluated once.
+        with ``exp(i q·T_i)`` and ``exp(i k2·T_s)`` taken from the classes of
+        every image and step (ADR-0025, ADR-0028). With ``coulomb_only``
+        only the blocks of zero transfer are formed, ``[kpt, aux, ao, ao]``
+        with ``(P^0 | u k v k)`` at every k-point. Shell pairs, shell
+        triples and primitive quartets whose bounds fall below
+        ``threshold`` are left out; when the bra and the ket coincide every
+        pair of images is evaluated once.
         """
         ...
 

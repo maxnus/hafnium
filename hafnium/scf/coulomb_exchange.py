@@ -35,6 +35,7 @@ from hafnium.integrals import (
     DensityFitting,
     IntegralEngine,
     PeriodicDensityFitting,
+    coulomb_fitting_k,
     density_fitting_k,
     eri,
     madelung_constant,
@@ -305,6 +306,92 @@ class KPointDensityFittedCoulombExchange:
         product = xp.sum(signed @ adjoint(self.df_tensor), axis=2)
         weighted = xp.sum(product * self.weights[None, :, None, None], axis=1)
         return weighted + self.madelung * (self.overlap @ density @ self.overlap)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class KPointDensityFittedCoulomb:
+    """The Coulomb contraction alone from the zero-transfer fitted tensor (ADR-0028).
+
+    What a pure functional needs of the two-electron integrals of a cell:
+    ``J(k) = Σ_P s_P B[k, P] Σ_k' w_k' ⟨B[k', P], D(k')⟩`` as for
+    :class:`KPointDensityFittedCoulombExchange`, with the blocks
+    ``B[k] = B[k, k]`` of zero momentum transfer only. The exchange
+    contraction is not available.
+
+    Parameters
+    ----------
+    df_tensor : Array[kpt, aux, ao, ao]
+        The fitted tensor of
+        :meth:`hafnium.integrals.PeriodicCoulombFitting.df_tensor`.
+    signature : Array[aux]
+        The signs of the metric eigenvalues behind it at zero transfer.
+    weights : Array[kpt]
+        The k-point weights, summing to one.
+    """
+
+    df_tensor: Array
+    signature: Array
+    weights: Array
+
+    def __post_init__(self) -> None:
+        shape = self.df_tensor.shape
+        if self.df_tensor.ndim != 4 or shape[2] != shape[3]:
+            raise InputError("the fitted tensor has shape [kpt, aux, ao, ao]")
+        if self.signature.shape != (shape[1],):
+            raise InputError("the signature has shape [aux]")
+        if self.weights.shape != (shape[0],):
+            raise InputError("weights have shape [kpt]")
+
+    @classmethod
+    def from_cell(
+        cls,
+        engine: IntegralEngine,
+        basis: BasisSet,
+        auxiliary: BasisSet,
+        cell: Cell,
+        kpoints: KPoints,
+        *,
+        separation: RangeSeparation | None = None,
+    ) -> KPointDensityFittedCoulomb:
+        """Fit the zero-transfer integrals of ``cell`` over ``kpoints``."""
+        fitting = coulomb_fitting_k(
+            engine, basis, auxiliary, cell, kpoints, separation=separation
+        )
+        xp = array_namespace(fitting.metric)
+        return cls(fitting.df_tensor(), fitting.signature(), kpoints.weights_array(xp))
+
+    @property
+    def n_kpt(self) -> int:
+        """Number of k-points."""
+        return int(self.df_tensor.shape[0])
+
+    @property
+    def n_aux(self) -> int:
+        """Number of auxiliary functions."""
+        return int(self.df_tensor.shape[1])
+
+    @property
+    def n_ao(self) -> int:
+        """Number of atomic orbitals."""
+        return int(self.df_tensor.shape[2])
+
+    def coulomb(self, density: Array) -> Array:
+        """``J(k)`` for the total ``density[kpt, ao, ao]`` over the full k set."""
+        xp = array_namespace(self.df_tensor, density)
+        inner = xp.sum(
+            xp.conj(self.df_tensor) * xp.expand_dims(density, axis=1), axis=(-2, -1)
+        )
+        charges = xp.sum(inner * xp.expand_dims(self.weights, axis=1), axis=0)
+        signed = xp.astype(self.signature, xp.complex128) * charges
+        return xp.sum(self.df_tensor * signed[None, :, None, None], axis=1)
+
+    def exchange(self, density: Array) -> Array:
+        """Not available: the fitting holds the blocks of zero transfer only."""
+        del density
+        raise InputError(
+            "the two-electron integrals were fitted for the Coulomb term alone "
+            "(ADR-0028); exact exchange needs KPointDensityFittedCoulombExchange"
+        )
 
 
 def coulomb_exchange_matrices(

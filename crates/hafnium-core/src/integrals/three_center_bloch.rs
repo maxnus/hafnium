@@ -8,11 +8,17 @@
 //! the phases factor as `exp(i q·T_i) exp(i k2·T_s)` with the momentum
 //! transfer `q = k2 − k1`. On a uniform mesh `exp(i q·T)` is the same for
 //! every image of one Born–von Kármán class, the lattice coordinates
-//! modulo the mesh, so the sum is accumulated per class and `k2` and the
-//! class phases are applied once at the end. The term with `μ` and `ν`
-//! exchanged is the same integral at the mirrored step, so when the bra
-//! and the ket coincide each pair of images is evaluated once and the sum
-//! is completed by its conjugate transpose over k-points and functions.
+//! modulo the mesh, and `exp(i k2·T_s)` the same for every step of one
+//! class, so the real integrals are accumulated per class of the image
+//! and class of the step and the two transforms over the mesh are applied
+//! once at the end, auxiliary shell by auxiliary shell (ADR-0028). The
+//! Coulomb matrix needs only the blocks of zero momentum transfer,
+//! `(P^0 | μ k ν k)`, for which the class of the image does not matter:
+//! [`Transfers::Zero`] accumulates per class of the step alone and returns
+//! one block per k-point. The term with `μ` and `ν` exchanged is the same
+//! integral at the mirrored step, so when the bra and the ket coincide each
+//! pair of images is evaluated once and the sum is completed by its
+//! conjugate transpose over k-points and functions.
 //!
 //! The screening tabulates, once per step, the reach of every shell
 //! triple and primitive quartet: the distance beyond which the bound of
@@ -52,8 +58,10 @@ const CLASS_TOLERANCE: f64 = 1e-8;
 /// relative translations at which a pair of functions still overlaps,
 /// found by their coordinates. Every image belongs to a class such that
 /// `exp(i (k2 − k1)·T)` is the same for all images `T` of the class and
-/// every pair of k-points; on a uniform mesh the classes are the lattice
-/// coordinates modulo the mesh.
+/// every pair of k-points, and every step to a class such that
+/// `exp(i k·T_s)` is the same for all steps of the class and every
+/// k-point; on a uniform mesh both are the lattice coordinates modulo the
+/// mesh.
 #[derive(Debug, Clone, Copy)]
 pub struct BlochSum<'a> {
     /// The image list `[image, 3]` in Bohr, shared by the bra and the ket.
@@ -66,15 +74,26 @@ pub struct BlochSum<'a> {
     pub step_coordinates: &'a [[i64; 3]],
     /// The class of every image.
     pub image_classes: &'a [usize],
+    /// The class of every step.
+    pub step_classes: &'a [usize],
     /// Cartesian k-points `[k, 3]` in inverse Bohr.
     pub kpoints: &'a [[f64; 3]],
 }
 
+/// Which blocks of momentum transfer a Bloch sum returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transfers {
+    /// Every pair of k-points, `[k1, k2, aux, bra, ket]`.
+    All,
+    /// Zero transfer only, `[k, aux, bra, ket]`: what the Coulomb matrix needs.
+    Zero,
+}
+
 impl BlochSum<'_> {
-    /// Validate the lists and return the classes relabelled densely, in
-    /// order of first appearance, so that their count is the number of
-    /// distinct classes whatever the indices given.
-    fn check(&self) -> Result<Vec<usize>, Error> {
+    /// Validate the lists and return the image and step classes relabelled
+    /// densely, in order of first appearance, so that their counts are the
+    /// numbers of distinct classes whatever the indices given.
+    fn check(&self) -> Result<(Vec<usize>, Vec<usize>), Error> {
         let invalid = |message: &str| Err(Error::InvalidArgument(message.to_string()));
         check_finite(self.images, "translations")?;
         check_finite(self.steps, "translations")?;
@@ -91,34 +110,27 @@ impl BlochSum<'_> {
         if self.image_classes.len() != n_images {
             return invalid("every image has one class");
         }
-        let mut dense: HashMap<usize, usize> = HashMap::new();
-        let mut representatives: Vec<usize> = Vec::new();
-        let mut classes = Vec::with_capacity(n_images);
-        for (i, &class) in self.image_classes.iter().enumerate() {
-            let next = representatives.len();
-            let index = *dense.entry(class).or_insert(next);
-            if index == next {
-                representatives.push(i);
-            }
-            classes.push(index);
-            let representative = representatives[index];
-            let difference: [f64; 3] = std::array::from_fn(|axis| {
-                self.images[i][axis] - self.images[representative][axis]
-            });
-            for k1 in self.kpoints {
-                for k2 in self.kpoints {
-                    let angle: f64 = (0..3)
-                        .map(|axis| (k2[axis] - k1[axis]) * difference[axis])
-                        .sum();
-                    if (Complex64::cis(angle) - 1.0).norm() > CLASS_TOLERANCE {
-                        return invalid(
-                            "the phase of the momentum transfer varies within an image class",
-                        );
-                    }
-                }
-            }
+        if self.step_classes.len() != self.steps.len() {
+            return invalid("every step has one class");
         }
-        Ok(classes)
+        // The transfer phases `exp(i (k2 − k1)·T)` are constant on an image
+        // class, the step phases `exp(i k·T_s)` on a step class; the latter
+        // implies the former, so both lists are checked against every pair.
+        let image_classes = dense_classes(
+            self.image_classes,
+            self.images,
+            self.kpoints,
+            true,
+            "the phase of the momentum transfer varies within an image class",
+        )?;
+        let step_classes = dense_classes(
+            self.step_classes,
+            self.steps,
+            self.kpoints,
+            false,
+            "the phase of a k-point varies within a step class",
+        )?;
+        Ok((image_classes, step_classes))
     }
 
     /// The image index of every lattice coordinate, after checking that the
@@ -168,16 +180,24 @@ impl BlochSum<'_> {
             .all(|c| set.contains(&[-c[0], -c[1], -c[2]]))
     }
 
-    /// `exp(i k·T_s)` as `[step][k]`.
-    fn step_phases(&self) -> Vec<Complex64> {
-        self.steps
-            .iter()
-            .flat_map(|step| {
-                self.kpoints.iter().map(move |k| {
-                    Complex64::cis((0..3).map(|axis| k[axis] * step[axis]).sum::<f64>())
-                })
-            })
-            .collect()
+    /// `exp(i k·T_c)` as `[class][k]`, from the first step of every class
+    /// of the dense labels of [`Self::check`].
+    fn step_phases(&self, n_classes: usize) -> Vec<Complex64> {
+        let mut representative: Vec<Option<[f64; 3]>> = vec![None; n_classes];
+        for (s, &class) in self.step_classes.iter().enumerate() {
+            representative[class].get_or_insert(self.steps[s]);
+        }
+        let n_k = self.kpoints.len();
+        let mut phases = vec![Complex64::default(); n_classes * n_k];
+        for (class, translation) in representative.iter().enumerate() {
+            if let Some(translation) = translation {
+                for (k, point) in self.kpoints.iter().enumerate() {
+                    let angle: f64 = (0..3).map(|axis| point[axis] * translation[axis]).sum();
+                    phases[class * n_k + k] = Complex64::cis(angle);
+                }
+            }
+        }
+        phases
     }
 
     /// `exp(i (k2 − k1)·T_c)` as `[k1][k2][class]`, from the first image of
@@ -203,6 +223,49 @@ impl BlochSum<'_> {
         }
         phases
     }
+}
+
+/// Relabel `classes` densely in order of first appearance, checking that
+/// the phase of every k-point (`transfer` false) or of every momentum
+/// transfer (`transfer` true) is the same on all `vectors` of one class.
+fn dense_classes(
+    classes: &[usize],
+    vectors: &[[f64; 3]],
+    kpoints: &[[f64; 3]],
+    transfer: bool,
+    message: &str,
+) -> Result<Vec<usize>, Error> {
+    let mut dense: HashMap<usize, usize> = HashMap::new();
+    let mut representatives: Vec<usize> = Vec::new();
+    let mut relabelled = Vec::with_capacity(classes.len());
+    let origin = [0.0; 3];
+    for (i, &class) in classes.iter().enumerate() {
+        let next = representatives.len();
+        let index = *dense.entry(class).or_insert(next);
+        if index == next {
+            representatives.push(i);
+        }
+        relabelled.push(index);
+        let representative = representatives[index];
+        let difference: [f64; 3] =
+            std::array::from_fn(|axis| vectors[i][axis] - vectors[representative][axis]);
+        for k2 in kpoints {
+            let firsts: &[[f64; 3]] = if transfer {
+                kpoints
+            } else {
+                std::slice::from_ref(&origin)
+            };
+            for k1 in firsts {
+                let angle: f64 = (0..3)
+                    .map(|axis| (k2[axis] - k1[axis]) * difference[axis])
+                    .sum();
+                if (Complex64::cis(angle) - 1.0).norm() > CLASS_TOLERANCE {
+                    return Err(Error::InvalidArgument(message.to_string()));
+                }
+            }
+        }
+    }
+    Ok(relabelled)
 }
 
 /// The distinct shell types of the auxiliary table: shells with the same
@@ -407,56 +470,73 @@ struct Setup<'a> {
     centre_of_shell: &'a [usize],
     steps: &'a [Vec<StepPair>],
     lookup: &'a HashMap<[i64; 3], usize>,
-    /// `exp(i k·T_s)` as `[step][k]`.
-    step_phases: &'a [Complex64],
-    n_k: usize,
     /// Whether the bra and ket coincide and the steps are closed under
     /// negation, so that every pair of images is evaluated once and the
     /// sum is completed by its conjugate transpose.
     symmetric: bool,
 }
 
-/// The accumulators: one slab per class and auxiliary shell, laid out
-/// `[P][μ][ν][k2]` over the functions of the shell.
+/// The accumulators: one real slab per class of the image, class of the
+/// step and auxiliary shell, laid out `[P][μ][ν]` over the functions of the
+/// shell; with [`Transfers::Zero`] the image classes collapse to one.
 struct Slabs {
-    slabs: Vec<Vec<Mutex<Vec<Complex64>>>>,
+    data: Vec<Mutex<Vec<f64>>>,
+    n_image_classes: usize,
+    n_step_classes: usize,
+    n_shells: usize,
 }
 
 impl Slabs {
-    fn new(n_classes: usize, aux: &ShellTable, n_bra: usize, n_ket: usize, n_k: usize) -> Self {
-        let slabs = (0..n_classes)
-            .map(|_| {
+    fn new(
+        n_image_classes: usize,
+        n_step_classes: usize,
+        aux: &ShellTable,
+        n_bra: usize,
+        n_ket: usize,
+    ) -> Self {
+        let slabs = (0..n_image_classes * n_step_classes)
+            .flat_map(|_| {
                 (0..aux.n_shells())
-                    .map(|ip| {
-                        Mutex::new(vec![
-                            Complex64::default();
-                            aux.shell(ip).n_functions() * n_bra * n_ket * n_k
-                        ])
-                    })
-                    .collect()
+                    .map(|ip| Mutex::new(vec![0.0; aux.shell(ip).n_functions() * n_bra * n_ket]))
             })
             .collect();
-        Self { slabs }
+        Self {
+            data: slabs,
+            n_image_classes,
+            n_step_classes,
+            n_shells: aux.n_shells(),
+        }
     }
 
-    /// Add `phase[k] × value` to the entries `(row, k)` of slab `(class, ip)`
-    /// for every value of a spherical block, with `row` from `rows`.
+    fn index(&self, image_class: usize, step_class: usize, ip: usize) -> usize {
+        (image_class * self.n_step_classes + step_class) * self.n_shells + ip
+    }
+
+    /// Add every value of a spherical block to its row of the slab
+    /// `(image_class, step_class, ip)`.
     fn scatter(
         &self,
-        class: usize,
+        image_class: usize,
+        step_class: usize,
         ip: usize,
         rows: impl Iterator<Item = (usize, f64)>,
-        phases: &[Complex64],
     ) {
-        let mut slab = self.slabs[class][ip]
+        let mut slab = self.data[self.index(image_class, step_class, ip)]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let n_k = phases.len();
         for (row, value) in rows {
-            for (target, phase) in slab[row * n_k..(row + 1) * n_k].iter_mut().zip(phases) {
-                *target += phase * value;
-            }
+            slab[row] += value;
         }
+    }
+
+    /// The slab `(image_class, step_class, ip)` after the parallel loop.
+    fn take(&mut self, image_class: usize, step_class: usize, ip: usize) -> Vec<f64> {
+        let index = self.index(image_class, step_class, ip);
+        std::mem::take(
+            self.data[index]
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 }
 
@@ -477,8 +557,11 @@ struct Workspace {
 /// pairs `(i, j)` of images of `sum` whose difference is one of its steps,
 /// the auxiliary function in the home cell: the Bloch-summed integral
 /// `(P^q | μ k1 ν k2)` of the density fitting with momentum transfer
-/// `q = k2 − k1` (ADR-0019). The phase `exp(i q·T_i)` is taken from the
-/// first image of the class of `i` (see [`BlochSum`]).
+/// `q = k2 − k1` (ADR-0019). With [`Transfers::Zero`] only the blocks of
+/// zero transfer are formed, `[n_k, n_aux, n_bra, n_ket]` with
+/// `(P^0 | μ k ν k)` at every k-point. The phases `exp(i q·T_i)` and
+/// `exp(i k2·T_s)` are taken from the first image and step of their classes
+/// (see [`BlochSum`]) and applied once after the sum (ADR-0028).
 ///
 /// A shell pair is skipped at a step when the product of its Schwarz bound
 /// and the largest auxiliary bound is below `threshold`; a shell triple
@@ -498,7 +581,7 @@ struct Workspace {
 /// positive, `threshold` is negative or not finite, a translation or
 /// k-point is not finite, the coordinate and class lists do not match the
 /// image and step lists or repeat an image, or the phase of a momentum
-/// transfer varies within a class.
+/// transfer or of a k-point varies within a class.
 pub fn coulomb_three_center_bloch(
     aux: &ShellTable,
     bra: &ShellTable,
@@ -506,15 +589,21 @@ pub fn coulomb_three_center_bloch(
     sum: BlochSum<'_>,
     kernel: CoulombKernel,
     threshold: f64,
+    transfers: Transfers,
 ) -> Result<Vec<Complex64>, Error> {
     kernel.validate()?;
     check_threshold(threshold)?;
-    let classes = sum.check()?;
+    let (image_classes, step_classes) = sum.check()?;
     let sum = BlochSum {
-        image_classes: &classes,
+        image_classes: &image_classes,
+        step_classes: &step_classes,
         ..sum
     };
-    let n_classes = classes.iter().max().map_or(0, |c| c + 1);
+    let n_image_classes = match transfers {
+        Transfers::All => image_classes.iter().max().map_or(0, |c| c + 1),
+        Transfers::Zero => 1,
+    };
+    let n_step_classes = step_classes.iter().max().map_or(0, |c| c + 1);
     let lookup = sum.lookup()?;
     let n_k = sum.kpoints.len();
     let (n_bra, n_ket) = (bra.n_functions(), ket.n_functions());
@@ -539,7 +628,6 @@ pub fn coulomb_three_center_bloch(
     let types = AuxTypes::new(aux);
     let (centres, centre_of_shell) = aux_centres(aux);
     let steps = step_tables([bra, ket], &types, aux_max, sum.steps, &context, &tables);
-    let step_phases = sum.step_phases();
     let setup = Setup {
         aux,
         bra,
@@ -552,50 +640,89 @@ pub fn coulomb_three_center_bloch(
         centre_of_shell: &centre_of_shell,
         steps: &steps,
         lookup: &lookup,
-        step_phases: &step_phases,
-        n_k,
         symmetric: bra == ket && sum.steps_closed_under_negation(),
     };
-    let slabs = Slabs::new(n_classes, aux, n_bra, n_ket, n_k);
+    let slabs = Slabs::new(n_image_classes, n_step_classes, aux, n_bra, n_ket);
     // One task per image: the near images carry most of the work.
     (0..sum.images.len())
         .into_par_iter()
         .with_max_len(1)
         .for_each_init(Workspace::default, |workspace, i| {
-            image_terms(&setup, &sum, &slabs, workspace, i);
+            image_terms(&setup, &sum, &slabs, workspace, i, transfers);
         });
-    let mut out = assemble(
-        slabs,
-        &sum.class_phases(n_classes),
-        aux,
-        [n_bra, n_ket, n_k],
-    );
+    let phases = Phases {
+        // The transfer phases serve the full set of blocks only.
+        class: match transfers {
+            Transfers::All => sum.class_phases(n_image_classes),
+            Transfers::Zero => Vec::new(),
+        },
+        step: sum.step_phases(n_step_classes),
+        n_k,
+    };
+    let mut out = assemble(slabs, &phases, aux, [n_bra, n_ket], transfers);
     if setup.symmetric {
-        add_conjugate_transpose(&mut out, [aux.n_functions(), n_bra, n_k]);
+        add_conjugate_transpose(&mut out, [aux.n_functions(), n_bra, n_k], transfers);
     }
     Ok(out)
 }
 
+/// The transforms over the mesh applied after the sum.
+struct Phases {
+    /// `exp(i (k2 − k1)·T_c)` as `[k1][k2][image class]`.
+    class: Vec<Complex64>,
+    /// `exp(i k·T_c)` as `[step class][k]`.
+    step: Vec<Complex64>,
+    n_k: usize,
+}
+
 /// `out[k1, k2, P, μ, ν] += conj(out[k2, k1, P, ν, μ])`: the terms with the
 /// images and functions of a pair exchanged, from the half of the pairs
-/// evaluated.
-fn add_conjugate_transpose(out: &mut [Complex64], sizes: [usize; 3]) {
+/// evaluated; with [`Transfers::Zero`] `out[k, P, μ, ν] += conj(out[k, P, ν, μ])`.
+/// In place, one pair of blocks at a time.
+fn add_conjugate_transpose(out: &mut [Complex64], sizes: [usize; 3], transfers: Transfers) {
     let [n_aux, n, n_k] = sizes;
     let block_size = n_aux * n * n;
-    let half = out.to_vec();
-    out.par_chunks_mut(block_size)
-        .enumerate()
-        .for_each(|(kk, target)| {
-            let (k1, k2) = (kk / n_k, kk % n_k);
-            let source = &half[(k2 * n_k + k1) * block_size..][..block_size];
-            for p in 0..n_aux {
+    let mut copy = vec![Complex64::default(); block_size];
+    // `target[p, u, v] += conj(source[p, v, u])` in parallel over `p`.
+    let add_transposed = |target: &mut [Complex64], source: &[Complex64]| {
+        target
+            .par_chunks_mut(n * n)
+            .zip(source.par_chunks(n * n))
+            .for_each(|(block, other)| {
                 for u in 0..n {
                     for v in 0..n {
-                        target[(p * n + u) * n + v] += source[(p * n + v) * n + u].conj();
+                        block[u * n + v] += other[v * n + u].conj();
                     }
                 }
+            });
+    };
+    let diagonal = |block: &mut [Complex64], copy: &mut [Complex64]| {
+        copy.copy_from_slice(block);
+        add_transposed(block, copy);
+    };
+    match transfers {
+        Transfers::Zero => {
+            for block in out.chunks_mut(block_size) {
+                diagonal(block, &mut copy);
             }
-        });
+        }
+        Transfers::All => {
+            for k1 in 0..n_k {
+                diagonal(
+                    &mut out[(k1 * n_k + k1) * block_size..][..block_size],
+                    &mut copy,
+                );
+                for k2 in k1 + 1..n_k {
+                    let (left, right) = out.split_at_mut((k2 * n_k + k1) * block_size);
+                    let first = &mut left[(k1 * n_k + k2) * block_size..][..block_size];
+                    let second = &mut right[..block_size];
+                    copy.copy_from_slice(first);
+                    add_transposed(first, second);
+                    add_transposed(second, &copy);
+                }
+            }
+        }
+    }
 }
 
 /// The largest Schwarz bound over the auxiliary shells.
@@ -641,45 +768,75 @@ fn aux_centres(aux: &ShellTable) -> (Vec<[f64; 3]>, Vec<usize>) {
     (centres, of_shell)
 }
 
-/// `out[k1, k2] = Σ_c phases[k1, k2, c] slabs[c][·][k2]` as the row-major
-/// `[n_k, n_k, n_aux, n_bra, n_ket]` array, in parallel over `(k1, k2)`.
+/// Apply the phases to the slabs, auxiliary shell by auxiliary shell:
+/// first `A[c_i][k2] = Σ_{c_s} step[c_s][k2] slab[c_i][c_s]` over the step
+/// classes, then `out[k1, k2] = Σ_{c_i} class[k1, k2, c_i] A[c_i][k2]` over
+/// the image classes, as the row-major `[n_k, n_k, n_aux, n_bra, n_ket]`
+/// array; with [`Transfers::Zero`] only the first transform, into
+/// `out[k] = Σ_{c_s} step[c_s][k] slab[c_s]`, `[n_k, n_aux, n_bra, n_ket]`.
 fn assemble(
-    slabs: Slabs,
-    class_phases: &[Complex64],
+    mut slabs: Slabs,
+    phases: &Phases,
     aux: &ShellTable,
-    sizes: [usize; 3],
+    sizes: [usize; 2],
+    transfers: Transfers,
 ) -> Vec<Complex64> {
-    let [n_bra, n_ket, n_k] = sizes;
+    let [n_bra, n_ket] = sizes;
+    let n_k = phases.n_k;
     let block_size = aux.n_functions() * n_bra * n_ket;
-    let slabs: Vec<Vec<Vec<Complex64>>> = slabs
-        .slabs
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|slab| {
-                    slab.into_inner()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                })
-                .collect()
-        })
-        .collect();
-    let n_classes = slabs.len();
+    let n_blocks = match transfers {
+        Transfers::All => n_k * n_k,
+        Transfers::Zero => n_k,
+    };
+    let (n_image_classes, n_step_classes) = (slabs.n_image_classes, slabs.n_step_classes);
     let aux_offsets = aux.function_offsets();
-    let mut out = vec![Complex64::default(); n_k * n_k * block_size];
-    out.par_chunks_mut(block_size)
-        .enumerate()
-        .for_each(|(kk, target)| {
-            let k2 = kk % n_k;
-            for (class, row) in slabs.iter().enumerate() {
-                let phase = class_phases[kk * n_classes + class];
-                for (ip, slab) in row.iter().enumerate() {
-                    let start = aux_offsets[ip] * n_bra * n_ket;
-                    for (entry, values) in target[start..].iter_mut().zip(slab.chunks_exact(n_k)) {
-                        *entry += phase * values[k2];
+    let mut out = vec![Complex64::default(); n_blocks * block_size];
+    for (ip, &offset) in aux_offsets.iter().enumerate() {
+        let width = aux.shell(ip).n_functions() * n_bra * n_ket;
+        let start = offset * n_bra * n_ket;
+        // The step transform: `summed[c_i][k][·]`, in parallel over `(c_i, k)`.
+        let real: Vec<Vec<Vec<f64>>> = (0..n_image_classes)
+            .map(|c_i| {
+                (0..n_step_classes)
+                    .map(|c_s| slabs.take(c_i, c_s, ip))
+                    .collect()
+            })
+            .collect();
+        let mut summed = vec![Complex64::default(); n_image_classes * n_k * width];
+        summed
+            .par_chunks_mut(width)
+            .enumerate()
+            .for_each(|(index, target)| {
+                let (c_i, k) = (index / n_k, index % n_k);
+                for (c_s, slab) in real[c_i].iter().enumerate() {
+                    let phase = phases.step[c_s * n_k + k];
+                    for (entry, &value) in target.iter_mut().zip(slab) {
+                        *entry += phase * value;
                     }
                 }
-            }
-        });
+            });
+        // The transfer transform into the shell's rows of every block.
+        out.par_chunks_mut(block_size)
+            .enumerate()
+            .for_each(|(block, target)| {
+                let rows = &mut target[start..start + width];
+                match transfers {
+                    Transfers::Zero => {
+                        rows.copy_from_slice(&summed[block * width..][..width]);
+                    }
+                    Transfers::All => {
+                        let k2 = block % n_k;
+                        for c_i in 0..n_image_classes {
+                            let phase = phases.class[block * n_image_classes + c_i];
+                            let source = &summed[(c_i * n_k + k2) * width..][..width];
+                            for (entry, &value) in rows.iter_mut().zip(source) {
+                                *entry += phase * value;
+                            }
+                        }
+                    }
+                }
+            });
+    }
     out
 }
 
@@ -690,12 +847,15 @@ fn image_terms(
     slabs: &Slabs,
     workspace: &mut Workspace,
     i: usize,
+    transfers: Transfers,
 ) {
     let (aux, ket, tables) = (setup.aux, setup.ket, setup.tables);
-    let n_k = setup.n_k;
     let t_i = sum.images[i];
     let origin = sum.image_coordinates[i];
-    let class_i = sum.image_classes[i];
+    let class_i = match transfers {
+        Transfers::All => sum.image_classes[i],
+        Transfers::Zero => 0,
+    };
     let n_types = setup.types.len();
     for (s, coordinates) in sum.step_coordinates.iter().enumerate() {
         let target: [i64; 3] = std::array::from_fn(|axis| origin[axis] + coordinates[axis]);
@@ -706,7 +866,7 @@ fn image_terms(
             continue;
         }
         let same = setup.symmetric && j == i;
-        let phases = &setup.step_phases[s * n_k..(s + 1) * n_k];
+        let class_s = sum.step_classes[s];
         for pair in &setup.steps[s] {
             let [ia, ib] = pair.shells;
             if (same && ib < ia) || pair.max_reach == f64::NEG_INFINITY {
@@ -774,8 +934,7 @@ fn image_terms(
                         ip,
                         [ket.shell(ib).n_functions(), p_shell.n_functions()],
                     ),
-                    class_i,
-                    phases,
+                    [class_i, class_s],
                     weight,
                 );
             }
@@ -784,14 +943,13 @@ fn image_terms(
 }
 
 /// Scatter the spherical block `[μ][ν][P]` of one triple, times `weight`,
-/// into the slab of the bra image's class with the step phases.
+/// into the slab of the classes of the bra image and of the step.
 fn scatter_triple(
     setup: &Setup<'_>,
     slabs: &Slabs,
     spherical: &[f64],
     triple: (&StepPair, usize, [usize; 2]),
-    class: usize,
-    phases: &[Complex64],
+    classes: [usize; 2],
     weight: f64,
 ) {
     let (pair, ip, [nsb, nsp]) = triple;
@@ -804,7 +962,7 @@ fn scatter_triple(
             weight * value,
         )
     });
-    slabs.scatter(class, ip, rows, phases);
+    slabs.scatter(classes[0], classes[1], ip, rows);
 }
 
 /// Accumulate the Cartesian integrals of one shell triple into `out`, laid
@@ -931,6 +1089,7 @@ mod tests {
         steps: Vec<[f64; 3]>,
         step_coordinates: Vec<[i64; 3]>,
         classes: Vec<usize>,
+        step_classes: Vec<usize>,
         kpoints: Vec<[f64; 3]>,
     }
 
@@ -965,10 +1124,10 @@ mod tests {
             }
             // A 2×1×1 mesh of the 2.5 × 3.0 grid: k = (0, 0, 0) and (π/2.5, 0, 0),
             // whose transfer has the phase (−1)^{n_x} on the image with coordinates n.
-            let classes = coordinates
-                .iter()
-                .map(|c| usize::try_from(c[0].rem_euclid(2)).expect("non-negative"))
-                .collect();
+            let class_of =
+                |c: &[i64; 3]| usize::try_from(c[0].rem_euclid(2)).expect("non-negative");
+            let classes = coordinates.iter().map(class_of).collect();
+            let step_classes = step_coordinates.iter().map(class_of).collect();
             let kpoints = vec![[0.0, 0.0, 0.0], [std::f64::consts::PI / 2.5, 0.0, 0.0]];
             Self {
                 images,
@@ -976,6 +1135,7 @@ mod tests {
                 steps,
                 step_coordinates,
                 classes,
+                step_classes,
                 kpoints,
             }
         }
@@ -987,9 +1147,21 @@ mod tests {
                 steps: &self.steps,
                 step_coordinates: &self.step_coordinates,
                 image_classes: &self.classes,
+                step_classes: &self.step_classes,
                 kpoints: &self.kpoints,
             }
         }
+    }
+
+    fn bloch(
+        aux: &ShellTable,
+        bra: &ShellTable,
+        ket: &ShellTable,
+        sum: BlochSum<'_>,
+        kernel: CoulombKernel,
+        threshold: f64,
+    ) -> Result<Vec<Complex64>, Error> {
+        coulomb_three_center_bloch(aux, bra, ket, sum, kernel, threshold, Transfers::All)
     }
 
     fn assert_close(summed: &[Complex64], expected: &[Complex64]) {
@@ -1006,12 +1178,30 @@ mod tests {
         let case = BlochCase::new();
         let n_k = case.kpoints.len();
         for kernel in [CoulombKernel::Full, CoulombKernel::ShortRange(0.6)] {
-            let summed = coulomb_three_center_bloch(&aux, &table, &table, case.sum(), kernel, 0.0)
-                .expect("valid");
+            let summed = bloch(&aux, &table, &table, case.sum(), kernel, 0.0).expect("valid");
             assert_close(
                 &summed,
                 &explicit_bloch(&aux, &table, &table, &case, kernel),
             );
+            // The zero-transfer blocks alone are the diagonal of the full result.
+            let zero = coulomb_three_center_bloch(
+                &aux,
+                &table,
+                &table,
+                case.sum(),
+                kernel,
+                0.0,
+                Transfers::Zero,
+            )
+            .expect("valid");
+            let block = aux.n_functions() * table.n_functions() * table.n_functions();
+            assert_eq!(zero.len(), n_k * block);
+            for k in 0..n_k {
+                assert_close(
+                    &zero[k * block..][..block],
+                    &summed[(k * n_k + k) * block..][..block],
+                );
+            }
             // Hermiticity across the swap of the k-points and the functions.
             let n = table.n_functions();
             let n_aux = aux.n_functions();
@@ -1042,13 +1232,11 @@ mod tests {
         // Every image in its own class.
         let expected = explicit_bloch(&aux, &table, &table, &case, kernel);
         case.classes = (0..case.images.len()).collect();
-        let summed = coulomb_three_center_bloch(&aux, &table, &table, case.sum(), kernel, 0.0)
-            .expect("valid");
+        let summed = bloch(&aux, &table, &table, case.sum(), kernel, 0.0).expect("valid");
         assert_close(&summed, &expected);
         // A ket table that is not the bra table: no pair is mirrored.
         let ket = sp_table();
-        let summed =
-            coulomb_three_center_bloch(&aux, &table, &ket, case.sum(), kernel, 0.0).expect("valid");
+        let summed = bloch(&aux, &table, &ket, case.sum(), kernel, 0.0).expect("valid");
         assert_close(&summed, &explicit_bloch(&aux, &table, &ket, &case, kernel));
         // Steps that are not closed under negation also take the general path.
         let open: Vec<usize> = (0..case.step_coordinates.len())
@@ -1057,10 +1245,10 @@ mod tests {
         let half = BlochCase {
             steps: open.iter().map(|&s| case.steps[s]).collect(),
             step_coordinates: open.iter().map(|&s| case.step_coordinates[s]).collect(),
+            step_classes: open.iter().map(|&s| case.step_classes[s]).collect(),
             ..BlochCase::new()
         };
-        let summed = coulomb_three_center_bloch(&aux, &table, &table, half.sum(), kernel, 0.0)
-            .expect("valid");
+        let summed = bloch(&aux, &table, &table, half.sum(), kernel, 0.0).expect("valid");
         assert_close(
             &summed,
             &explicit_bloch(&aux, &table, &table, &half, kernel),
@@ -1075,11 +1263,8 @@ mod tests {
         let short = CoulombKernel::ShortRange(0.6);
         // A screened sum stays within the threshold of the full one.
         let threshold = 1e-10;
-        let exact = coulomb_three_center_bloch(&aux, &table, &table, case.sum(), short, 0.0)
-            .expect("valid");
-        let screened =
-            coulomb_three_center_bloch(&aux, &table, &table, case.sum(), short, threshold)
-                .expect("valid");
+        let exact = bloch(&aux, &table, &table, case.sum(), short, 0.0).expect("valid");
+        let screened = bloch(&aux, &table, &table, case.sum(), short, threshold).expect("valid");
         let largest = exact
             .iter()
             .zip(&screened)
@@ -1089,13 +1274,15 @@ mod tests {
         // Steps that reach no image contribute nothing.
         let far_steps = [[50.0, 0.0, 0.0]];
         let far_coordinates = [[20, 0, 0]];
-        let nothing = coulomb_three_center_bloch(
+        let far_classes = [0];
+        let nothing = bloch(
             &aux,
             &table,
             &table,
             BlochSum {
                 steps: &far_steps,
                 step_coordinates: &far_coordinates,
+                step_classes: &far_classes,
                 ..case.sum()
             },
             short,
@@ -1116,33 +1303,35 @@ mod tests {
             image_coordinates: &repeated,
             ..case.sum()
         };
-        assert!(coulomb_three_center_bloch(&aux, &table, &table, bad, short, 0.0).is_err());
+        assert!(bloch(&aux, &table, &table, bad, short, 0.0).is_err());
         let fewer_classes = BlochSum {
             image_classes: &case.classes[1..],
             ..case.sum()
         };
-        assert!(
-            coulomb_three_center_bloch(&aux, &table, &table, fewer_classes, short, 0.0).is_err()
-        );
+        assert!(bloch(&aux, &table, &table, fewer_classes, short, 0.0).is_err());
         let wrong_classes = vec![0; case.images.len()];
         let mixed = BlochSum {
             image_classes: &wrong_classes,
             ..case.sum()
         };
-        assert!(coulomb_three_center_bloch(&aux, &table, &table, mixed, short, 0.0).is_err());
+        assert!(bloch(&aux, &table, &table, mixed, short, 0.0).is_err());
         let fewer = BlochSum {
             step_coordinates: &case.step_coordinates[1..],
             ..case.sum()
         };
-        assert!(coulomb_three_center_bloch(&aux, &table, &table, fewer, short, 0.0).is_err());
+        assert!(bloch(&aux, &table, &table, fewer, short, 0.0).is_err());
+        let wrong_steps = vec![0; case.steps.len()];
+        let mixed_steps = BlochSum {
+            step_classes: &wrong_steps,
+            ..case.sum()
+        };
+        assert!(bloch(&aux, &table, &table, mixed_steps, short, 0.0).is_err());
         let mut stretched = case.steps.clone();
         stretched[1][0] += 0.5;
         let inconsistent = BlochSum {
             steps: &stretched,
             ..case.sum()
         };
-        assert!(
-            coulomb_three_center_bloch(&aux, &table, &table, inconsistent, short, 0.0).is_err()
-        );
+        assert!(bloch(&aux, &table, &table, inconsistent, short, 0.0).is_err());
     }
 }

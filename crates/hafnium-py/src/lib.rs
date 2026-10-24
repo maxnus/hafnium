@@ -251,14 +251,16 @@ fn coulomb_three_center<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
-/// Three-centre Coulomb integrals summed over the image pairs `(i, j)` of
-/// the orbital functions with phases, complex `[kpt, kpt, aux, bra, ket]`:
-/// `Σ_{ij} bra_phases[k1, i] ket_phases[k2, j] (P | μ(T_i) ν(T_j))` with
-/// the auxiliary function in the home cell, over the pairs whose
-/// difference `T_j − T_i` is one of the `steps`, found through the
-/// integer lattice `coordinates` of the images and of the steps.
+/// Bloch-summed three-centre Coulomb integrals as complex
+/// `[kpt, kpt, aux, bra, ket]`, `Σ_ij exp(−i k1·T_i) exp(i k2·T_j)
+/// (P | u(T_i) v(T_j))` over the pairs of `images` whose difference is one
+/// of the `steps`, found through the integer lattice coordinates of both,
+/// the auxiliary function in the home cell; `exp(i (k2 − k1)·T_i)` is
+/// taken from the class of every image and `exp(i k2·T_s)` from the class
+/// of every step (ADR-0025, ADR-0028). With `coulomb_only` only the blocks
+/// of zero momentum transfer are formed, `[kpt, aux, bra, ket]`.
 #[pyfunction]
-#[pyo3(signature = (auxiliary, bra, ket, images, image_coordinates, steps, step_coordinates, image_classes, kpoints, omega=None, short_range=false, threshold=0.0))]
+#[pyo3(signature = (auxiliary, bra, ket, images, image_coordinates, steps, step_coordinates, image_classes, step_classes, kpoints, omega=None, short_range=false, threshold=0.0, coulomb_only=false))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
@@ -277,16 +279,19 @@ fn coulomb_three_center_bloch<'py>(
     steps: PyReadonlyArray2<'py, f64>,
     step_coordinates: PyReadonlyArray2<'py, i64>,
     image_classes: PyReadonlyArray1<'py, i64>,
+    step_classes: PyReadonlyArray1<'py, i64>,
     kpoints: PyReadonlyArray2<'py, f64>,
     omega: Option<f64>,
     short_range: bool,
     threshold: f64,
-) -> PyResult<Bound<'py, PyArray5<Complex64>>> {
+    coulomb_only: bool,
+) -> PyResult<Bound<'py, PyAny>> {
     let images = to_vectors(&images, "translations")?;
     let steps = to_vectors(&steps, "translations")?;
     let image_coordinates = to_coordinates(&image_coordinates)?;
     let step_coordinates = to_coordinates(&step_coordinates)?;
     let image_classes = to_indices(image_classes.as_slice()?, "image classes")?;
+    let step_classes = to_indices(step_classes.as_slice()?, "step classes")?;
     let kpoints = to_vectors(&kpoints, "k-points")?;
     let n_k = kpoints.len();
     let kernel = to_kernel(omega, short_range)?;
@@ -296,7 +301,13 @@ fn coulomb_three_center_bloch<'py>(
         steps: &steps,
         step_coordinates: &step_coordinates,
         image_classes: &image_classes,
+        step_classes: &step_classes,
         kpoints: &kpoints,
+    };
+    let transfers = if coulomb_only {
+        integrals::Transfers::Zero
+    } else {
+        integrals::Transfers::All
     };
     let values = integrals::coulomb_three_center_bloch(
         &auxiliary.inner,
@@ -305,16 +316,22 @@ fn coulomb_three_center_bloch<'py>(
         sum,
         kernel,
         threshold,
+        transfers,
     )
     .map_err(|error| value_error(&error))?;
-    let shape = [
-        n_k,
-        n_k,
+    let functions = [
         auxiliary.inner.n_functions(),
         bra.inner.n_functions(),
         ket.inner.n_functions(),
     ];
-    values.into_pyarray(py).reshape(shape)
+    let array = values.into_pyarray(py);
+    if coulomb_only {
+        let shape = [n_k, functions[0], functions[1], functions[2]];
+        Ok(array.reshape(shape)?.into_any())
+    } else {
+        let shape = [n_k, n_k, functions[0], functions[1], functions[2]];
+        Ok(array.reshape(shape)?.into_any())
+    }
 }
 
 /// Four-centre Coulomb integrals `(uv|wx)` for each triple of translations

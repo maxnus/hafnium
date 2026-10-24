@@ -114,8 +114,12 @@ class RustEngine:
         *,
         kernel: CoulombKernel = COULOMB,
         threshold: float = 0.0,
+        coulomb_only: bool = False,
     ) -> Array:
-        """Bloch-summed three-centre integrals, complex ``[kpt, kpt, aux, ao, ao]``."""
+        """Bloch-summed three-centre integrals, complex ``[kpt, kpt, aux, ao, ao]``.
+
+        ``[kpt, aux, ao, ao]`` with ``coulomb_only``.
+        """
         return _kernels.coulomb_three_center_bloch(
             _kernel_table(auxiliary),
             _kernel_table(bra),
@@ -125,10 +129,12 @@ class RustEngine:
             to_host(images.steps),
             to_host(images.coordinates[1], "int64"),
             to_host(images.classes, "int64"),
+            to_host(images.step_classes, "int64"),
             to_host(images.kpoints),
             kernel.omega,
             kernel.short_range,
             threshold,
+            coulomb_only,
         )
 
     def coulomb_four_center(

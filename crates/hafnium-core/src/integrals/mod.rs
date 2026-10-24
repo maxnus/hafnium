@@ -22,7 +22,7 @@ pub use cartesian::{cartesian_components, n_cartesian, spherical_transformation,
 pub use coulomb::CoulombKernel;
 pub use fourier::{fourier_transform, pair_fourier_transform};
 pub use one_electron::{kinetic, nuclear_attraction, overlap};
-pub use three_center_bloch::{BlochSum, coulomb_three_center_bloch};
+pub use three_center_bloch::{BlochSum, Transfers, coulomb_three_center_bloch};
 pub use two_electron::{
     coulomb_four_center, coulomb_three_center, coulomb_two_center, schwarz_bounds,
 };
