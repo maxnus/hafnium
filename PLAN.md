@@ -952,10 +952,15 @@ Known limitations: the universal JKFIT basis
 can be near-linearly dependent in a small cell (LiH in 4 Bohr), where the
 fitted integrals agree with PySCF only to the fitting residual of 1e-6
 and the reference tests choose their tolerance from the metric's
-conditioning; the real-space three-centre sums of diffuse functions are
-slow (STO-3G lithium: a minute), the remedy being to fit pairs of diffuse
-functions in reciprocal space, on the later list; fractional occupations
-across k-points (smearing) are not part of version 1.
+conditioning; fractional occupations across k-points (smearing) are not
+part of version 1. The real-space three-centre sum rebuilt 2026-10-24
+(ADR-0025): image lists by the exponents with the neglected tail bounded,
+screening tabulated once per step, accumulation per Born–von Kármán class
+and each pair of images evaluated once, which builds the fitted tensor of
+a silicon cell (def2-SVP, 2×2×2) in 19 s instead of 129 s; the remaining
+cost is the primitive quartets, the phase scatter and the reciprocal-space
+pair transforms, and fitting pairs of diffuse functions in reciprocal
+space stays on the later list.
 
 **M6 Spatial symmetry.** Molecular point groups: detection and
 orientation, Abelian irreps, SALCs, blocked SCF, per-irrep occupations.

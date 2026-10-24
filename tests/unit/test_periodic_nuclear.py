@@ -239,7 +239,7 @@ def test_short_range_radius_and_reaching_images() -> None:
     assert np.exp(-((separation.omega * 0.8 * radius) ** 2)) > 1e-10
     # The real-space sum sees every nucleus the pair densities reach.
     positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
-    images = reaching_images(CUBIC, positions[:1], (2.0,), positions[1:], (1.5,))
+    images = reaching_images(CUBIC, positions[:1], positions[1:], np.array([[3.5]]))
     rounded = {tuple(row) for row in np.round(images, 8).tolist()}
     assert rounded == {(0.0, 0.0, 0.0), (-4.0, 0.0, 0.0)}
     np.testing.assert_array_equal(images[0], 0.0)
@@ -255,5 +255,5 @@ def test_inputs_are_validated() -> None:
         core_hamiltonian_k(ENGINE, basis, cell, gamma, precision=0.0)
     with pytest.raises(InputError, match="do not fit"):
         nuclear_attraction_k(ENGINE, basis, cell, KPoints.gamma(2))
-    with pytest.raises(InputError, match="one radius each"):
-        reaching_images(CUBIC, np.zeros((1, 3)), (1.0, 2.0), np.zeros((1, 3)), (1.0,))
+    with pytest.raises(InputError, match="one reach per pair"):
+        reaching_images(CUBIC, np.zeros((1, 3)), np.zeros((1, 3)), np.ones((2, 1)))

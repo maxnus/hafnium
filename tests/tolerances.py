@@ -96,3 +96,8 @@ GEOMETRY_TOL = 1e-10
 # The weight of a symmetry-adapted orbital in its own irrep, from a converged
 # or an exactly rotated set of orbitals.
 IRREP_WEIGHT_TOL = 1e-10
+
+# A bound on the lattice sum of a function's envelope is loose by the split of
+# the exponent that absorbs the polynomial; the largest envelope sampled on a
+# grid must still reach this fraction of the bound.
+AMPLITUDE_BOUND_RATIO = 0.05

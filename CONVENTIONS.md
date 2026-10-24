@@ -228,7 +228,11 @@ Spin never appears as an explicit index in method code; it is part of the
   factor, so `S(k) = Σ_T exp(i k·T) S_T` where `S_T` is the overlap
   between the cell at the origin and the cell at `T`, and
   `S(−k) = conj(S(k))`. Energies, charge and spin are per unit cell; a
-  charged cell carries a neutralizing uniform background.
+  charged cell carries a neutralizing uniform background. The images of
+  a lattice sum are chosen from the exponents of the functions so that
+  the images left out contribute less than the lattice-sum precision to
+  any matrix element (ADR-0025); the kernels screen the terms within the
+  kept images against the precision divided by their number (ADR-0018).
 - Periodic Coulomb terms use range separation: the short-range part is a
   real-space lattice sum of erfc-attenuated integrals, the long-range part
   is evaluated in reciprocal space with the `G = 0` term replaced by the

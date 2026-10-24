@@ -1,22 +1,25 @@
-"""Bloch sums of one-electron integrals over lattice images (ADR-0016).
+"""Bloch sums of one-electron integrals over lattice images (ADR-0016, ADR-0025).
 
 The basis functions of a cell are the Bloch sums
 ``φ_μ^k(r) = Σ_T exp(i k·T) φ_μ(r − T)`` (CONVENTIONS.md §3, ADR-0007), so
 a one-electron matrix at ``k`` is the lattice sum
 ``M(k) = Σ_T exp(i k·T) M_T`` of the matrices ``M_T`` between the cell at
 the origin and its image translated by ``T``, which the integral engine
-evaluates for a list of translations. The Gaussian tails of the basis
-functions bound the images that contribute: an image is kept while some
-atom of the cell and some atom of the image lie within the sum of their
-radii, beyond which every function of an atom is below a precision.
+evaluates for a list of translations. The exponents of the functions
+bound the images that contribute: an image is kept while some atom of
+the cell and some atom of the image lie within their reach, the distance
+beyond which the products of their functions, summed over every farther
+image, fall below a precision (:func:`pair_reach`). The Coulomb sums of
+the density fitting choose their images by the reach of the short-range
+kernel between two functions in the same way (:func:`coulomb_reach`).
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
-from hafnium.backend import Array, array_namespace
+from hafnium.backend import Array, array_namespace, default_namespace
 from hafnium.basis import BasisSet, Shell
 from hafnium.errors import InputError
 from hafnium.integrals.engine import IntegralEngine
@@ -25,11 +28,23 @@ from hafnium.molecule import Cell, Lattice
 from hafnium.symmetry import KPoints
 
 DEFAULT_LATTICE_SUM_PRECISION = 1e-12
-"""Value below which a basis function counts as zero when the images of a
-lattice sum are chosen; a neglected image contributes at most of that order."""
+"""Bound on what the images left out of a lattice sum contribute to any
+matrix element: the tail of the sum beyond the images kept."""
 
 _RADIUS_BISECTIONS = 60
-"""Bisection steps of the radius equation, bringing the bracket to ``2^-60``."""
+"""Bisection steps of a radius equation, bringing the bracket to ``2^-60``."""
+
+_SPLIT = 0.1
+"""Fraction ``δ`` of an exponent that absorbs the polynomial of a function,
+``r^l exp(−δ α r²) ≤ (l / (2 e δ α))^{l/2}``, so that the Gaussian which
+sets a reach keeps ``(1 − δ) α``. The split enters a reach logarithmically."""
+
+_TAIL_MARGIN = 2.0
+"""Factor covering a lattice sum that exceeds the continuum estimate of its tail."""
+
+_LATTICE_SUM_LOG = 37.0
+"""``exp(−α T²)`` is summed over the lattice vectors with ``α T²`` below
+this, where the terms are below ``1e-16``."""
 
 
 def function_radius(shell: Shell, precision: float) -> float:
@@ -42,8 +57,7 @@ def function_radius(shell: Shell, precision: float) -> float:
     ``precision / n`` for ``n`` primitives, and the radius of the shell is
     the largest of the primitive radii.
     """
-    if not (math.isfinite(precision) and precision > 0.0):
-        raise InputError("the lattice-sum precision is a positive number")
+    _check_precision(precision)
     l = shell.angular_momentum
     angular = math.sqrt((2 * l + 1) / (4.0 * math.pi))
     rows = shell.primitive_coefficients()
@@ -53,6 +67,11 @@ def function_radius(shell: Shell, precision: float) -> float:
         if amplitude > 0.0:
             radius = max(radius, _primitive_radius(alpha, l, amplitude / precision))
     return radius
+
+
+def _check_precision(precision: float) -> None:
+    if not (math.isfinite(precision) and precision > 0.0):
+        raise InputError("the lattice-sum precision is a positive number")
 
 
 def _primitive_radius(alpha: float, l: int, ratio: float) -> float:
@@ -69,6 +88,15 @@ def _primitive_radius(alpha: float, l: int, ratio: float) -> float:
         return math.log(ratio) + l * math.log(r) - alpha * r * r
 
     low = max(1.0 / math.sqrt(alpha), math.sqrt(l / (2.0 * alpha)))
+    return _outer_root(excess, low)
+
+
+def _outer_root(excess: Callable[[float], float], low: float) -> float:
+    """Return the root of ``excess``, positive at ``low`` and decreasing beyond.
+
+    ``low`` itself when ``excess`` is already non-positive there; otherwise
+    the upper end of the bisected bracket found by doubling.
+    """
     if excess(low) <= 0.0:
         return low
     high = 2.0 * low
@@ -110,55 +138,302 @@ def atom_radii(basis: BasisSet, precision: float) -> tuple[float, ...]:
     return tuple(radii)
 
 
+def _primitive_terms(shells: Iterable[Shell]) -> tuple[Array, Array]:
+    """Return the amplitudes and reduced exponents of the primitives of ``shells``.
+
+    Every function of a shell is bounded by ``Σ_i A_i exp(−α'_i r²)`` with
+    the amplitude ``A_i = Y_l |c_i| (l / (2 e δ α_i))^{l/2}`` of the largest
+    coefficient over the contractions and the reduced exponent
+    ``α'_i = (1 − δ) α_i``, the polynomial of the function absorbed by the
+    split ``δ`` of the exponent.
+    """
+    xp = default_namespace()
+    amplitudes: list[float] = []
+    exponents: list[float] = []
+    for shell in shells:
+        l = shell.angular_momentum
+        angular = math.sqrt((2 * l + 1) / (4.0 * math.pi))
+        polynomial = (l / (2.0 * math.e * _SPLIT)) ** (0.5 * l)
+        rows = shell.primitive_coefficients()
+        for index, alpha in enumerate(shell.exponents):
+            coefficient = max(abs(row[index]) for row in rows)
+            amplitudes.append(angular * coefficient * polynomial / alpha ** (0.5 * l))
+            exponents.append((1.0 - _SPLIT) * alpha)
+    return (
+        xp.asarray(amplitudes, dtype=xp.float64),
+        xp.asarray(exponents, dtype=xp.float64),
+    )
+
+
+def _atom_types(basis: BasisSet) -> tuple[list[tuple[Shell, ...]], list[int]]:
+    """Return the distinct shell lists of the atoms and the type of every atom."""
+    shells: list[list[Shell]] = [[] for _ in range(basis.n_atoms)]
+    for shell, atom in zip(basis.shells, basis.shell_atoms, strict=True):
+        shells[atom].append(shell)
+    types: dict[tuple[Shell, ...], int] = {}
+    atom_types: list[int] = []
+    for atom_shells in shells:
+        key = tuple(atom_shells)
+        atom_types.append(types.setdefault(key, len(types)))
+    return list(types), atom_types
+
+
+def _reach_matrix(
+    first: BasisSet,
+    second: BasisSet,
+    reach: Callable[[tuple[Shell, ...], tuple[Shell, ...]], float],
+) -> Array:
+    """Evaluate ``reach`` per pair of atom types over ``[n_first, n_second]``.
+
+    A pair of types is evaluated once in either order, so the matrix of a
+    basis with itself is exactly symmetric.
+    """
+    xp = default_namespace()
+    types_a, atoms_a = _atom_types(first)
+    types_b, atoms_b = _atom_types(second)
+    same = types_a == types_b
+    table = [[0.0] * len(types_b) for _ in types_a]
+    for ta, a in enumerate(types_a):
+        for tb, b in enumerate(types_b):
+            table[ta][tb] = table[tb][ta] if same and tb < ta else reach(a, b)
+    rows = [[table[ta][tb] for tb in atoms_b] for ta in atoms_a]
+    return xp.asarray(rows, dtype=xp.float64)
+
+
+def _tail_prefactor(
+    lattice: Lattice, decay: Array, radius: float, coulomb: bool
+) -> Array:
+    """Return the tail factor beyond ``radius`` per ``decay`` without its Gaussian.
+
+    The continuum estimate ``(S_d / V_d) ∫_R^∞ t^{d−1} f(t) dt`` of a sum over
+    the lattice points farther than ``R`` of ``f(t) = exp(−μ t²)``, or of
+    ``exp(−μ t²) / t`` for a Coulomb term, with the surface ``S_d`` of the
+    unit sphere and the measure ``V_d`` of the cell in ``d`` dimensions;
+    ``∫_R^∞ exp(−μ t²) dt ≤ exp(−μ R²) / (2 μ R)`` bounds the incomplete
+    integrals. The margin covers a lattice sum exceeding the estimate.
+    """
+    xp = array_namespace(decay)
+    volume = lattice.volume
+    if lattice.dimension == 3:
+        factor = (
+            2.0 * math.pi / (volume * decay)
+            if coulomb
+            else 4.0
+            * math.pi
+            / volume
+            * (radius / (2.0 * decay) + 1.0 / (4.0 * decay**2 * radius))
+        )
+    elif lattice.dimension == 2:
+        factor = (
+            math.pi / (volume * decay * radius)
+            if coulomb
+            else math.pi / (volume * decay)
+        )
+    else:
+        factor = (
+            1.0 / (volume * decay * radius**2)
+            if coulomb
+            else 1.0 / (volume * decay * radius)
+        )
+    return _TAIL_MARGIN * xp.asarray(factor, dtype=xp.float64)
+
+
+def _solve_reach(
+    lattice: Lattice,
+    amplitudes: Array,
+    decays: Array,
+    precision: float,
+    coulomb: bool,
+) -> float:
+    """Return the smallest ``R`` beyond which the terms' tail is below ``precision``.
+
+    The terms ``amplitudes[k] exp(−decays[k] t²)`` (times ``1/t`` for
+    Coulomb terms) are summed over the lattice points farther than ``R``
+    by the estimate of :func:`_tail_prefactor`; ``R`` is at least the
+    natural scale ``1/sqrt(min decay)``, beyond which the tail decreases.
+    """
+    xp = array_namespace(amplitudes, decays)
+
+    def excess(radius: float) -> float:
+        tail = _tail_prefactor(lattice, decays, radius, coulomb) * xp.exp(
+            -decays * radius * radius
+        )
+        return float(xp.sum(amplitudes * tail)) - precision
+
+    return _outer_root(excess, 1.0 / math.sqrt(float(xp.min(decays))))
+
+
+def pair_reach(
+    first: BasisSet,
+    second: BasisSet,
+    lattice: Lattice,
+    precision: float = DEFAULT_LATTICE_SUM_PRECISION,
+) -> Array:
+    """Return the reach ``[n_first, n_second]`` of every pair of atoms, in Bohr.
+
+    The products of a function ``a`` of an atom of ``first`` and a function
+    ``b`` of an atom of ``second`` at the separation ``X`` have
+    ``∫ |a b| dr ≤ Σ_ij A_i A_j (π / (α'_i + α'_j))^{3/2} exp(−μ'_ij X²)``
+    over the primitives with the amplitudes and reduced exponents of
+    :func:`_primitive_terms` and ``μ'_ij = α'_i α'_j / (α'_i + α'_j)``, by
+    the Gaussian product rule. The reach of the pair of atoms is the
+    distance beyond which these integrals, summed over every image of the
+    second atom farther than it, fall below ``precision``: any matrix
+    element of a bounded one-electron operator between the two atoms then
+    changes by less than the precision when those images are left out.
+    """
+    _check_precision(precision)
+    xp = default_namespace()
+
+    def reach(shells_a: tuple[Shell, ...], shells_b: tuple[Shell, ...]) -> float:
+        amplitudes_a, exponents_a = _primitive_terms(shells_a)
+        amplitudes_b, exponents_b = _primitive_terms(shells_b)
+        total = xp.expand_dims(exponents_a, 1) + xp.expand_dims(exponents_b, 0)
+        reduced = (
+            xp.expand_dims(exponents_a, 1) * xp.expand_dims(exponents_b, 0) / total
+        )
+        amplitudes = (
+            xp.expand_dims(amplitudes_a, 1)
+            * xp.expand_dims(amplitudes_b, 0)
+            * (math.pi / total) ** 1.5
+        )
+        return _solve_reach(
+            lattice,
+            xp.reshape(amplitudes, (-1,)),
+            xp.reshape(reduced, (-1,)),
+            precision,
+            False,
+        )
+
+    return _reach_matrix(first, second, reach)
+
+
+def coulomb_reach(
+    first: BasisSet,
+    second: BasisSet,
+    lattice: Lattice,
+    *,
+    omega: float,
+    precision: float = DEFAULT_LATTICE_SUM_PRECISION,
+    spectator: float = 1.0,
+) -> Array:
+    """Return the reach ``[n_first, n_second]`` of the short-range kernel between atoms.
+
+    Two functions ``a`` and ``b`` of atoms at the distance ``D`` interact
+    through ``erfc(ωr)/r`` by at most
+    ``Σ_ik A_i A_k π³ exp(−θ_ik D²) / (α'_i β'_k sqrt(α'_i + β'_k) sqrt(ρ_ik) D)``
+    over the primitives with the amplitudes and reduced exponents of
+    :func:`_primitive_terms`, ``ρ_ik = α'_i β'_k / (α'_i + β'_k)`` and
+    ``1/θ_ik = 1/ρ_ik + 1/ω²``: the short-range integral of two s Gaussians
+    is ``π³ [erf(sqrt(ρ) D) − erf(sqrt(θ) D)] / (αβ sqrt(α + β) sqrt(ρ) D)``
+    and ``erf(x) − erf(y) ≤ exp(−y²)``. The reach of a pair of atoms is the
+    distance beyond which these bounds, summed over every image of the
+    second atom farther than it, fall below ``precision``. A ``spectator``
+    multiplies the bounds: for the three-centre integrals ``(P | a b)`` it
+    is a bound on ``Σ_T |b(r − T)|`` over the images of the third function,
+    :func:`periodic_amplitude`.
+    """
+    _check_precision(precision)
+    if not (math.isfinite(omega) and omega > 0.0):
+        raise InputError("the range-separation parameter omega is positive")
+    if not (math.isfinite(spectator) and spectator > 0.0):
+        raise InputError("the spectator amplitude is a positive number")
+    xp = default_namespace()
+
+    def reach(shells_a: tuple[Shell, ...], shells_b: tuple[Shell, ...]) -> float:
+        amplitudes_a, exponents_a = _primitive_terms(shells_a)
+        amplitudes_b, exponents_b = _primitive_terms(shells_b)
+        alpha = xp.expand_dims(exponents_a, 1)
+        beta = xp.expand_dims(exponents_b, 0)
+        rho = alpha * beta / (alpha + beta)
+        theta = rho * omega**2 / (rho + omega**2)
+        amplitudes = (
+            spectator
+            * xp.expand_dims(amplitudes_a, 1)
+            * xp.expand_dims(amplitudes_b, 0)
+            * math.pi**3
+            / (alpha * beta * xp.sqrt(alpha + beta) * xp.sqrt(rho))
+        )
+        return _solve_reach(
+            lattice,
+            xp.reshape(amplitudes, (-1,)),
+            xp.reshape(theta, (-1,)),
+            precision,
+            True,
+        )
+
+    return _reach_matrix(first, second, reach)
+
+
+def periodic_amplitude(basis: BasisSet, lattice: Lattice) -> float:
+    """Return a bound on ``max_r Σ_T |χ(r − T)|`` over the functions of ``basis``.
+
+    Every function is bounded by ``Σ_i A_i exp(−α'_i r²)`` as in
+    :func:`_primitive_terms`, and the lattice sum of a Gaussian takes its
+    largest value on a lattice point: by the Poisson summation formula
+    ``Σ_T exp(−α |r − T|²) = (π/α)^{d/2} Σ_G exp(−G²/4α) exp(i G·r) / V_d``
+    over the ``d`` periodic directions, which is at most its value at
+    ``r = 0``, ``Σ_T exp(−α T²)``, summed where its terms are above ``1e-16``.
+    """
+    xp = default_namespace()
+    largest = 0.0
+    for shell in basis.shells:
+        amplitudes, exponents = _primitive_terms([shell])
+        total = 0.0
+        for amplitude, alpha in zip(
+            amplitudes.tolist(), exponents.tolist(), strict=True
+        ):
+            vectors = lattice.translations(math.sqrt(_LATTICE_SUM_LOG / alpha))
+            total += amplitude * float(
+                xp.sum(xp.exp(-alpha * xp.sum(vectors * vectors, axis=-1)))
+            )
+        largest = max(largest, total)
+    return largest
+
+
 def lattice_images(
     basis: BasisSet, cell: Cell, *, precision: float = DEFAULT_LATTICE_SUM_PRECISION
 ) -> Array:
     """Return the translations ``[image, 3]`` in Bohr over which lattice sums run.
 
     An image ``T`` is kept when some atom ``A`` of the cell and some atom
-    ``B`` of the image are within the sum of their radii,
-    ``|A − B − T| ≤ r_A + r_B``, where every function of an atom is below
-    ``precision`` beyond its radius (:func:`function_radius`). The zero
+    ``B`` of the image are within their reach, ``|A − B − T| ≤ R_AB``, the
+    distance beyond which the products of their functions over all farther
+    images are below ``precision`` (:func:`pair_reach`). The zero
     translation comes first, the rest follow by length, and ``−T`` is kept
     with ``T``, so Bloch sums over the result are Hermitian.
     """
     require_basis_for_atoms(basis, cell)
     positions = cell.positions_array()
-    radii = atom_radii(basis, precision)
-    return reaching_images(cell.lattice, positions, radii, positions, radii)
+    reach = pair_reach(basis, basis, cell.lattice, precision)
+    return reaching_images(cell.lattice, positions, positions, reach)
 
 
 def reaching_images(
-    lattice: Lattice,
-    positions: Array,
-    radii: tuple[float, ...],
-    targets: Array,
-    target_radii: tuple[float, ...],
+    lattice: Lattice, positions: Array, targets: Array, reach: Array
 ) -> Array:
     """Return the translations ``T`` ``[image, 3]`` at which the sets touch.
 
     ``T`` is kept when some position ``p_i`` and some target ``q_j`` satisfy
-    ``|p_i − q_j − T| ≤ r_i + s_j`` for their radii ``r`` and ``s``, both
-    sets given as ``[n, 3]`` in Bohr. The zero translation comes first when
-    it is kept, the rest follow by length, and ``−T`` is kept with ``T``
-    whenever the two sets and their radii coincide.
+    ``|p_i − q_j − T| ≤ reach[i, j]``, both sets given as ``[n, 3]`` in
+    Bohr with the reach ``[n, m]`` of every pair. The zero translation
+    comes first when it is kept, the rest follow by length, and ``−T`` is
+    kept with ``T`` whenever the two sets coincide and the reach is
+    symmetric.
     """
-    xp = array_namespace(positions, targets)
-    reach_a = xp.asarray(radii, dtype=xp.float64)
-    reach_b = xp.asarray(target_radii, dtype=xp.float64)
-    if positions.shape != (reach_a.shape[0], 3) or targets.shape != (
-        reach_b.shape[0],
-        3,
-    ):
-        raise InputError("positions have shape [n, 3] with one radius each")
+    xp = array_namespace(positions, targets, reach)
+    if positions.ndim != 2 or targets.ndim != 2 or reach.ndim != 2:
+        raise InputError("positions have shape [n, 3] with one reach per pair")
+    n, m = int(positions.shape[0]), int(targets.shape[0])
+    if positions.shape != (n, 3) or targets.shape != (m, 3) or reach.shape != (n, m):
+        raise InputError("positions have shape [n, 3] with one reach per pair")
+    if n == 0 or m == 0:
+        return xp.zeros((0, 3), dtype=xp.float64)
     separations = xp.expand_dims(positions, 1) - xp.expand_dims(targets, 0)
     extent = float(xp.max(xp.linalg.vector_norm(separations, axis=-1)))
-    candidates = lattice.translations(
-        float(xp.max(reach_a)) + float(xp.max(reach_b)) + extent
-    )
-    reach = xp.expand_dims(reach_a, 1) + xp.expand_dims(reach_b, 0)
+    candidates = lattice.translations(float(xp.max(reach)) + extent)
     keep = xp.zeros(candidates.shape[0], dtype=xp.bool)
-    for index in range(int(positions.shape[0])):
+    for index in range(n):
         distance = xp.linalg.vector_norm(
             xp.expand_dims(separations[index], 0) - xp.expand_dims(candidates, 1),
             axis=-1,

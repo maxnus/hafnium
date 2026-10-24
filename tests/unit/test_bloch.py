@@ -9,6 +9,7 @@ from hafnium.backend import Array
 from hafnium.basis import BasisLibrary, BasisSet, Shell
 from hafnium.errors import InputError
 from hafnium.integrals import (
+    CoulombKernel,
     RustEngine,
     ShellTable,
     bloch_sum,
@@ -19,13 +20,21 @@ from hafnium.integrals import (
     overlap,
     overlap_k,
 )
-from hafnium.integrals.periodic import atom_radii, function_radius
-from hafnium.molecule import Atom, AtomicSystem, Cell
+from hafnium.integrals.periodic import (
+    atom_radii,
+    coulomb_reach,
+    function_radius,
+    pair_reach,
+    periodic_amplitude,
+    reaching_images,
+)
+from hafnium.molecule import Atom, AtomicSystem, Cell, default_omega
 from hafnium.symmetry import KPoints
 from tests.cells import box, helium
 from tests.molecules import water
 from tests.spectra import generalized_eigenvalues
 from tests.tolerances import (
+    AMPLITUDE_BOUND_RATIO,
     ENERGY_TOL,
     INTEGRAL_TOL,
     LATTICE_SUM_LOOSE_PRECISION,
@@ -211,6 +220,125 @@ def test_function_radius_bounds_the_function_and_follows_the_precision() -> None
     radii = atom_radii(basis_for(cell, "cc-pvdz"), precision)
     assert len(radii) == 2
     assert radii[0] == radii[1] > 0.0
+
+
+def envelope_lattice_sum(
+    basis: BasisSet, cell: Cell, points: Array, translations: Array
+) -> Array:
+    """``Σ_T Y_l Σ_i |c_i| |r − A − T|^l exp(−α_i |r − A − T|²)`` per shell."""
+    positions = np.asarray(cell.positions_array())
+    sums: list[Array] = []
+    for shell, atom in zip(basis.shells, basis.shell_atoms, strict=True):
+        l = shell.angular_momentum
+        angular = math.sqrt((2 * l + 1) / (4.0 * math.pi))
+        rows = shell.primitive_coefficients()
+        centres: Array = positions[atom] + translations
+        distance: Array = np.linalg.norm(
+            points[:, None, :] - centres[None, :, :], axis=-1
+        )
+        total: Array = np.zeros(points.shape[0])
+        for index, alpha in enumerate(shell.exponents):
+            coefficient = max(abs(row[index]) for row in rows)
+            total = total + coefficient * np.sum(
+                distance**l * np.exp(-alpha * distance**2), axis=1
+            )
+        sums.append(angular * total)
+    return np.stack(sums)
+
+
+def beyond_reach(cell: Cell, kept: Array, factor: float) -> tuple[Array, Array]:
+    """Images within ``factor`` times the longest kept one, flagged when not kept."""
+    wide = cell.lattice.translations(factor * float(np.linalg.norm(kept, axis=1).max()))
+    kept_set = {tuple(row) for row in np.round(kept, 8).tolist()}
+    beyond = np.array(
+        [tuple(row) not in kept_set for row in np.round(wide, 8).tolist()], dtype=bool
+    )
+    assert beyond.any()
+    return wide, beyond
+
+
+def test_pair_reach_bounds_the_overlap_beyond_it() -> None:
+    cell = helium(3)
+    basis = basis_for(cell, "cc-pvdz")
+    precision = 1e-8
+    reach = pair_reach(basis, basis, cell.lattice, precision)
+    assert reach.shape == (2, 2)
+    np.testing.assert_allclose(reach, reach.T)
+    assert np.all(reach > 0.0)
+    assert np.all(pair_reach(basis, basis, cell.lattice, 1e-12) > reach)
+    # The overlap over every image beyond the reach adds up to less than the
+    # precision in every element, and the images within it are not negligible.
+    kept = lattice_images(basis, cell, precision=precision)
+    wide, beyond = beyond_reach(cell, kept, 2.0)
+    table = ShellTable.from_basis(basis, cell)
+    values = np.abs(ENGINE.overlap(table, table, wide))
+    assert np.max(np.sum(values[beyond], axis=0)) < precision
+    assert np.max(values[~beyond][1:]) > precision
+    with pytest.raises(InputError, match="precision"):
+        pair_reach(basis, basis, cell.lattice, 0.0)
+
+
+def test_coulomb_reach_bounds_the_short_range_integrals_beyond_it() -> None:
+    cell = helium(3)
+    basis = basis_for(cell, "cc-pvdz")
+    precision = 1e-8
+    omega = default_omega(cell.lattice)
+    reach = coulomb_reach(basis, basis, cell.lattice, omega=omega, precision=precision)
+    assert reach.shape == (2, 2)
+    np.testing.assert_allclose(reach, reach.T)
+    # A shorter-ranged kernel and a looser precision reach less far, a
+    # spectator farther.
+    shorter = coulomb_reach(
+        basis, basis, cell.lattice, omega=2.0 * omega, precision=precision
+    )
+    assert np.all(shorter < reach)
+    assert np.all(
+        coulomb_reach(
+            basis,
+            basis,
+            cell.lattice,
+            omega=omega,
+            precision=LATTICE_SUM_LOOSE_PRECISION,
+        )
+        < reach
+    )
+    assert np.all(
+        coulomb_reach(
+            basis, basis, cell.lattice, omega=omega, precision=precision, spectator=3.0
+        )
+        > reach
+    )
+    positions = cell.positions_array()
+    kept = reaching_images(cell.lattice, positions, positions, reach)
+    wide, beyond = beyond_reach(cell, kept, 1.5)
+    table = ShellTable.from_basis(basis, cell)
+    values = np.abs(
+        ENGINE.coulomb_two_center(
+            table, table, wide, kernel=CoulombKernel(omega, short_range=True)
+        )
+    )
+    assert np.max(np.sum(values[beyond], axis=0)) < precision
+    assert np.max(values[~beyond][1:]) > precision
+    with pytest.raises(InputError, match="omega"):
+        coulomb_reach(basis, basis, cell.lattice, omega=-1.0)
+    with pytest.raises(InputError, match="spectator"):
+        coulomb_reach(basis, basis, cell.lattice, omega=omega, spectator=0.0)
+
+
+@pytest.mark.parametrize("dimension", [1, 2, 3])
+def test_periodic_amplitude_bounds_the_lattice_sum_of_every_function(
+    dimension: int,
+) -> None:
+    cell = helium(dimension)
+    basis = basis_for(cell, "cc-pvdz")
+    bound = periodic_amplitude(basis, cell.lattice)
+    rng = np.random.default_rng(7)
+    points = 6.0 * rng.random((200, 3)) - 3.0
+    translations = cell.lattice.translations(40.0)
+    sums = envelope_lattice_sum(basis, cell, points, translations)
+    assert np.max(sums) <= bound
+    # The bound is not far above the largest envelope the functions reach.
+    assert np.max(sums) > AMPLITUDE_BOUND_RATIO * bound
 
 
 def test_inputs_are_validated() -> None:

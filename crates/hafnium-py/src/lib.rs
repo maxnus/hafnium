@@ -257,7 +257,7 @@ fn coulomb_three_center<'py>(
 /// difference `T_j − T_i` is one of the `steps`, found through the
 /// integer lattice `coordinates` of the images and of the steps.
 #[pyfunction]
-#[pyo3(signature = (auxiliary, bra, ket, images, image_coordinates, steps, step_coordinates, bra_phases, ket_phases, omega=None, short_range=false, threshold=0.0))]
+#[pyo3(signature = (auxiliary, bra, ket, images, image_coordinates, steps, step_coordinates, image_classes, kpoints, omega=None, short_range=false, threshold=0.0))]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts #[pyfunction] arguments by value"
@@ -275,8 +275,8 @@ fn coulomb_three_center_bloch<'py>(
     image_coordinates: PyReadonlyArray2<'py, i64>,
     steps: PyReadonlyArray2<'py, f64>,
     step_coordinates: PyReadonlyArray2<'py, i64>,
-    bra_phases: PyReadonlyArray2<'py, Complex64>,
-    ket_phases: PyReadonlyArray2<'py, Complex64>,
+    image_classes: PyReadonlyArray1<'py, i64>,
+    kpoints: PyReadonlyArray2<'py, f64>,
     omega: Option<f64>,
     short_range: bool,
     threshold: f64,
@@ -285,19 +285,17 @@ fn coulomb_three_center_bloch<'py>(
     let steps = to_vectors(&steps, "translations")?;
     let image_coordinates = to_coordinates(&image_coordinates)?;
     let step_coordinates = to_coordinates(&step_coordinates)?;
-    let n_k = bra_phases.shape()[0];
-    if ket_phases.shape()[0] != n_k {
-        return Err(PyValueError::new_err(
-            "the phase tables have one row per k-point",
-        ));
-    }
+    let image_classes = to_indices(image_classes.as_slice()?, "image classes")?;
+    let kpoints = to_vectors(&kpoints, "k-points")?;
+    let n_k = kpoints.len();
     let kernel = to_kernel(omega, short_range)?;
     let sum = integrals::BlochSum {
         images: &images,
         image_coordinates: &image_coordinates,
         steps: &steps,
         step_coordinates: &step_coordinates,
-        phases: [bra_phases.as_slice()?, ket_phases.as_slice()?],
+        image_classes: &image_classes,
+        kpoints: &kpoints,
     };
     let values = integrals::coulomb_three_center_bloch(
         &auxiliary.inner,

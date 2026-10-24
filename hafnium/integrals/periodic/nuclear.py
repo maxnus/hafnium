@@ -143,14 +143,12 @@ def _short_range_images(
     """
     xp = default_namespace()
     positions = cell.positions_array(xp)
-    reach = (separation.short_range_radius,) * cell.n_atoms
-    images = reaching_images(
-        cell.lattice,
-        positions,
-        atom_radii(basis, separation.precision),
-        positions,
-        reach,
+    radii = xp.asarray(atom_radii(basis, separation.precision), dtype=xp.float64)
+    reach = xp.broadcast_to(
+        xp.expand_dims(radii, 1) + separation.short_range_radius,
+        (cell.n_atoms, cell.n_atoms),
     )
+    images = reaching_images(cell.lattice, positions, positions, reach)
     n_images = int(images.shape[0])
     charges = xp.asarray(cell.nuclear_charges, dtype=xp.float64)
     all_charges = xp.reshape(xp.broadcast_to(charges, (n_images, cell.n_atoms)), (-1,))

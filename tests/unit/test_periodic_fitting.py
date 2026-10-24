@@ -237,31 +237,51 @@ def test_bloch_kernel_reduces_to_the_plain_kernel_for_one_image() -> None:
     fitting = ShellTable.from_basis(basis_for(cell, AUXILIARY), cell)
     zero = np.zeros((1, 3))
     origin = np.zeros((1, 3), dtype=np.int64)
-    ones = (np.ones((1, 1), dtype=complex), np.ones((1, 1), dtype=complex))
-    images = BlochImages(zero, zero, (origin, origin), ones)
+    one_class = np.zeros(1, dtype=np.int64)
+    images = BlochImages(zero, zero, (origin, origin), one_class, zero)
     assert images.n_kpt == 1
     summed = ENGINE.coulomb_three_center_bloch(fitting, orbital, orbital, images)
     plain = ENGINE.coulomb_three_center(fitting, orbital, orbital, np.zeros((1, 2, 3)))
     np.testing.assert_allclose(summed[0, 0], plain[0], atol=INTEGRAL_TOL)
     # A step that reaches no image adds nothing.
-    far = BlochImages(zero, zero + 5.0, (origin, origin + 1), ones)
+    far = BlochImages(zero, zero + 5.0, (origin, origin + 1), one_class, zero)
     assert np.all(
         ENGINE.coulomb_three_center_bloch(fitting, orbital, orbital, far) == 0.0
     )
     with pytest.raises(InputError, match="three lattice coordinates"):
-        BlochImages(zero, zero, (origin, np.zeros((2, 3), dtype=np.int64)), ones)
-    with pytest.raises(InputError, match=r"\[kpt, image\]"):
-        BlochImages(zero, zero, (origin, origin), (zero, zero))
+        BlochImages(
+            zero, zero, (origin, np.zeros((2, 3), dtype=np.int64)), one_class, zero
+        )
+    with pytest.raises(InputError, match=r"\[image\]"):
+        BlochImages(zero, zero, (origin, origin), np.zeros(2, dtype=np.int64), zero)
+    with pytest.raises(InputError, match=r"\[kpt, 3\]"):
+        BlochImages(zero, zero, (origin, origin), one_class, np.zeros(3))
+    two = np.zeros((2, 3))
+    two_coordinates = np.zeros((2, 3), dtype=np.int64)
     with pytest.raises(ValueError, match="distinct"):
         ENGINE.coulomb_three_center_bloch(
             fitting,
             orbital,
             orbital,
             BlochImages(
-                np.zeros((2, 3)),
+                two, zero, (two_coordinates, origin), np.zeros(2, dtype=np.int64), zero
+            ),
+        )
+    # Two images of one class whose transfer phases differ are rejected.
+    apart = np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
+    apart_coordinates = np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int64)
+    kpts = np.array([[0.0, 0.0, 0.0], [0.3, 0.0, 0.0]])
+    with pytest.raises(ValueError, match="varies within an image class"):
+        ENGINE.coulomb_three_center_bloch(
+            fitting,
+            orbital,
+            orbital,
+            BlochImages(
+                apart,
                 zero,
-                (np.zeros((2, 3), dtype=np.int64), origin),
-                (np.ones((1, 2), dtype=complex), np.ones((1, 2), dtype=complex)),
+                (apart_coordinates, origin),
+                np.zeros(2, dtype=np.int64),
+                kpts,
             ),
         )
 
