@@ -30,7 +30,9 @@ COULOMB = CoulombKernel()
 
 @dataclass(frozen=True, slots=True)
 class BlochImages:
-    """The images and phases of a Bloch-summed three-centre integral (ADR-0019).
+    """The images, steps, classes and k-points of a Bloch-summed three-centre integral.
+
+    See ADR-0019 and ADR-0025.
 
     Parameters
     ----------
@@ -43,14 +45,19 @@ class BlochImages:
         step, found by the lattice coordinates.
     coordinates : tuple[Array[image, 3], Array[step, 3]]
         Integer lattice coordinates of the images and of the steps.
-    phases : tuple[Array[kpt, image], Array[kpt, image]]
-        Complex phases of the bra and the ket images at every k-point.
+    classes : Array[image]
+        The class of every image: ``exp(i (k2 − k1)·T)`` is the same for
+        every image ``T`` of a class and every pair of k-points, which on a
+        uniform mesh holds for the lattice coordinates modulo the mesh.
+    kpoints : Array[kpt, 3]
+        Cartesian k-points in inverse Bohr.
     """
 
     images: Array
     steps: Array
     coordinates: tuple[Array, Array]
-    phases: tuple[Array, Array]
+    classes: Array
+    kpoints: Array
 
     def __post_init__(self) -> None:
         n_images = int(self.images.shape[0]) if self.images.ndim == 2 else -1
@@ -62,14 +69,15 @@ class BlochImages:
             3,
         ):
             raise InputError("every image and every step has three lattice coordinates")
-        n_kpt = int(self.phases[0].shape[0]) if self.phases[0].ndim == 2 else -1
-        if any(table.shape != (n_kpt, n_images) for table in self.phases):
-            raise InputError("phases have shape [kpt, image] for the bra and the ket")
+        if self.classes.shape != (n_images,):
+            raise InputError("classes have shape [image]")
+        if self.kpoints.ndim != 2 or self.kpoints.shape[1] != 3:
+            raise InputError("k-points have shape [kpt, 3]")
 
     @property
     def n_kpt(self) -> int:
         """Number of k-points."""
-        return int(self.phases[0].shape[0])
+        return int(self.kpoints.shape[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,13 +183,14 @@ class IntegralEngine(Protocol):
     ) -> Array:
         """Bloch-summed three-centre integrals as complex ``[kpt, kpt, aux, ao, ao]``.
 
-        ``Σ_ij b[k1, i] c[k2, j] (P | u(r − T_i) v(r − T_j))`` over the pairs
-        of ``images`` whose difference is one of its steps, with its phases
-        ``b`` and ``c``, the auxiliary function in the home cell; with
-        ``b = exp(−i k1·T)`` and ``c = exp(i k2·T)`` it is ``(P^q | u k1 v k2)``
-        of the density fitting with momentum transfer ``q = k2 − k1``
-        (ADR-0019). Shell triples whose Schwarz bounds and primitive
-        quartets whose bounds fall below ``threshold`` are left out.
+        ``Σ_ij exp(−i k1·T_i) exp(i k2·T_j) (P | u(r − T_i) v(r − T_j))`` over
+        the pairs of ``images`` whose difference is one of its steps, the
+        auxiliary function in the home cell: ``(P^q | u k1 v k2)`` of the
+        density fitting with momentum transfer ``q = k2 − k1`` (ADR-0019),
+        with ``exp(i q·T_i)`` taken from the class of every image
+        (ADR-0025). Shell pairs, shell triples and primitive quartets whose
+        bounds fall below ``threshold`` are left out; when the bra and the
+        ket coincide every pair of images is evaluated once.
         """
         ...
 

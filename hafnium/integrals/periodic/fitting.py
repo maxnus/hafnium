@@ -15,9 +15,10 @@ negative eigenvalue along the charge of the auxiliary functions
 
 Both are lattice sums split by the range separation of
 :class:`~hafnium.integrals.periodic.RangeSeparation`. The short-range
-parts run in the compiled layer over the images the functions reach: the
-metric as the Bloch sum over the images of one auxiliary function, the
-three-centre integrals as the sum over the image pairs of the orbital
+parts run in the compiled layer over the images the short-range kernel
+reaches (:func:`~hafnium.integrals.periodic.coulomb_reach`, ADR-0025):
+the metric as the Bloch sum over the images of one auxiliary function,
+the three-centre integrals as the sum over the image pairs of the orbital
 functions with the auxiliary function in the home cell. The long-range
 parts are reciprocal-space sums over ``q + G`` of the kernel of ADR-0012
 with the Fourier transforms of the auxiliary functions and of the Bloch
@@ -40,11 +41,12 @@ from hafnium.integrals.density_fitting import (
 )
 from hafnium.integrals.engine import BlochImages, CoulombKernel, IntegralEngine
 from hafnium.integrals.periodic.bloch import (
-    atom_radii,
     bloch_sum,
+    coulomb_reach,
     function_absolute_integral,
     integer_coordinates,
     lattice_images,
+    periodic_amplitude,
     reaching_images,
     require_kpoints_for_lattice,
 )
@@ -232,9 +234,14 @@ class _Builder:
         xp = default_namespace()
         lattice = self.cell.lattice
         positions = self.cell.positions_array(xp)
-        radii = atom_radii(auxiliary, self.separation.precision)
-        reach = tuple(r + self.separation.short_range_radius for r in radii)
-        images = reaching_images(lattice, positions, radii, positions, reach)
+        reach = coulomb_reach(
+            auxiliary,
+            auxiliary,
+            lattice,
+            omega=self.separation.omega,
+            precision=self.separation.precision,
+        )
+        images = reaching_images(lattice, positions, positions, reach)
         per_image = self.separation.precision / max(int(images.shape[0]), 1)
         short = self.engine.coulomb_two_center(
             fitting,
@@ -261,32 +268,37 @@ class _Builder:
         basis: BasisSet,
         table: Array,
     ) -> Array:
-        """``(P^q | u k1 v k2)`` as complex ``[kpt, kpt, aux, ao, ao]``."""
+        """``(P^q | u k1 v k2)`` as complex ``[kpt, kpt, aux, ao, ao]``.
+
+        The orbital functions are imaged where the short-range kernel
+        reaches them from the home-cell auxiliary functions, with the
+        third function of the triple bounded by its periodic amplitude.
+        """
         xp = default_namespace()
         lattice = self.cell.lattice
         positions = self.cell.positions_array(xp)
         precision = self.separation.precision
         pair_images = lattice_images(basis, self.cell, precision=precision)
-        aux_reach = tuple(
-            r + self.separation.short_range_radius
-            for r in atom_radii(auxiliary, precision)
+        reach = coulomb_reach(
+            auxiliary,
+            basis,
+            lattice,
+            omega=self.separation.omega,
+            precision=precision,
+            spectator=periodic_amplitude(basis, lattice),
         )
-        images = reaching_images(
-            lattice, positions, aux_reach, positions, atom_radii(basis, precision)
-        )
+        images = reaching_images(lattice, positions, positions, reach)
         # Every element collects one term per step of every image; the
         # terms fall off with the step, so the step count sets the threshold.
         per_pair = precision / max(int(pair_images.shape[0]), 1)
         kpts = xp.asarray(self.kpoints.cartesian(lattice))
-        angles = xp.astype(kpts @ xp.linalg.matrix_transpose(images), xp.complex128)
+        coordinates = integer_coordinates(lattice, images)
         bloch = BlochImages(
             images,
             pair_images,
-            (
-                integer_coordinates(lattice, images),
-                integer_coordinates(lattice, pair_images),
-            ),
-            (xp.exp(-1j * angles), xp.exp(1j * angles)),
+            (coordinates, integer_coordinates(lattice, pair_images)),
+            self._image_classes(coordinates),
+            kpts,
         )
         short = self.engine.coulomb_three_center_bloch(
             fitting,
@@ -323,6 +335,19 @@ class _Builder:
                     weights, summed[k2], axes=1
                 )
         return xp.stack([xp.stack(row) for row in parts])
+
+    def _image_classes(self, coordinates: Array) -> Array:
+        """Return the Born–von Kármán class of every image.
+
+        The lattice ``coordinates`` ``[image, 3]`` modulo the mesh sizes,
+        flattened: ``exp(i q·T)`` is the same for every image of a class at
+        every momentum transfer ``q`` of the mesh.
+        """
+        xp = array_namespace(coordinates)
+        sizes = self.kpoints.mesh_size() + (1,) * (3 - self.cell.lattice.dimension)
+        n = xp.asarray(sizes, dtype=xp.int64)
+        residues = coordinates - n * xp.floor_divide(coordinates, n)
+        return (residues[:, 0] * sizes[1] + residues[:, 1]) * sizes[2] + residues[:, 2]
 
     def _reciprocal_sum(
         self, q: int, charge_product: float, profile: PerpendicularProfile

@@ -15,15 +15,16 @@ mod one_electron;
 mod pairs;
 #[cfg(test)]
 mod test_tables;
+mod three_center_bloch;
 mod two_electron;
 
 pub use cartesian::{cartesian_components, n_cartesian, spherical_transformation, transform_index};
 pub use coulomb::CoulombKernel;
 pub use fourier::{fourier_transform, pair_fourier_transform};
 pub use one_electron::{kinetic, nuclear_attraction, overlap};
+pub use three_center_bloch::{BlochSum, coulomb_three_center_bloch};
 pub use two_electron::{
-    BlochSum, coulomb_four_center, coulomb_three_center, coulomb_three_center_bloch,
-    coulomb_two_center, schwarz_bounds,
+    coulomb_four_center, coulomb_three_center, coulomb_two_center, schwarz_bounds,
 };
 
 use crate::Error;

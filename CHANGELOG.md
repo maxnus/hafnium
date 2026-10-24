@@ -200,4 +200,13 @@ uses [Semantic Versioning](https://semver.org/).
   all eight classes reproduce the full-zone results for a non-symmorphic
   crystal, a hexagonal slab and a chain, and energies, wedge sizes,
   weights and orbital energies match PySCF's symmetric KRHF (ADR-0024).
+- Lattice sums choose their images by the exponents of the functions
+  (`pair_reach`, `coulomb_reach`, `periodic_amplitude`; `reaching_images`
+  takes a reach per pair of atoms), with the tail of the neglected images
+  bounded by the precision, and the Bloch three-centre kernel tabulates
+  its screening once per step, accumulates per Born–von Kármán class of
+  the images with the k-points (`BlochImages.classes`,
+  `BlochImages.kpoints` replace the phase tables) and evaluates every
+  pair of images once; the fitted tensor of a silicon cell builds 6.7×
+  faster (ADR-0025).
 

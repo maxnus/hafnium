@@ -16,15 +16,13 @@
 //! envelope with the weights `s_hi^n h_n(ε)` over the combined Hermite
 //! orders `n = t + τ`, and `h_n` the Hermite envelopes of [`super::pairs`].
 
-use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ops::{AddAssign, Mul};
 
-use num_complex::Complex64;
 use rayon::prelude::*;
 
 use super::cartesian::{
-    cartesian_components, n_cartesian, spherical_transformation, transform_index,
+    cartesian_components, n_cartesian, spherical_transformation, transform_index_into,
 };
 use super::coulomb::{CoulombKernel, HermiteWorkspace};
 use super::pairs::{
@@ -34,19 +32,19 @@ use super::pairs::{
 use super::{ShellRef, ShellTable};
 use crate::Error;
 
-const ZERO: [f64; 3] = [0.0; 3];
+pub(crate) const ZERO: [f64; 3] = [0.0; 3];
 
 /// What one kernel call screens with: the kernel, the threshold below
 /// which a primitive quartet is left out, and the Hermite envelopes of its
 /// bounds (ADR-0018). A threshold of zero evaluates everything.
 pub(crate) struct Context<'a> {
-    kernel: CoulombKernel,
-    threshold: f64,
-    envelopes: &'a [f64],
+    pub(crate) kernel: CoulombKernel,
+    pub(crate) threshold: f64,
+    pub(crate) envelopes: &'a [f64],
 }
 
 /// The Hermite envelopes for every combined order the tables can reach.
-fn envelopes_for(tables: &[&ShellTable]) -> Vec<f64> {
+pub(crate) fn envelopes_for(tables: &[&ShellTable]) -> Vec<f64> {
     let max_order: usize = tables
         .iter()
         .map(|table| table.max_angular_momentum())
@@ -222,206 +220,8 @@ pub fn coulomb_three_center(
     ))
 }
 
-/// The images and phases of a Bloch-summed three-centre integral.
-///
-/// The orbital functions are imaged over `images`, with the integer
-/// lattice coordinates `image_coordinates` of every image; the ket image
-/// of a pair is the bra image displaced by one of the `steps`, the
-/// relative translations at which a pair of functions still overlaps,
-/// found by their coordinates. `phases` are the row-major
-/// `[n_k, n_images]` phase tables of the bra and the ket.
-#[derive(Debug, Clone, Copy)]
-pub struct BlochSum<'a> {
-    /// The image list `[image, 3]` in Bohr, shared by the bra and the ket.
-    pub images: &'a [[f64; 3]],
-    /// The integer lattice coordinates of every image.
-    pub image_coordinates: &'a [[i64; 3]],
-    /// The relative translations `[step, 3]` of the pairs, in Bohr.
-    pub steps: &'a [[f64; 3]],
-    /// The integer lattice coordinates of every step.
-    pub step_coordinates: &'a [[i64; 3]],
-    /// The phase tables of the bra and the ket.
-    pub phases: [&'a [Complex64]; 2],
-}
-
-impl BlochSum<'_> {
-    /// Validate the lists and return the number of k-points.
-    fn check(&self) -> Result<usize, Error> {
-        let invalid = |message: &str| Err(Error::InvalidArgument(message.to_string()));
-        check_finite(self.images, "translations")?;
-        check_finite(self.steps, "translations")?;
-        let n_images = self.images.len();
-        if n_images == 0 {
-            return invalid("a Bloch sum needs at least one image");
-        }
-        if self.image_coordinates.len() != n_images
-            || self.step_coordinates.len() != self.steps.len()
-        {
-            return invalid("every image and every step has one set of lattice coordinates");
-        }
-        let n_k = self.phases[0].len() / n_images;
-        if self.phases[0].len() != n_k * n_images || self.phases[1].len() != n_k * n_images {
-            return invalid("the phase tables hold one row per k-point and one column per image");
-        }
-        if self
-            .phases
-            .iter()
-            .any(|table| table.iter().any(|z| !z.is_finite()))
-        {
-            return invalid("phases are finite");
-        }
-        Ok(n_k)
-    }
-
-    /// The image index of every lattice coordinate, after checking that the
-    /// coordinates agree with the vectors: for every step that reaches an
-    /// image, the first pair found satisfies `T_j = T_i + step`.
-    fn lookup(&self) -> Result<HashMap<[i64; 3], usize>, Error> {
-        let mut lookup = HashMap::with_capacity(self.images.len());
-        for (index, coordinates) in self.image_coordinates.iter().enumerate() {
-            if lookup.insert(*coordinates, index).is_some() {
-                return Err(Error::InvalidArgument(
-                    "the image coordinates are distinct".to_string(),
-                ));
-            }
-        }
-        for (step, coordinates) in self.step_coordinates.iter().enumerate() {
-            let found = self
-                .image_coordinates
-                .iter()
-                .enumerate()
-                .find_map(|(i, origin)| {
-                    let target: [i64; 3] =
-                        std::array::from_fn(|axis| origin[axis] + coordinates[axis]);
-                    lookup.get(&target).map(|&j| (i, j))
-                });
-            if let Some((i, j)) = found {
-                let mismatch = (0..3)
-                    .map(|axis| {
-                        (self.images[j][axis] - self.images[i][axis] - self.steps[step][axis]).abs()
-                    })
-                    .fold(0.0_f64, f64::max);
-                if mismatch > COORDINATE_TOLERANCE {
-                    return Err(Error::InvalidArgument(
-                        "the lattice coordinates of the images and steps disagree with their vectors"
-                            .to_string(),
-                    ));
-                }
-            }
-        }
-        Ok(lookup)
-    }
-}
-
-/// Largest difference in Bohr between an image vector and the one its
-/// lattice coordinates predict.
-const COORDINATE_TOLERANCE: f64 = 1e-8;
-
-/// The tables shared by every image of a Bloch-summed three-centre call.
-struct BlochSetup<'a> {
-    aux: &'a ShellTable,
-    bra: &'a ShellTable,
-    ket: &'a ShellTable,
-    tables: &'a Tables,
-    context: &'a Context<'a>,
-    aux_pairs: &'a [PrimitivePairs],
-    /// Schwarz bounds `Q_ab` of every shell pair at every step, `[step, a, b]`.
-    step_bounds: &'a [f64],
-    /// Schwarz bounds `Q_P` of the auxiliary shells.
-    aux_bounds: &'a [f64],
-    /// The quartet bounds of every shell triple at every step summed over
-    /// its primitive quartets at zero distance, `[step, a, b, P]`, and the
-    /// decay rate `(1 − ε) s_lo²` of the slowest quartet of each triple,
-    /// `[a, b, P]`: the triple's integral at a distance `R` between the
-    /// auxiliary centre and the pair centres is at most
-    /// `zero_bounds × exp(−decay R²)`.
-    zero_bounds: &'a [f64],
-    decays: &'a [f64],
-    lookup: &'a HashMap<[i64; 3], usize>,
-    n_k: usize,
-}
-
-/// The Schwarz bounds `[step, a, b]` and zero-distance bounds
-/// `[step, a, b, P]` of [`BlochSetup`], from one pass over the shell pairs
-/// of every step in parallel.
-fn step_tables(
-    tables: [&ShellTable; 3],
-    aux_pairs: &[PrimitivePairs],
-    steps: &[[f64; 3]],
-    context: &Context<'_>,
-    cache: &Tables,
-) -> (Vec<f64>, Vec<f64>) {
-    let [aux, bra, ket] = tables;
-    let rows: Vec<(Vec<f64>, Vec<f64>)> = steps
-        .par_iter()
-        .map(|step| {
-            let pairs = shell_pairs([bra, ket], [ZERO, *step], false, context.kernel, cache);
-            let mut schwarz = Vec::with_capacity(pairs.len());
-            let mut zero = Vec::with_capacity(pairs.len() * aux_pairs.len());
-            for pair in &pairs {
-                schwarz.push(pair.bound);
-                let [la, lb] = pair.ls;
-                for (ip, aux_pair) in aux_pairs.iter().enumerate() {
-                    let lp = aux.shell(ip).angular_momentum;
-                    let components: [&[[usize; 3]]; 4] = [
-                        &cache.components[la],
-                        &cache.components[lb],
-                        &cache.components[lp],
-                        &cache.components[0],
-                    ];
-                    let scale = cache.row_norms[la] * cache.row_norms[lb] * cache.row_norms[lp];
-                    let mut total = 0.0;
-                    for (index_bra, pair_bra) in pair.primitives.pairs.iter().enumerate() {
-                        for (index_ket, pair_ket) in aux_pair.pairs.iter().enumerate() {
-                            total += scale
-                                * pair.primitives.coefficient_max(index_bra)
-                                * aux_pair.coefficient_max(index_ket)
-                                * quartet_bound_at_zero(pair_bra, pair_ket, components, context);
-                        }
-                    }
-                    zero.push(total);
-                }
-            }
-            (schwarz, zero)
-        })
-        .collect();
-    let mut schwarz = Vec::new();
-    let mut zero = Vec::new();
-    for (row_schwarz, row_zero) in rows {
-        schwarz.extend(row_schwarz);
-        zero.extend(row_zero);
-    }
-    (schwarz, zero)
-}
-
-/// The decay rates `(1 − ε) s_lo²` `[a, b, P]` of the slowest primitive
-/// quartet of every shell triple, from the smallest exponents.
-fn triple_decays(tables: [&ShellTable; 3], kernel: CoulombKernel) -> Vec<f64> {
-    let [aux, bra, ket] = tables;
-    let smallest = |shell: &ShellRef<'_>| {
-        shell
-            .exponents
-            .iter()
-            .copied()
-            .fold(f64::INFINITY, f64::min)
-    };
-    let mut decays = Vec::with_capacity(bra.n_shells() * ket.n_shells() * aux.n_shells());
-    for ia in 0..bra.n_shells() {
-        for ib in 0..ket.n_shells() {
-            let p_min = smallest(&bra.shell(ia)) + smallest(&ket.shell(ib));
-            for ip in 0..aux.n_shells() {
-                let q_min = smallest(&aux.shell(ip));
-                let alpha = p_min * q_min / (p_min + q_min);
-                let (low, _) = kernel.exponent_range(alpha);
-                decays.push((1.0 - ENVELOPE_EPSILON) * low * low);
-            }
-        }
-    }
-    decays
-}
-
 /// The quartet bound of [`quartet_bound`] without its distance factor.
-fn quartet_bound_at_zero(
+pub(crate) fn quartet_bound_at_zero(
     pair_bra: &PrimitivePair,
     pair_ket: &PrimitivePair,
     components: [&[[usize; 3]]; 4],
@@ -432,245 +232,6 @@ fn quartet_bound_at_zero(
     let (low, high) = context.kernel.exponent_range(alpha);
     let prefactor = 2.0 * PI.powf(2.5) / (p * q * (p + q).sqrt()) / alpha.sqrt() * (high - low);
     prefactor * quartet_envelope(pair_bra, pair_ket, components, high, context.envelopes)
-}
-
-/// The squared distance from `point` to the segment between `start` and `end`.
-fn segment_distance_squared(point: [f64; 3], start: [f64; 3], end: [f64; 3]) -> f64 {
-    let direction: [f64; 3] = std::array::from_fn(|axis| end[axis] - start[axis]);
-    let offset: [f64; 3] = std::array::from_fn(|axis| point[axis] - start[axis]);
-    let length_squared: f64 = direction.iter().map(|x| x * x).sum();
-    let along: f64 = (0..3).map(|axis| offset[axis] * direction[axis]).sum();
-    let t = if length_squared > 0.0 {
-        (along / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    (0..3)
-        .map(|axis| (offset[axis] - t * direction[axis]).powi(2))
-        .sum()
-}
-
-/// Three-centre Coulomb integrals summed over the images of the bra and
-/// the ket with phases,
-/// `Σ_{(i, j)} b[k1, i] c[k2, j] (P | μ(r − T_i) ν(r − T_j))`, as a
-/// row-major complex `[n_k, n_k, n_aux, n_bra, n_ket]` array over the
-/// pairs `(i, j)` of images of `sum` whose difference is one of its steps,
-/// with the phase tables `b` and `c` of the bra and the ket. With
-/// `b[k1, i] = exp(−i k1·T_i)` and `c[k2, j] = exp(i k2·T_j)` the result is
-/// the Bloch-summed integral `(P^q | μ k1 ν k2)` of the density fitting
-/// with momentum transfer `q = k2 − k1`, the auxiliary function in the
-/// home cell (ADR-0019).
-///
-/// A shell triple is skipped when the product of the Schwarz bounds of
-/// the pair at its step and of the auxiliary shell is below `threshold`,
-/// and primitive quartets bounded below `threshold` are left out as in
-/// [`coulomb_three_center`]; every neglected term is smaller than
-/// `threshold`.
-///
-/// # Errors
-///
-/// Returns [`Error::InvalidArgument`] if the kernel's `omega` is not
-/// positive, `threshold` is negative or not finite, a translation is not
-/// finite, the coordinate lists do not match the image and step lists or
-/// repeat an image, or the phase tables do not hold the same number of
-/// k-points for every image.
-pub fn coulomb_three_center_bloch(
-    aux: &ShellTable,
-    bra: &ShellTable,
-    ket: &ShellTable,
-    sum: BlochSum<'_>,
-    kernel: CoulombKernel,
-    threshold: f64,
-) -> Result<Vec<Complex64>, Error> {
-    kernel.validate()?;
-    check_threshold(threshold)?;
-    let n_k = sum.check()?;
-    let lookup = sum.lookup()?;
-    let n_images = sum.images.len();
-    let block_size = aux.n_functions() * bra.n_functions() * ket.n_functions();
-    let size = n_k * n_k * block_size;
-    let max_l = aux
-        .max_angular_momentum()
-        .max(bra.max_angular_momentum())
-        .max(ket.max_angular_momentum());
-    let tables = Tables::new(max_l);
-    let envelopes = envelopes_for(&[aux, bra, ket]);
-    let context = Context {
-        kernel,
-        threshold,
-        envelopes: &envelopes,
-    };
-    let aux_pairs: Vec<PrimitivePairs> = (0..aux.n_shells())
-        .map(|ip| {
-            let p_shell = aux.shell(ip);
-            single_shell_pairs(&p_shell, p_shell.center)
-        })
-        .collect();
-    let aux_bounds: Vec<f64> = aux_pairs
-        .iter()
-        .enumerate()
-        .map(|(ip, pairs)| {
-            let lp = aux.shell(ip).angular_momentum;
-            schwarz_bound(
-                pairs,
-                [lp, 0],
-                kernel,
-                &tables,
-                &mut HermiteWorkspace::default(),
-            )
-        })
-        .collect();
-    let (step_bounds, zero_bounds) =
-        step_tables([aux, bra, ket], &aux_pairs, sum.steps, &context, &tables);
-    let decays = triple_decays([aux, bra, ket], kernel);
-    let setup = BlochSetup {
-        aux,
-        bra,
-        ket,
-        tables: &tables,
-        context: &context,
-        aux_pairs: &aux_pairs,
-        step_bounds: &step_bounds,
-        aux_bounds: &aux_bounds,
-        zero_bounds: &zero_bounds,
-        decays: &decays,
-        lookup: &lookup,
-        n_k,
-    };
-    let bra_phases = sum.phases[0];
-    Ok((0..n_images)
-        .into_par_iter()
-        .fold(
-            || vec![Complex64::default(); size],
-            |mut accumulated, i| {
-                if let Some(buffer) = bloch_image(&setup, &sum, i) {
-                    for k1 in 0..n_k {
-                        let phase = bra_phases[k1 * n_images + i];
-                        for k2 in 0..n_k {
-                            let target =
-                                &mut accumulated[(k1 * n_k + k2) * block_size..][..block_size];
-                            let source = &buffer[k2 * block_size..][..block_size];
-                            for (t, s) in target.iter_mut().zip(source) {
-                                *t += phase * s;
-                            }
-                        }
-                    }
-                }
-                accumulated
-            },
-        )
-        .reduce(
-            || vec![Complex64::default(); size],
-            |mut left, right| {
-                for (x, y) in left.iter_mut().zip(&right) {
-                    *x += y;
-                }
-                left
-            },
-        ))
-}
-
-/// `buffer[k2][P][μ][ν] = Σ_j c[k2, j] (P | μ(T_i) ν(T_j))` over the ket
-/// images `j = i + step` of bra image `i`, or `None` when every term was
-/// screened away.
-fn bloch_image(setup: &BlochSetup<'_>, sum: &BlochSum<'_>, i: usize) -> Option<Vec<Complex64>> {
-    let (aux, bra, ket, tables) = (setup.aux, setup.bra, setup.ket, setup.tables);
-    let (n_bra, n_ket) = (bra.n_functions(), ket.n_functions());
-    let (n_a, n_b) = (bra.n_shells(), ket.n_shells());
-    let block_size = aux.n_functions() * n_bra * n_ket;
-    let n_images = sum.images.len();
-    let ket_phases = sum.phases[1];
-    let threshold = setup.context.threshold;
-    let aux_max = setup.aux_bounds.iter().fold(0.0_f64, |acc, q| acc.max(*q));
-    let (aux_offsets, bra_offsets) = (aux.function_offsets(), bra.function_offsets());
-    let ket_offsets = ket.function_offsets();
-    let mut workspace = HermiteWorkspace::default();
-    let mut buffer = vec![Complex64::default(); setup.n_k * block_size];
-    let mut block = Vec::new();
-    let mut touched = false;
-    let t_i = sum.images[i];
-    let origin = sum.image_coordinates[i];
-    for (step, coordinates) in sum.step_coordinates.iter().enumerate() {
-        let target: [i64; 3] = std::array::from_fn(|axis| origin[axis] + coordinates[axis]);
-        let Some(&j) = setup.lookup.get(&target) else {
-            continue;
-        };
-        let t_j = sum.images[j];
-        for (ia, &bra_offset) in bra_offsets.iter().enumerate() {
-            let a = bra.shell(ia);
-            let a_center: [f64; 3] = std::array::from_fn(|axis| a.center[axis] + t_i[axis]);
-            let shifted = ShellRef {
-                center: a_center,
-                ..a
-            };
-            for (ib, &ket_offset) in ket_offsets.iter().enumerate() {
-                let pair_index = (step * n_a + ia) * n_b + ib;
-                let pair_bound = setup.step_bounds[pair_index];
-                if pair_bound * aux_max < threshold {
-                    continue;
-                }
-                let b = ket.shell(ib);
-                let b_center: [f64; 3] = std::array::from_fn(|axis| b.center[axis] + t_j[axis]);
-                let (la, lb) = (a.angular_momentum, b.angular_momentum);
-                let (ka, kb) = (a.n_contractions, b.n_contractions);
-                let mut shell_pair: Option<PrimitivePairs> = None;
-                for (ip, &aux_offset) in aux_offsets.iter().enumerate() {
-                    if pair_bound * setup.aux_bounds[ip] < threshold {
-                        continue;
-                    }
-                    let p_shell = aux.shell(ip);
-                    let triple = pair_index * aux.n_shells() + ip;
-                    let distance_squared =
-                        segment_distance_squared(p_shell.center, a_center, b_center);
-                    let decay = setup.decays[(ia * n_b + ib) * aux.n_shells() + ip];
-                    if threshold > 0.0
-                        && setup.zero_bounds[triple] * (-decay * distance_squared).exp() < threshold
-                    {
-                        continue;
-                    }
-                    let shell_pair = shell_pair
-                        .get_or_insert_with(|| primitive_pairs(&shifted, &b, b_center, 0));
-                    let (lp, kp) = (p_shell.angular_momentum, p_shell.n_contractions);
-                    let cartesian = ka * n_cartesian(la) * kb * n_cartesian(lb) * kp;
-                    block.clear();
-                    block.resize(cartesian * n_cartesian(lp), 0.0);
-                    let scale = tables.row_norms[la] * tables.row_norms[lb] * tables.row_norms[lp];
-                    if !coulomb_block(
-                        shell_pair,
-                        [la, lb],
-                        &setup.aux_pairs[ip],
-                        [lp, 0],
-                        setup.context,
-                        scale,
-                        tables,
-                        &mut workspace,
-                        &mut block,
-                    ) {
-                        continue;
-                    }
-                    touched = true;
-                    let spherical = tables.to_spherical(
-                        &block,
-                        [Some(la), Some(lb), Some(lp), None],
-                        [ka, kb, kp, 1],
-                    );
-                    let (nsb, nsp) = (b.n_functions(), p_shell.n_functions());
-                    for (index, value) in spherical.iter().enumerate() {
-                        let mp = index % nsp;
-                        let mb = (index / nsp) % nsb;
-                        let ma = index / (nsp * nsb);
-                        let target =
-                            ((aux_offset + mp) * n_bra + bra_offset + ma) * n_ket + ket_offset + mb;
-                        for k2 in 0..setup.n_k {
-                            buffer[k2 * block_size + target] +=
-                                ket_phases[k2 * n_images + j] * value;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    touched.then_some(buffer)
 }
 
 /// Four-centre Coulomb integrals `(a b(r − T_b) | c(r − T_c) d(r − T_d))`
@@ -1073,17 +634,17 @@ fn scatter(
 }
 
 /// A pair of shells with its primitive pairs and Schwarz bound.
-struct ShellPair {
+pub(crate) struct ShellPair {
     /// Shell indices in the two tables.
-    shells: [usize; 2],
-    ls: [usize; 2],
+    pub(crate) shells: [usize; 2],
+    pub(crate) ls: [usize; 2],
     /// Number of contractions of each shell.
-    contractions: [usize; 2],
+    pub(crate) contractions: [usize; 2],
     /// First function of each shell in its table.
-    offsets: [usize; 2],
-    primitives: PrimitivePairs,
+    pub(crate) offsets: [usize; 2],
+    pub(crate) primitives: PrimitivePairs,
     /// `max sqrt((ab|ab))` over the functions of the pair.
-    bound: f64,
+    pub(crate) bound: f64,
 }
 
 impl ShellPair {
@@ -1118,7 +679,7 @@ impl ShellPair {
 /// and the second by `translations[1]`, in row-major shell order; with
 /// `symmetric` only the pairs with `second ≥ first`. Runs in parallel over
 /// the first shell.
-fn shell_pairs(
+pub(crate) fn shell_pairs(
     tables: [&ShellTable; 2],
     translations: [[f64; 3]; 2],
     symmetric: bool,
@@ -1163,7 +724,7 @@ fn shell_pairs(
 }
 
 /// `max_{ab} sqrt((ab|ab))` over the spherical functions of a pair.
-fn schwarz_bound(
+pub(crate) fn schwarz_bound(
     primitives: &PrimitivePairs,
     ls: [usize; 2],
     kernel: CoulombKernel,
@@ -1276,7 +837,26 @@ impl Tables {
     where
         T: Copy + Default + AddAssign + Mul<f64, Output = T>,
     {
-        let mut data = block.to_vec();
+        let (mut scratch, mut out) = (Vec::new(), Vec::new());
+        self.to_spherical_into(block, ls, ks, &mut scratch, &mut out);
+        out
+    }
+
+    /// [`Self::to_spherical`] into `out`, with `scratch` as the second
+    /// buffer of the axis-by-axis transformation; neither allocates once
+    /// they have grown to the size of the block.
+    pub(crate) fn to_spherical_into<T>(
+        &self,
+        block: &[T],
+        ls: [Option<usize>; 4],
+        ks: [usize; 4],
+        scratch: &mut Vec<T>,
+        out: &mut Vec<T>,
+    ) where
+        T: Copy + Default + AddAssign + Mul<f64, Output = T>,
+    {
+        out.clear();
+        out.extend_from_slice(block);
         let mut shape = [1; 8];
         for index in 0..4 {
             shape[2 * index] = ks[index];
@@ -1289,10 +869,10 @@ impl Tables {
             let axis = 2 * index + 1;
             let left: usize = shape[..axis].iter().product();
             let right: usize = shape[axis + 1..].iter().product();
-            data = transform_index(&data, left, shape[axis], right, &self.transforms[*l]);
+            transform_index_into(out, left, shape[axis], right, &self.transforms[*l], scratch);
+            std::mem::swap(out, scratch);
             shape[axis] = 2 * l + 1;
         }
-        data
     }
 }
 
@@ -1346,8 +926,11 @@ pub(crate) fn coulomb_block(
                 }
             }
             added = true;
+            let pq: [f64; 3] =
+                std::array::from_fn(|axis| pair_bra.center[axis] - pair_ket.center[axis]);
             let prefactor = primitive_quartet(
                 (pair_bra, pair_ket),
+                pq,
                 components,
                 orders,
                 context.kernel,
@@ -1454,10 +1037,16 @@ fn quartet_envelope(
 }
 
 /// `values[ab][cd] = Σ_{tuv} E^{ab}_{tuv} Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ}
-/// R_{t+τ, u+ν, v+φ}` for one primitive quartet, returning the prefactor
-/// `2π^{5/2} / (pq √(p+q))`; the Hermite table carries the kernel.
-fn primitive_quartet(
+/// R_{t+τ, u+ν, v+φ}` for one primitive quartet whose product centres are
+/// displaced by `pq`, returning the prefactor `2π^{5/2} / (pq √(p+q))`;
+/// the Hermite table carries the kernel.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "inner kernel; every argument is a distinct table"
+)]
+pub(crate) fn primitive_quartet(
     pairs: (&PrimitivePair, &PrimitivePair),
+    pq: [f64; 3],
     components: [&[[usize; 3]]; 4],
     orders: [usize; 2],
     kernel: CoulombKernel,
@@ -1472,7 +1061,6 @@ fn primitive_quartet(
     let (p, q) = (pair_bra.p, pair_ket.p);
     let alpha = p * q / (p + q);
     let prefactor = 2.0 * PI.powf(2.5) / (p * q * (p + q).sqrt());
-    let pq: [f64; 3] = std::array::from_fn(|axis| pair_bra.center[axis] - pair_ket.center[axis]);
     let r = workspace.compute_kernel(orders[0] + orders[1], alpha, kernel, pq);
     // X[cd][tuv] = Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ} R_{t+τ, u+ν, v+φ}
     for (icd, (cc, cd)) in comp_c
@@ -1526,7 +1114,7 @@ fn primitive_quartet(
 /// Add `prefactor * values[ab][cd]` of one primitive quartet to `out`
 /// (laid out `[k_a, a, k_b, b, k_c, c, k_d, d]`) for every combination of
 /// contractions, scaled by their coefficients.
-fn accumulate_quartet(
+pub(crate) fn accumulate_quartet(
     bra: (&PrimitivePairs, usize),
     ket: (&PrimitivePairs, usize),
     prefactor: f64,
@@ -2281,217 +1869,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// The Bloch-summed three-centre integrals from the explicit image
-    /// pairs: `Σ_{ij} b[k1, i] c[k2, j] (P | μ(T_i) ν(T_j))` with the aux at
-    /// home expressed through the plain kernel as `(P(−T_i) | μ ν(T_j − T_i))`.
-    fn explicit_bloch(
-        aux: &ShellTable,
-        table: &ShellTable,
-        images: &[[f64; 3]],
-        phases: [&[Complex64]; 2],
-        n_k: usize,
-        kernel: CoulombKernel,
-    ) -> Vec<Complex64> {
-        let n = table.n_functions();
-        let block = aux.n_functions() * n * n;
-        let mut out = vec![Complex64::default(); n_k * n_k * block];
-        for (i, t_i) in images.iter().enumerate() {
-            for (j, t_j) in images.iter().enumerate() {
-                let minus: [f64; 3] = std::array::from_fn(|k| -t_i[k]);
-                let shifted: [f64; 3] = std::array::from_fn(|k| t_j[k] - t_i[k]);
-                let values =
-                    coulomb_three_center(aux, table, table, &[[minus, shifted]], kernel, 0.0)
-                        .expect("valid");
-                for k1 in 0..n_k {
-                    for k2 in 0..n_k {
-                        let phase =
-                            phases[0][k1 * images.len() + i] * phases[1][k2 * images.len() + j];
-                        for (o, v) in out[(k1 * n_k + k2) * block..][..block]
-                            .iter_mut()
-                            .zip(&values)
-                        {
-                            *o += phase * v;
-                        }
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// Images on a rectangular grid with their integer coordinates, every
-    /// difference of two images as a step, and the phases of two k-points.
-    struct BlochCase {
-        images: Vec<[f64; 3]>,
-        coordinates: Vec<[i64; 3]>,
-        steps: Vec<[f64; 3]>,
-        step_coordinates: Vec<[i64; 3]>,
-        bra_phases: Vec<Complex64>,
-        ket_phases: Vec<Complex64>,
-    }
-
-    impl BlochCase {
-        fn new() -> Self {
-            let coordinates: Vec<[i64; 3]> =
-                vec![[0, 0, 0], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [1, 1, 0]];
-            let images: Vec<[f64; 3]> = vec![
-                [0.0, 0.0, 0.0],
-                [2.5, 0.0, 0.0],
-                [-2.5, 0.0, 0.0],
-                [0.0, 3.0, 0.0],
-                [2.5, 3.0, 0.0],
-            ];
-            let mut step_coordinates: Vec<[i64; 3]> = Vec::new();
-            let mut steps: Vec<[f64; 3]> = Vec::new();
-            for (a, ta) in coordinates.iter().zip(&images) {
-                for (b, tb) in coordinates.iter().zip(&images) {
-                    let step = [b[0] - a[0], b[1] - a[1], 0];
-                    if !step_coordinates.contains(&step) {
-                        step_coordinates.push(step);
-                        steps.push([tb[0] - ta[0], tb[1] - ta[1], 0.0]);
-                    }
-                }
-            }
-            let kpts = [[0.0, 0.0, 0.0], [0.3, -0.2, 0.1]];
-            let phase = |k: [f64; 3], t: [f64; 3], sign: f64| {
-                Complex64::cis(sign * (0..3).map(|a| k[a] * t[a]).sum::<f64>())
-            };
-            let bra_phases = kpts
-                .iter()
-                .flat_map(|k| images.iter().map(move |t| phase(*k, *t, -1.0)))
-                .collect();
-            let ket_phases = kpts
-                .iter()
-                .flat_map(|k| images.iter().map(move |t| phase(*k, *t, 1.0)))
-                .collect();
-            Self {
-                images,
-                coordinates,
-                steps,
-                step_coordinates,
-                bra_phases,
-                ket_phases,
-            }
-        }
-
-        fn sum(&self) -> BlochSum<'_> {
-            BlochSum {
-                images: &self.images,
-                image_coordinates: &self.coordinates,
-                steps: &self.steps,
-                step_coordinates: &self.step_coordinates,
-                phases: [&self.bra_phases, &self.ket_phases],
-            }
-        }
-    }
-
-    #[test]
-    fn bloch_three_center_matches_the_explicit_image_sum() {
-        let table = general_table();
-        let aux = sp_table();
-        let case = BlochCase::new();
-        let n_k = 2;
-        for kernel in [CoulombKernel::Full, CoulombKernel::ShortRange(0.6)] {
-            let summed = coulomb_three_center_bloch(&aux, &table, &table, case.sum(), kernel, 0.0)
-                .expect("valid");
-            let expected = explicit_bloch(
-                &aux,
-                &table,
-                &case.images,
-                [&case.bra_phases, &case.ket_phases],
-                n_k,
-                kernel,
-            );
-            assert_eq!(summed.len(), expected.len());
-            for (s, e) in summed.iter().zip(&expected) {
-                assert!((s - e).norm() < 1e-12, "{s} vs {e}");
-            }
-            // Hermiticity across the swap of the k-points and the functions.
-            let n = table.n_functions();
-            let n_aux = aux.n_functions();
-            for k1 in 0..n_k {
-                for k2 in 0..n_k {
-                    for p in 0..n_aux {
-                        for u in 0..n {
-                            for v in 0..n {
-                                let direct =
-                                    summed[((k1 * n_k + k2) * n_aux + p) * n * n + u * n + v];
-                                let swapped =
-                                    summed[((k2 * n_k + k1) * n_aux + p) * n * n + v * n + u];
-                                assert!((direct - swapped.conj()).norm() < 1e-12);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn bloch_three_center_screens_and_validates() {
-        let table = general_table();
-        let aux = sp_table();
-        let case = BlochCase::new();
-        let short = CoulombKernel::ShortRange(0.6);
-        // A screened sum stays within the threshold of the full one.
-        let threshold = 1e-10;
-        let exact = coulomb_three_center_bloch(&aux, &table, &table, case.sum(), short, 0.0)
-            .expect("valid");
-        let screened =
-            coulomb_three_center_bloch(&aux, &table, &table, case.sum(), short, threshold)
-                .expect("valid");
-        let largest = exact
-            .iter()
-            .zip(&screened)
-            .map(|(e, s)| (e - s).norm())
-            .fold(0.0_f64, f64::max);
-        assert!(largest < 100.0 * threshold, "{largest}");
-        // Steps that reach no image contribute nothing.
-        let far_steps = [[50.0, 0.0, 0.0]];
-        let far_coordinates = [[20, 0, 0]];
-        let nothing = coulomb_three_center_bloch(
-            &aux,
-            &table,
-            &table,
-            BlochSum {
-                steps: &far_steps,
-                step_coordinates: &far_coordinates,
-                ..case.sum()
-            },
-            short,
-            0.0,
-        )
-        .expect("valid");
-        assert!(nothing.iter().all(|v| v.norm() == 0.0));
-        // Malformed lists are rejected.
-        let repeated = [[0, 0, 0], [0, 0, 0], [-1, 0, 0], [0, 1, 0], [1, 1, 0]];
-        let bad = BlochSum {
-            image_coordinates: &repeated,
-            ..case.sum()
-        };
-        assert!(coulomb_three_center_bloch(&aux, &table, &table, bad, short, 0.0).is_err());
-        let short_phases = BlochSum {
-            phases: [&case.bra_phases[1..], &case.ket_phases],
-            ..case.sum()
-        };
-        assert!(
-            coulomb_three_center_bloch(&aux, &table, &table, short_phases, short, 0.0).is_err()
-        );
-        let fewer = BlochSum {
-            step_coordinates: &case.step_coordinates[1..],
-            ..case.sum()
-        };
-        assert!(coulomb_three_center_bloch(&aux, &table, &table, fewer, short, 0.0).is_err());
-        let mut stretched = case.steps.clone();
-        stretched[1][0] += 0.5;
-        let inconsistent = BlochSum {
-            steps: &stretched,
-            ..case.sum()
-        };
-        assert!(
-            coulomb_three_center_bloch(&aux, &table, &table, inconsistent, short, 0.0).is_err()
-        );
     }
 }

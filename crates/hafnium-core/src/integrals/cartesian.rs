@@ -77,8 +77,25 @@ pub fn transform_index<T>(
 where
     T: Copy + Default + AddAssign + Mul<f64, Output = T>,
 {
+    let mut out = Vec::new();
+    transform_index_into(data, left, n_cart, right, transform, &mut out);
+    out
+}
+
+/// [`transform_index`] into `out`, cleared and resized to the result.
+pub(crate) fn transform_index_into<T>(
+    data: &[T],
+    left: usize,
+    n_cart: usize,
+    right: usize,
+    transform: &[f64],
+    out: &mut Vec<T>,
+) where
+    T: Copy + Default + AddAssign + Mul<f64, Output = T>,
+{
     let n_sph = transform.len() / n_cart;
-    let mut out = vec![T::default(); left * n_sph * right];
+    out.clear();
+    out.resize(left * n_sph * right, T::default());
     for l in 0..left {
         for (m, row) in transform.chunks(n_cart).enumerate() {
             let target = &mut out[(l * n_sph + m) * right..(l * n_sph + m + 1) * right];
@@ -93,7 +110,6 @@ where
             }
         }
     }
-    out
 }
 
 /// The `m` value of each row of the transformation.

@@ -39,6 +39,7 @@ ALLOWED: frozenset[str] = frozenset(
         "cos",
         "exp",
         "floor",
+        "floor_divide",
         "imag",
         "isfinite",
         "isinf",
