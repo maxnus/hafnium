@@ -15,7 +15,7 @@ import math
 from importlib import resources
 from typing import Any
 
-from hafnium.backend import Array, host_array
+from hafnium.backend import Array, array_namespace, host_array
 from hafnium.errors import InputError
 
 
@@ -135,9 +135,11 @@ def lebedev_grid(n_points: int) -> tuple[Array, Array]:
 
     The rule is the one with ``n_points`` points.
 
-    The weights sum to one. Raises :class:`~hafnium.errors.InputError` for
-    a size that is not in :data:`LEBEDEV_SIZES`.
+    The weights sum to one; the arrays are the caller's to modify. Raises
+    :class:`~hafnium.errors.InputError` for a size that is not in
+    :data:`LEBEDEV_SIZES`.
     """
     lebedev_degree(n_points)
     points, weights = _grid(n_points)
-    return points, weights
+    xp = array_namespace(points, weights)
+    return xp.asarray(points, copy=True), xp.asarray(weights, copy=True)

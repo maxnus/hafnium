@@ -116,24 +116,28 @@ class ExchangeCorrelation:
             For a spinor (generalized) structure or a k axis, which this
             version does not serve.
         """
-        alpha, beta = self._spin_densities(density)
-        xp = array_namespace(alpha, beta)
+        structure = density.structure
+        spins = self._spin_densities(density)
+        xp = array_namespace(*spins)
+        potentials = [xp.zeros_like(matrix) for matrix in spins]
+        if not self.functional.components:
+            # Exact exchange alone: nothing to integrate.
+            return 0.0, _structured(structure, potentials)
         order = 1 if self.functional.needs_gradient or self.functional.needs_tau else 0
         energy = 0.0
         electrons = 0.0
-        potentials = [xp.zeros_like(alpha), xp.zeros_like(beta)]
         for batch in self.grid.batches(self.batch_size):
             values = self.engine.basis_values(
                 self.table, self.grid.points[batch], self.radii, order=order
             )
             values = xp.asarray(values)
             weights = self.grid.weights[batch]
-            batch_density = _densities(values, (alpha, beta), self.functional)
+            batch_density = _densities(values, spins, self.functional)
             xc = evaluate_functional(self.functional, batch_density.on_grid)
             total = batch_density.on_grid.rho[0] + batch_density.on_grid.rho[1]
             energy += float(xp.sum(weights * total * xc.energy_per_particle))
             electrons += float(xp.sum(weights * total))
-            for spin in range(2):
+            for spin in range(len(spins)):
                 potentials[spin] = potentials[spin] + _potential(
                     values, weights, batch_density.gradients, xc, spin
                 )
@@ -143,16 +147,21 @@ class ExchangeCorrelation:
             electrons,
             self.grid.n_points,
         )
-        return energy, _structured(density.structure, potentials[0], potentials[1])
+        return energy, _structured(structure, potentials)
 
-    def _spin_densities(self, density: BlockMatrix) -> tuple[Array, Array]:
+    def _spin_densities(self, density: BlockMatrix) -> tuple[Array, ...]:
+        """Return the real alpha and beta density matrices in the atomic basis.
+
+        One matrix for a restricted structure, whose beta block repeats the
+        alpha block, two for an unrestricted one.
+        """
         structure = density.structure
         if structure.k_axis is not None:
             raise InputError(
                 "periodic Kohn–Sham is not available yet; the exchange–correlation "
                 "term serves molecules"
             )
-        if structure.is_spinor:
+        if structure.is_spinor or structure.is_spatial:
             raise InputError(
                 "the exchange–correlation term is collinear: it serves the "
                 "restricted and unrestricted classes, not the generalized ones "
@@ -163,14 +172,18 @@ class ExchangeCorrelation:
                 f"the density has {density.n_spatial} atomic orbitals, the grid's "
                 f"basis {self.n_ao}"
             )
-        alpha, beta = density.spin_blocks()
-        xp = array_namespace(alpha, beta)
+        blocks = density.spin_blocks()
+        xp = array_namespace(*blocks)
+        if _is_restricted(structure):
+            blocks = blocks[:1]
         # The basis functions are real, so only the real part of a Hermitian
         # density enters the densities on the grid.
-        return (
-            xp.astype(xp.real(alpha), xp.float64),
-            xp.astype(xp.real(beta), xp.float64),
-        )
+        return tuple(xp.astype(xp.real(block), xp.float64) for block in blocks)
+
+
+def _is_restricted(structure: BlockStructure) -> bool:
+    """Whether the beta blocks of ``structure`` are derived from the alpha blocks."""
+    return all(block.spin is not Spin.BETA for block in structure.stored_blocks)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,13 +195,14 @@ class _BatchDensities:
 
 
 def _densities(
-    values: Array, densities: tuple[Array, Array], functional: Functional
+    values: Array, densities: tuple[Array, ...], functional: Functional
 ) -> _BatchDensities:
     """Return the spin densities, gradients and kinetic energy densities of a batch.
 
     ``values`` is ``[g, component, ao]``; with real symmetric density matrices
     ``ρ_σ = Σ_uv χ_u D_σ,uv χ_v``, ``∇ρ_σ = 2 Σ_uv ∇χ_u D_σ,uv χ_v`` and
-    ``τ_σ = ½ Σ_uv ∇χ_u · D_σ,uv ∇χ_v``.
+    ``τ_σ = ½ Σ_uv ∇χ_u · D_σ,uv ∇χ_v``. A single density matrix stands for
+    both spins, and its quantities are repeated for the beta spin.
     """
     xp = array_namespace(values)
     functions = values[:, 0, :]
@@ -210,6 +224,8 @@ def _densities(
                     axis=(1, 2),
                 )
             )
+    if len(densities) == 1:
+        rho, gradients, taus = 2 * rho, 2 * gradients, 2 * taus
     sigma = None
     if gradients:
         sigma = xp.stack(
@@ -257,11 +273,15 @@ def _potential(
     return potential
 
 
-def _structured(structure: BlockStructure, alpha: Array, beta: Array) -> BlockMatrix:
-    """Place the alpha and beta potentials into the stored blocks of ``structure``."""
-    xp = array_namespace(alpha, beta)
+def _structured(structure: BlockStructure, potentials: list[Array]) -> BlockMatrix:
+    """Place the alpha and beta potentials into the stored blocks of ``structure``.
+
+    A single potential serves a restricted structure, whose stored blocks are
+    all alpha.
+    """
+    xp = array_namespace(*potentials)
     sectors = structure.irreps
-    by_spin = {Spin.ALPHA: alpha, Spin.BETA: beta}
+    by_spin = {Spin.ALPHA: potentials[0], Spin.BETA: potentials[-1]}
     projected = (
         None
         if sectors is None

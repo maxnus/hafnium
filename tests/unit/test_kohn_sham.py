@@ -22,7 +22,7 @@ from hafnium.scf import (
     orbital_gradient,
     solve_scf,
 )
-from hafnium.structured import BlockStructure
+from hafnium.structured import BlockMatrix, BlockStructure
 from hafnium.symmetry import SymmetrySpec, detect_point_group
 from hafnium.xc import Functional
 from tests.hamiltonians import ENGINE
@@ -227,6 +227,9 @@ def test_kohn_sham_inputs_are_validated(water_basis: tuple[Molecule, BasisSet]) 
             ExactCoulombExchange.from_molecule(ENGINE, other, molecule),
             exchange_correlation=pbe,
         )
+    spatial = BlockMatrix(BlockStructure.spatial(), (np.eye(basis.n_functions),))
+    with pytest.raises(InputError, match="collinear"):
+        pbe.evaluate(spatial)
     density = BlockStructure.restricted()
     with pytest.raises(InputError, match="atomic orbitals"):
         pbe.evaluate(

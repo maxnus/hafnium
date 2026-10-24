@@ -83,6 +83,14 @@ def test_lebedev_rules_integrate_polynomials_to_their_degree() -> None:
             )
     with pytest.raises(InputError, match="no Lebedev rule"):
         lebedev_grid(7)
+    # The arrays are copies: modifying them leaves the rule intact.
+    points, weights = lebedev_grid(6)
+    weights *= 2.0
+    points[0, 0] = 0.5
+    assert float(lebedev_grid(6)[1].sum()) == pytest.approx(
+        1.0, abs=ANGULAR_QUADRATURE_TOL
+    )
+    assert float(lebedev_grid(6)[0][0, 0]) != 0.5
 
 
 def test_lebedev_rules_have_octahedral_symmetry() -> None:

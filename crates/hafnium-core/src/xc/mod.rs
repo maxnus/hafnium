@@ -189,13 +189,22 @@ pub fn evaluate_functional(
     if rung == Rung::MetaGga {
         check_input(tau, 2 * n, "kinetic energy densities")?;
     }
+    // Built once here to validate the combination, and once per worker
+    // below: the evaluator is not `Sync`, so it cannot be shared.
+    build(&ids)?;
     let chunks: Vec<XcValues> = (0..n.div_ceil(POINTS_PER_TASK).max(1))
         .into_par_iter()
-        .map(|task| {
-            let start = task * POINTS_PER_TASK;
-            let end = (start + POINTS_PER_TASK).min(n);
-            evaluate_chunk(&ids, rung, n, start..end, rho, sigma, tau)
-        })
+        .map_init(
+            || build(&ids).ok(),
+            |functional, task| {
+                let functional = functional.as_ref().ok_or_else(|| {
+                    Error::InvalidArgument("the functional could not be built".to_string())
+                })?;
+                let start = task * POINTS_PER_TASK;
+                let end = (start + POINTS_PER_TASK).min(n);
+                evaluate_chunk(functional, rung, n, start..end, rho, sigma, tau)
+            },
+        )
         .collect::<Result<_, _>>()?;
     Ok(concatenate(chunks, n, rung))
 }
@@ -216,7 +225,7 @@ fn check_input(values: &[f64], expected: usize, name: &str) -> Result<(), Error>
 /// Evaluate the points `range` of the spin-major inputs, which are laid out
 /// over `n` points, into spin-major outputs over the chunk.
 fn evaluate_chunk(
-    ids: &[(FunctionalId, f64)],
+    functional: &Functional,
     rung: Rung,
     n: usize,
     range: std::ops::Range<usize>,
@@ -224,7 +233,6 @@ fn evaluate_chunk(
     sigma: &[f64],
     tau: &[f64],
 ) -> Result<XcValues, Error> {
-    let functional = build(ids)?;
     let count = range.len();
     let interleave = |values: &[f64], parts: usize| -> Vec<f64> {
         let mut packed = Vec::with_capacity(count * parts);

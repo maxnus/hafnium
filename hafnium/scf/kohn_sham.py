@@ -44,7 +44,9 @@ class KohnShamOptions(ScfOptions):
     batch_size: int = DEFAULT_BATCH_SIZE
 
     def __post_init__(self) -> None:
-        super().__post_init__()
+        # Named explicitly: zero-argument super() has no __class__ cell in a
+        # slots dataclass before Python 3.13.
+        ScfOptions.__post_init__(self)
         if not self.basis_cutoff > 0.0:
             raise InputError("the basis cutoff is a positive number")
         if self.batch_size < 1:
