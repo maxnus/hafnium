@@ -14,6 +14,7 @@ from hafnium.grid import (
     BRAGG_RADII,
     LEBEDEV_SIZES,
     PARTITION_SCHEMES,
+    SHARED_SHELL_START,
     GridSpec,
     MolecularGrid,
     atomic_grid,
@@ -449,15 +450,18 @@ def test_cell_grid_options_shape_the_grid() -> None:
     )
     assert plain.n_points < molecular
     assert np.all(np.asarray(plain.weights) != 0.0)
-    # Becke's step keeps every point, its weights never being exactly zero.
+    # Becke's step keeps the points of the whole shared-shell atomic grids,
+    # except where its products of steps underflow to zero.
     becke = build_grid(cell, GridSpec(partition="becke", partition_radius=8.0))
-    assert (
-        becke.n_points
-        == default.n_points
-        + (molecular - plain.n_points)
-        - (default.n_points - plain.n_points)
-        or becke.n_points > plain.n_points
+    shared = sum(
+        atomic_grid(
+            atom.atomic_number, GridSpec(), shared_from=SHARED_SHELL_START * nearest
+        )[1].shape[0]
+        for atom, nearest in zip(
+            cell.atoms, np.asarray(nearest_neighbour_distances(cell)), strict=True
+        )
     )
+    assert default.n_points < becke.n_points <= shared
     assert build_grid(cell) is not default
     assert isinstance(build_cell_grid(cell), MolecularGrid)
     with pytest.raises(InputError, match="scheme"):

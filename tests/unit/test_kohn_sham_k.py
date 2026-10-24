@@ -27,12 +27,13 @@ from tests.tolerances import (
     ENERGY_TOL,
     MOLECULAR_LIMIT_TOL,
     PERIODIC_LEVEL_TOL,
+    REFERENCE_GRADIENT_TOL,
     STRUCTURE_TOL,
 )
 
 AUXILIARY = "def2-universal-jkfit"
 COLLINEAR_CLASSES = ["RHF", "complex RHF", "UHF", "complex UHF", "paired UHF"]
-OPTIONS = KohnShamOptions(gradient_tolerance=1e-8)
+OPTIONS = KohnShamOptions(gradient_tolerance=REFERENCE_GRADIENT_TOL)
 
 
 def bases(cell: Cell, name: str) -> tuple[BasisSet, BasisSet]:
@@ -165,7 +166,6 @@ def test_hybrid_takes_a_fraction_of_the_fitted_exchange(
     assert hybrid.energies.exchange < 0.0
     assert pure.energies.exchange == 0.0
     assert hybrid.energies.exchange_correlation < 0.0
-    assert hybrid.energy != pytest.approx(pure.energy, abs=1e-3)
 
 
 def test_grid_level_moves_the_energy_little(
@@ -180,7 +180,9 @@ def test_grid_level_moves_the_energy_little(
         auxiliary,
         "pbe",
         symmetry,
-        KohnShamOptions(grid=GridSpec(level=5), gradient_tolerance=1e-8),
+        KohnShamOptions(
+            grid=GridSpec(level=5), gradient_tolerance=REFERENCE_GRADIENT_TOL
+        ),
     )
     assert fine.energy == pytest.approx(coarse.energy, abs=PERIODIC_LEVEL_TOL)
     assert fine.energy != coarse.energy

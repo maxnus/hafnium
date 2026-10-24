@@ -164,7 +164,7 @@ class ExchangeCorrelation:
         radii = _cutoff_radii(basis, basis_cutoff)
         if not isinstance(grid, MolecularGrid):
             grid = build_grid(cell, grid)
-        translations = _bloch_translations(cell.lattice, grid.points, table, radii)
+        translations = _bloch_translations(cell.lattice, grid, table, radii)
         return cls(
             functional,
             grid,
@@ -351,20 +351,34 @@ def _cutoff_radii(basis: BasisSet, basis_cutoff: float) -> Array:
 
 
 def _bloch_translations(
-    lattice: Lattice, points: Array, table: ShellTable, radii: Array
+    lattice: Lattice, grid: MolecularGrid, table: ShellTable, radii: Array
 ) -> Array:
-    """Lattice vectors ``[image, 3]`` at which some shell's image reaches some point.
+    """Lattice vectors ``[image, 3]`` at which some shell's image may reach some point.
 
     A shell centred at ``C`` with cutoff radius ``R`` contributes to the
     Bloch sum at a point ``r`` through the image ``T`` when
-    ``|r − C − T| ≤ R``; the zero vector comes first.
+    ``|r − C − T| ≤ R``. Every point lies within the extent of its atom's
+    grid of that atom, so the images with ``|A + T − C| ≤ R + extent_A`` for
+    some atom ``A`` cover every such pair, a few more than the points
+    themselves demand; the kernel screens each point and image by the
+    radii. The zero vector comes first.
     """
-    xp = array_namespace(points)
+    xp = array_namespace(grid.points)
     centers = xp.asarray(table.centers)
-    shape = (int(centers.shape[0]), int(points.shape[0]))
-    reach = xp.broadcast_to(xp.expand_dims(xp.asarray(radii), 1), shape)
-    # reaching_images keeps T with |C − r − T| ≤ R, the image −T of the shell.
-    return -reaching_images(lattice, centers, points, xp.asarray(reach))
+    owners = xp.asarray(grid.atoms)
+    n_atoms = int(xp.max(owners)) + 1 if int(owners.shape[0]) > 0 else 0
+    anchors: list[Array] = []
+    extents: list[float] = []
+    for atom in range(n_atoms):
+        points = grid.points[owners == atom]
+        if int(points.shape[0]) == 0:
+            continue
+        anchor = xp.mean(points, axis=0)
+        anchors.append(anchor)
+        extents.append(float(xp.max(xp.linalg.vector_norm(points - anchor, axis=-1))))
+    reach = xp.expand_dims(xp.asarray(radii), 1) + xp.asarray(extents)[None, :]
+    # reaching_images keeps T with |C − a − T| ≤ reach, the image −T of the shell.
+    return -reaching_images(lattice, centers, xp.stack(anchors), reach)
 
 
 def _is_restricted(structure: BlockStructure) -> bool:

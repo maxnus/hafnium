@@ -47,6 +47,9 @@ pub fn bloch_basis_values(
     let evaluator = Evaluator::new(table, radii, translations, phases, order);
     let stride = evaluator.stride();
     let mut out = vec![Complex64::new(0.0, 0.0); n_kpt * points.len() * stride];
+    if out.is_empty() {
+        return Ok(out);
+    }
     // Split every k-point's block of the output into the per-task point
     // chunks, then regroup the chunks by task, so that each task owns one
     // disjoint slice of every k-point's block.
@@ -313,6 +316,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn no_points_give_no_values() {
+        let table = general_table();
+        let phases = [Complex64::new(1.0, 0.0)];
+        let values =
+            bloch_basis_values(&table, &[], &[1.0, 1.0], &[[0.0; 3]], &phases, 1).expect("valid");
+        assert_eq!(values, Vec::new());
     }
 
     #[test]
