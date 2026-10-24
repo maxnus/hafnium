@@ -495,6 +495,98 @@ fn basis_values<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
+/// Bloch sums `Σ_T exp(i k·T) φ(r − T)` of every function of `table` at
+/// `points` (`[g, 3]`, Bohr) with derivatives up to `order`, as complex
+/// `[kpt, g, component, ao]`, over the `translations` (`[image, 3]`, Bohr)
+/// with the `phases` `exp(i k·T)` given as `[kpt, image]`; the cutoff
+/// `radii` apply to every image of a shell as in `basis_values`.
+#[pyfunction]
+#[pyo3(signature = (table, points, radii, translations, phases, order=0))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn bloch_basis_values<'py>(
+    py: Python<'py>,
+    table: &PyShellTable,
+    points: PyReadonlyArray2<'py, f64>,
+    radii: PyReadonlyArray1<'py, f64>,
+    translations: PyReadonlyArray2<'py, f64>,
+    phases: PyReadonlyArray2<'py, Complex64>,
+    order: usize,
+) -> PyResult<Bound<'py, PyArray4<Complex64>>> {
+    let points = to_vectors(&points, "points")?;
+    let translations = to_vectors(&translations, "translations")?;
+    let n_kpt = phases.shape()[0];
+    if phases.shape()[1] != translations.len() {
+        return Err(PyValueError::new_err(
+            "phases have shape [kpt, image] with one entry per translation",
+        ));
+    }
+    let values = grid::bloch_basis_values(
+        &table.inner,
+        &points,
+        radii.as_slice()?,
+        &translations,
+        phases.as_slice()?,
+        order,
+    )
+    .map_err(|error| value_error(&error))?;
+    let shape = [
+        n_kpt,
+        points.len(),
+        grid::n_components(order),
+        table.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
+/// Partition weights `[g]` of the centre `owner` at `points` (`[g, 3]`,
+/// Bohr) among `centers` (`[centre, 3]`): the normalized cell function of
+/// Becke (`scheme` `"becke"`) or of Stratmann, Scuseria and Frisch
+/// (`"stratmann"`), with the atomic size `adjustments` `[centre, centre]`
+/// when given.
+#[pyfunction]
+#[pyo3(signature = (points, centers, owner, adjustments=None, scheme="becke"))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn partition_weights<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f64>,
+    centers: PyReadonlyArray2<'py, f64>,
+    owner: usize,
+    adjustments: Option<PyReadonlyArray2<'py, f64>>,
+    scheme: &str,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let points = to_vectors(&points, "points")?;
+    let centers = to_vectors(&centers, "centres")?;
+    let scheme = match scheme {
+        "becke" => grid::Partition::Becke,
+        "stratmann" => grid::Partition::Stratmann,
+        _ => {
+            return Err(PyValueError::new_err(
+                "the partition scheme is \"becke\" or \"stratmann\"",
+            ));
+        }
+    };
+    let table = match &adjustments {
+        Some(array) => {
+            if array.shape() != [centers.len(), centers.len()] {
+                return Err(PyValueError::new_err(
+                    "adjustments have shape [centre, centre]",
+                ));
+            }
+            Some(array.as_slice()?)
+        }
+        None => None,
+    };
+    let weights = grid::partition_weights(&points, &centers, owner, table, scheme)
+        .map_err(|error| value_error(&error))?;
+    Ok(weights.into_pyarray(py))
+}
+
 /// Metadata of the functional with the libxc `name`: its id, canonical
 /// name, rung (`"lda"`, `"gga"` or `"meta-gga"`), whether it needs the
 /// Laplacian, the fraction of exact exchange, the range separation
@@ -692,6 +784,8 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(pair_fourier_transform, module)?)?;
     module.add_function(wrap_pyfunction!(ewald_energy, module)?)?;
     module.add_function(wrap_pyfunction!(basis_values, module)?)?;
+    module.add_function(wrap_pyfunction!(bloch_basis_values, module)?)?;
+    module.add_function(wrap_pyfunction!(partition_weights, module)?)?;
     module.add_function(wrap_pyfunction!(functional_info, module)?)?;
     module.add_function(wrap_pyfunction!(evaluate_functional, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;

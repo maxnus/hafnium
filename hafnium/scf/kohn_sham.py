@@ -1,15 +1,15 @@
-"""Kohn–Sham DFT for a molecule in one call (M7, ADR-0026)."""
+"""Kohn–Sham DFT for a molecule or a cell in one call (M7, ADR-0026, ADR-0027)."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.grid import GridSpec
 from hafnium.integrals import IntegralEngine
-from hafnium.molecule import Molecule
+from hafnium.molecule import Cell, Molecule
 from hafnium.scf.atoms import atomic_density_guess
 from hafnium.scf.driver import ScfOptions, ScfResult, solve_scf
 from hafnium.scf.exchange_correlation import (
@@ -17,7 +17,7 @@ from hafnium.scf.exchange_correlation import (
     DEFAULT_BATCH_SIZE,
     ExchangeCorrelation,
 )
-from hafnium.scf.hartree_fock import molecular_hamiltonian
+from hafnium.scf.hartree_fock import require_periodic_inputs, system_hamiltonian
 from hafnium.symmetry import SymmetrySpec
 from hafnium.xc import Functional
 
@@ -36,7 +36,8 @@ class KohnShamOptions(ScfOptions):
         Basis function values below this are left out of the densities on
         the grid.
     batch_size
-        Grid points evaluated at a time.
+        Grid points evaluated at a time; for a cell the points times the
+        k-points, which bounds the memory of the Bloch sums.
     """
 
     grid: GridSpec = field(default_factory=GridSpec)
@@ -56,14 +57,14 @@ class KohnShamOptions(ScfOptions):
 def kohn_sham(
     engine: IntegralEngine,
     basis: BasisSet,
-    molecule: Molecule,
+    system: Molecule | Cell,
     functional: Functional | str,
     *,
     symmetry: SymmetrySpec | None = None,
     auxiliary: BasisSet | None = None,
     options: ScfOptions | None = None,
 ) -> ScfResult:
-    """Converge the Kohn–Sham state of a molecule from atomic densities.
+    """Converge the Kohn–Sham state of a molecule or a cell from atomic densities.
 
     Parameters
     ----------
@@ -72,14 +73,20 @@ def kohn_sham(
         :data:`~hafnium.xc.NAMED_FUNCTIONALS`.
     symmetry
         Fukutome class of the state, real RKS by default; the restricted
-        and unrestricted classes are served, with an Abelian point group if
-        the specification names one (ADR-0023).
+        and unrestricted classes are served. For a cell it carries the
+        k-point set, :meth:`SymmetrySpec.with_kpoints`, and may name the
+        cell's space group (ADR-0024); for a molecule it may impose an
+        Abelian point group (ADR-0023).
     auxiliary
         Density-fitting basis for the Coulomb and exact exchange terms;
-        without one the four-centre integrals are evaluated exactly.
+        without one the four-centre integrals of a molecule are evaluated
+        exactly. A cell needs one, its two-electron terms being fitted.
     options
         :class:`KohnShamOptions` choose the grid as well; plain
         :class:`~hafnium.scf.ScfOptions` take the default grid.
+
+    A range-separated functional serves molecules only, the long-range
+    fitted integrals of a cell being a later addition (ADR-0027).
 
     To start from a guess or run several classes, build the
     :class:`~hafnium.scf.Hamiltonian` with an :class:`ExchangeCorrelation`
@@ -89,24 +96,44 @@ def kohn_sham(
         functional = Functional.named(functional)
     symmetry = SymmetrySpec() if symmetry is None else symmetry
     numerical = options if isinstance(options, KohnShamOptions) else KohnShamOptions()
-    exchange_correlation = ExchangeCorrelation.from_molecule(
-        engine,
-        basis,
-        molecule,
-        functional,
-        grid=numerical.grid,
-        basis_cutoff=numerical.basis_cutoff,
-        batch_size=numerical.batch_size,
+    if isinstance(system, Cell):
+        kpoints, _ = require_periodic_inputs(system, symmetry, auxiliary)
+        if functional.is_range_separated:
+            raise InputError(
+                f"{functional.name} is range-separated, and the long-range fitted "
+                "integrals of a cell are not available yet: range-separated hybrids "
+                "serve molecules only (ADR-0027)"
+            )
+        exchange_correlation = ExchangeCorrelation.from_cell(
+            engine,
+            basis,
+            system,
+            kpoints,
+            functional,
+            grid=numerical.grid,
+            basis_cutoff=numerical.basis_cutoff,
+        )
+    else:
+        exchange_correlation = ExchangeCorrelation.from_molecule(
+            engine,
+            basis,
+            system,
+            functional,
+            grid=numerical.grid,
+            basis_cutoff=numerical.basis_cutoff,
+        )
+    exchange_correlation = replace(
+        exchange_correlation, batch_size=numerical.batch_size
     )
     logger.info(
         "kohn-sham with %s on %d grid points",
         functional.describe(),
         exchange_correlation.grid.n_points,
     )
-    hamiltonian = molecular_hamiltonian(
+    hamiltonian = system_hamiltonian(
         engine,
         basis,
-        molecule,
+        system,
         symmetry,
         auxiliary,
         exchange_correlation=exchange_correlation,

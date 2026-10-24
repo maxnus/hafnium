@@ -150,10 +150,17 @@ class Hamiltonian:
                     "exchange of a functional; pass an exchange–correlation term"
                 )
             return
-        if self.kpoints is not None:
+        if xc.kpoints != self.kpoints:
             raise InputError(
-                "periodic Kohn–Sham is not available yet; the exchange–correlation "
-                "term serves molecules"
+                "the exchange–correlation term was built for "
+                + ("a molecule" if xc.kpoints is None else "other k-points")
+                + "; build it for this Hamiltonian's system and k-points"
+            )
+        if self.kpoints is not None and xc.functional.is_range_separated:
+            raise InputError(
+                f"{xc.functional.name} is range-separated, and the long-range "
+                "fitted integrals of a cell are not available yet: range-separated "
+                "hybrids serve molecules only (ADR-0027)"
             )
         if xc.n_ao != n:
             raise InputError(
@@ -225,6 +232,7 @@ class Hamiltonian:
         two_body: CoulombExchange,
         *,
         space_group: SpaceGroup | None = None,
+        exchange_correlation: ExchangeCorrelation | None = None,
     ) -> Hamiltonian:
         """Evaluate the one-electron integrals of a cell at its k-points.
 
@@ -233,7 +241,9 @@ class Hamiltonian:
         energy of a neutral cell is well defined; ``two_body`` carries the
         exchange correction of ADR-0017. With ``space_group`` the basis is
         adapted to the group over ``kpoints``, which must be closed under
-        its point operations (ADR-0024).
+        its point operations (ADR-0024). With ``exchange_correlation``,
+        built for the cell over the same ``kpoints``, the Hamiltonian is a
+        Kohn–Sham one (ADR-0027).
         """
         adaptation = (
             None
@@ -249,6 +259,7 @@ class Hamiltonian:
             cell.n_beta,
             kpoints=kpoints,
             adaptation=adaptation,
+            exchange_correlation=exchange_correlation,
         )
 
     @property

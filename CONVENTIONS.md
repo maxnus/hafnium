@@ -148,6 +148,12 @@ Spin never appears as an explicit index in method code; it is part of the
   same layout. The exact exchange of a hybrid is `a K + b K_lr(ω)` in
   libxc's range-separation convention `a + b erf(ω r)`, so
   `Functional.exact_exchange` is `a` and `long_range_exchange` is `b`.
+  Basis values on grid points are `[g, component, ao]`, their Bloch sums
+  `[kpt, g, component, ao]` complex; the density of a cell on the grid is
+  `Σ_k w_k Σ_uv D[v, u](k) conj(φ_u^k) φ_v^k`, the index convention of the
+  Coulomb matrix, and the potential `V[u, v](k) = ∫ conj(φ_u^k) v_xc φ_v^k`
+  is formed over the full k set and reduced onto the stored points
+  (ADR-0027).
   Basis values on grid points are `[g, component, ao]` with the
   components value, `x, y, z`, `xx, xy, xz, yy, yz, zz`. Grid sizes by
   level follow PySCF's tables so that results compare directly.

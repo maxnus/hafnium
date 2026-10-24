@@ -5,7 +5,8 @@ level, the tables of PySCF so that results compare directly; the radial
 quadrature is the Treutler–Ahlrichs mapping with the element's scale, the
 angular one a Lebedev rule, pruned in the NWChem fashion near the nucleus,
 and the atomic grids are joined by Becke's partition with the atomic size
-adjustment of Treutler (ADR-0026).
+adjustment of Treutler (ADR-0026). The grid of a cell
+(:mod:`hafnium.grid.periodic`) reuses the atomic grids and the container.
 """
 
 from __future__ import annotations
@@ -17,9 +18,18 @@ from dataclasses import dataclass
 from hafnium.backend import Array, array_namespace, default_namespace, host_array
 from hafnium.errors import InputError
 from hafnium.grid.angular import LEBEDEV_SIZES, lebedev_degree, lebedev_grid
-from hafnium.grid.partition import becke_partition, treutler_adjustment
+from hafnium.grid.partition import (
+    PARTITION_SCHEMES,
+    PartitionScheme,
+    becke_partition,
+    treutler_adjustment,
+)
 from hafnium.grid.radial import TREUTLER_XI, treutler_ahlrichs
 from hafnium.molecule import ANGSTROM_IN_BOHR, Molecule
+
+DEFAULT_PARTITION_RADIUS = 25.0
+"""Atoms and lattice images within this distance (Bohr) of an atom of a cell
+enter its partition (ADR-0027)."""
 
 BRAGG_RADII: tuple[float, ...] = tuple(
     radius * ANGSTROM_IN_BOHR
@@ -83,6 +93,9 @@ _ANGULAR_DEGREES = (
 
 _SIZE_OF_DEGREE = {lebedev_degree(size): size for size in LEBEDEV_SIZES}
 
+_SHARED_ANGULAR_POINTS = (1202, 1202, 1202, 2030, 2702, 3470, 4334, 5810, 5810, 5810)
+"""Lebedev size of the shared shells of a cell's atom ``[level]`` (ADR-0027)."""
+
 _PRUNING_RADII = (
     (0.25, 0.5, 1.0, 4.5),
     (0.1667, 0.5, 0.9, 3.5),
@@ -115,12 +128,30 @@ class GridSpec:
     radial_points, angular_points
         Fixed sizes for every atom instead of the level's; ``angular_points``
         must be the size of a Lebedev rule, :data:`~hafnium.grid.LEBEDEV_SIZES`.
+    partition
+        The step function of the partition of space between the atoms,
+        ``"becke"`` or ``"stratmann"``; by default Becke's for a molecule, as
+        PySCF, and the compactly supported one of Stratmann, Scuseria and
+        Frisch for a cell, which makes the partition over the lattice
+        images local (ADR-0027).
+    partition_radius
+        Atoms and lattice images within this distance (Bohr) of an atom of a
+        cell enter its partition; molecules partition over all their atoms.
+    shared_angular_points
+        Size of the Lebedev rule on the shells of a cell's atom beyond
+        :data:`~hafnium.grid.SHARED_SHELL_START` of its nearest-neighbour
+        distance, where the partition is shared with the neighbours; the
+        level's size by default, from 1202 points at level 0 to 5810 at
+        level 7.
     """
 
     level: int = 3
     prune: bool = True
     radial_points: int | None = None
     angular_points: int | None = None
+    partition: PartitionScheme | None = None
+    partition_radius: float = DEFAULT_PARTITION_RADIUS
+    shared_angular_points: int | None = None
 
     def __post_init__(self) -> None:
         if not 0 <= self.level < len(_RADIAL_POINTS):
@@ -129,6 +160,15 @@ class GridSpec:
             raise InputError("a grid needs at least one radial point")
         if self.angular_points is not None:
             lebedev_degree(self.angular_points)
+        if self.partition is not None and self.partition not in PARTITION_SCHEMES:
+            raise InputError(
+                f"the partition scheme is one of {', '.join(PARTITION_SCHEMES)}, "
+                f"not {self.partition!r}"
+            )
+        if not (math.isfinite(self.partition_radius) and self.partition_radius > 0.0):
+            raise InputError("the partition radius is a positive length")
+        if self.shared_angular_points is not None:
+            lebedev_degree(self.shared_angular_points)
 
     def radial_count(self, atomic_number: int) -> int:
         """Radial points of an atom."""
@@ -143,6 +183,18 @@ class GridSpec:
         return _SIZE_OF_DEGREE[
             _ANGULAR_DEGREES[self.level][period_index(atomic_number)]
         ]
+
+    def shared_angular_count(self, atomic_number: int) -> int:
+        """Points of the Lebedev rule on the shared shells of a cell's atom.
+
+        At least the atom's :meth:`angular_count`.
+        """
+        shared = (
+            _SHARED_ANGULAR_POINTS[self.level]
+            if self.shared_angular_points is None
+            else self.shared_angular_points
+        )
+        return max(shared, self.angular_count(atomic_number))
 
 
 def nwchem_pruning(
@@ -172,11 +224,15 @@ def nwchem_pruning(
     return tuple(regions[int(r)] for r in region)
 
 
-def atomic_grid(atomic_number: int, spec: GridSpec) -> tuple[Array, Array]:
+def atomic_grid(
+    atomic_number: int, spec: GridSpec, *, shared_from: float | None = None
+) -> tuple[Array, Array]:
     """Points ``[n, 3]`` relative to the nucleus and volume weights ``[n]`` of one atom.
 
     The weights carry ``4π r²`` and the radial and angular weights, so that
-    they integrate functions over space before the partition.
+    they integrate functions over space before the partition. With
+    ``shared_from`` the shells at that radius and beyond take the rule of
+    :meth:`GridSpec.shared_angular_count`, the shared shells of a cell's atom.
     """
     xp = default_namespace()
     radii, radial_weights = treutler_ahlrichs(
@@ -188,6 +244,12 @@ def atomic_grid(atomic_number: int, spec: GridSpec) -> tuple[Array, Array]:
         if spec.prune
         else (angular,) * int(radii.shape[0])
     )
+    if shared_from is not None:
+        shared = spec.shared_angular_count(atomic_number)
+        sizes = tuple(
+            max(size, shared) if float(radius) >= shared_from else size
+            for size, radius in zip(sizes, radii, strict=True)
+        )
     volume = 4.0 * math.pi * radii * radii * radial_weights
     points: list[Array] = []
     weights: list[Array] = []
@@ -200,7 +262,7 @@ def atomic_grid(atomic_number: int, spec: GridSpec) -> tuple[Array, Array]:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class MolecularGrid:
-    """Quadrature points of a molecule with their weights.
+    """Quadrature points of a molecule or a cell with their weights.
 
     Parameters
     ----------
@@ -242,13 +304,17 @@ class MolecularGrid:
             yield slice(start, min(start + size, self.n_points))
 
 
-def build_grid(molecule: Molecule, spec: GridSpec | None = None) -> MolecularGrid:
+def build_molecular_grid(
+    molecule: Molecule, spec: GridSpec | None = None
+) -> MolecularGrid:
     """Build the grid of ``molecule`` with the sizes of ``spec``.
 
-    Every atom's grid is centred on it and weighted by Becke's partition
-    with Treutler's atomic size adjustment from the Bragg radii.
+    Every atom's grid is centred on it and weighted by the partition over
+    the atoms, Becke's unless ``spec.partition`` says otherwise, with
+    Treutler's atomic size adjustment from the Bragg radii.
     """
     spec = GridSpec() if spec is None else spec
+    scheme = "becke" if spec.partition is None else spec.partition
     xp = default_namespace()
     centers = molecule.positions_array(xp)
     radii = host_array([BRAGG_RADII[atom.atomic_number] for atom in molecule.atoms])
@@ -264,7 +330,9 @@ def build_grid(molecule: Molecule, spec: GridSpec | None = None) -> MolecularGri
         local, volume = cache[number]
         positions = local + centers[index]
         if molecule.n_atoms > 1:
-            partition = becke_partition(positions, centers, adjustments)[index]
+            partition = becke_partition(positions, centers, adjustments, scheme=scheme)[
+                index
+            ]
             volume = volume * partition
         points.append(positions)
         weights.append(volume)

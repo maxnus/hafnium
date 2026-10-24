@@ -30,6 +30,7 @@ from tests.reference.pyscf_oracle import (
     ewald_reference,
     four_center_reference,
     fourier_transform_reference,
+    kdft_reference,
     kscf_reference,
     madelung_reference,
     one_electron_reference,
@@ -57,6 +58,8 @@ from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
 from tests.reference.test_fourier_reference import STORED_CASES as FOURIER_CASES
+from tests.reference.test_kdft_reference import STORED_CASES as KDFT_CASES
+from tests.reference.test_kdft_reference import STORED_LEVEL as KDFT_LEVEL
 from tests.reference.test_kscf_reference import AUXILIARY as KSCF_AUXILIARY
 from tests.reference.test_kscf_reference import CELLS as KSCF_CELLS
 from tests.reference.test_kscf_reference import MESHES as KSCF_MESHES
@@ -107,6 +110,7 @@ def main() -> None:
     record_molecules()
     record_cells()
     record_kohn_sham()
+    record_periodic_kohn_sham()
 
 
 def record_molecules() -> None:
@@ -310,4 +314,35 @@ def record_kohn_sham() -> None:
             functional=code,
             charge=molecule.charge,
             spin=molecule.spin,
+        )
+
+
+def record_periodic_kohn_sham() -> None:
+    """Write the periodic Kohn–Sham cases with PySCF's grid at the stored level."""
+    for name, basis_name, kind, _, code in KDFT_CASES:
+        cell = KSCF_CELLS[name]()
+        basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(cell, KSCF_AUXILIARY, library=LIBRARY)
+        mesh = KSCF_MESHES[name]
+        reference = kdft_reference(
+            cell, basis, auxiliary, mesh, code, kind, level=KDFT_LEVEL
+        )
+        record(
+            "kdft",
+            cell,
+            name,
+            basis_name,
+            f"pbc.dft.{kind.upper()} with xc={code!r} on BeckeGrids level "
+            f"{KDFT_LEVEL} (points and weights recorded), density fitting in the "
+            "same auxiliary basis, exxdiv=ewald, conv_tol=1e-12, "
+            "conv_tol_grad=1e-8; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            functional=code,
+            auxiliary_basis=KSCF_AUXILIARY,
+            charge=cell.charge,
+            spin=cell.spin,
+            dimension=cell.dimension,
+            lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
+            kpoints_fractional=[list(point) for point in mesh.fractional],
         )

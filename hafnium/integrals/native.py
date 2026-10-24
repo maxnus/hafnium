@@ -196,3 +196,23 @@ class RustEngine:
         return _kernels.basis_values(
             _kernel_table(table), to_host(points), to_host(radii), order
         )
+
+    def bloch_basis_values(
+        self,
+        table: ShellTable,
+        points: Array,
+        radii: Array,
+        translations: Array,
+        phases: Array,
+        *,
+        order: int = 0,
+    ) -> Array:
+        """Bloch sums of the basis functions at ``points``, ``[kpt, g, comp, ao]``."""
+        return _kernels.bloch_basis_values(
+            _kernel_table(table),
+            to_host(points),
+            to_host(radii),
+            to_host(translations),
+            to_host(phases, "complex128"),
+            order,
+        )

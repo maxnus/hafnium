@@ -129,7 +129,7 @@ pub fn basis_values(
 }
 
 /// `R_n = Σ_k c_k α_k^n exp(−α_k s)` for `n = 0, ..., order`.
-fn radial_sums(
+pub(super) fn radial_sums(
     shell: &crate::integrals::ShellRef<'_>,
     contraction: usize,
     s: f64,
@@ -151,7 +151,7 @@ fn radial_sums(
 
 /// Scratch buffers of one task: the monomials and their derivatives, the
 /// Cartesian function components and the spherical result.
-struct Workspace {
+pub(super) struct Workspace {
     /// Powers of the displacement along each axis, `[axis][power]`.
     powers: [Vec<f64>; 3],
     /// `[cartesian][0..10]`: `m, m_x, m_y, m_z, m_xx, m_xy, m_xz, m_yy, m_yz, m_zz`.
@@ -162,7 +162,7 @@ struct Workspace {
 }
 
 impl Workspace {
-    fn new(max_l: usize, n_comp: usize) -> Self {
+    pub(super) fn new(max_l: usize, n_comp: usize) -> Self {
         let n_cart = n_cartesian(max_l);
         Self {
             powers: std::array::from_fn(|_| vec![0.0; max_l + 1]),
@@ -174,7 +174,13 @@ impl Workspace {
 
     /// Fill the monomial table for the components of degree `l` at the
     /// displacement `d`.
-    fn monomials(&mut self, components: &[[usize; 3]], l: usize, d: [f64; 3], order: usize) {
+    pub(super) fn monomials(
+        &mut self,
+        components: &[[usize; 3]],
+        l: usize,
+        d: [f64; 3],
+        order: usize,
+    ) {
         for (powers, &x) in self.powers.iter_mut().zip(&d) {
             powers[0] = 1.0;
             for n in 1..=l {
@@ -221,7 +227,7 @@ impl Workspace {
 
     /// Combine the monomial table with the radial sums into the Cartesian
     /// function components, `[cartesian][component]`.
-    fn cartesian(
+    pub(super) fn cartesian(
         &mut self,
         components: &[[usize; 3]],
         d: [f64; 3],
@@ -259,7 +265,7 @@ impl Workspace {
 
     /// Transform the Cartesian components to spherical functions and write
     /// them into `values[component][start + m]`.
-    fn scatter(
+    pub(super) fn scatter(
         &self,
         transform: &[f64],
         n_cart: usize,

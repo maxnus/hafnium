@@ -681,7 +681,10 @@ Python.
 **grid.** Radial schemes (Treutler–Ahlrichs, Mura–Knowles), Lebedev
 angular grids, Becke partitioning, pruning, batching; basis values and
 gradients on batches from Rust. For cells, the same atom-centred grids
-with lattice images and Bloch-phased basis values.
+partitioned among the atoms and their lattice images with the local
+Stratmann–Scuseria–Frisch step and a larger angular rule on the shells
+shared with the neighbours, and Bloch sums of the basis functions from
+Rust (ADR-0027).
 
 **xc.** Functional registry by name, the functionals of libxc through the
 pure-Rust `xcx` crate with libxc's ids and conventions (ADR-0026),
@@ -1014,10 +1017,21 @@ unrestricted classes with point-group sectors, hybrids and
 range-separated hybrids through the exact and fitted builders with the
 long-range kernel; RKS and UKS energies match PySCF to 1e-10 Hartree for
 SVWN, PBE, BLYP, B3LYP, PBE0, TPSS, r²SCAN, M06-L, M06-2X and the ωB97
-functionals without VV10, with exact and fitted integrals. Later: the
-periodic part, noncollinear functionals for the generalized classes,
-VV10 and dispersion corrections, functionals outside `xcx`'s list
-(SCAN, HSE, CAM-B3LYP, Laplacian meta-GGAs).
+functionals without VV10, with exact and fitted integrals. Part two done
+2026-10-24 (ADR-0027): a cell's grid partitions space among the atoms and
+their lattice images with the Stratmann–Scuseria–Frisch step, which makes
+the periodic partition of unity local, and takes a larger Lebedev rule on
+the shells shared with the neighbours; Bloch sums of the basis functions
+on the grid from the compiled layer; the exchange–correlation term over
+the full k set, reduced onto the stored points as the Coulomb matrix is,
+for RKS and UKS with the fitted exchange of hybrids; periodic energies
+match PySCF to 1e-12 on one and the same grid, and the grid of ADR-0027
+integrates the electron count to 1e-5 where PySCF's truncated grids
+reach 1e-3. Later: range-separated hybrids for cells (fitted integrals
+with the long-range kernel on a lattice), noncollinear functionals for
+the generalized classes, VV10 and dispersion corrections, functionals
+outside `xcx`'s list (SCAN, HSE, CAM-B3LYP, Laplacian meta-GGAs),
+caching the basis values across SCF iterations.
 
 **M8 Correlated methods.** DF MO transformation, DF-MP2, `BlockTensor`
 with structured einsum over irreps and crystal momentum, equation

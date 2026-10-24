@@ -273,3 +273,22 @@ class IntegralEngine(Protocol):
         values are below the precision given there.
         """
         ...
+
+    def bloch_basis_values(
+        self,
+        table: ShellTable,
+        points: Array,
+        radii: Array,
+        translations: Array,
+        phases: Array,
+        *,
+        order: int = 0,
+    ) -> Array:
+        """Bloch sums of the functions at ``points``, complex ``[kpt, g, comp, ao]``.
+
+        ``Σ_T exp(i k·T) φ(r − T)`` over the ``translations [image, 3]``
+        (Bohr) with the ``phases [kpt, image]`` ``exp(i k·T)`` (ADR-0007);
+        the components and the cutoff ``radii`` are those of
+        :meth:`basis_values`, the radii applying to every image of a shell.
+        """
+        ...

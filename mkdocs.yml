@@ -53,6 +53,7 @@ nav:
       - adr/0024-space-groups-reduce-the-k-point-set.md
       - adr/0025-lattice-sums-reach-by-exponent.md
       - adr/0026-dft-grids-and-functionals-from-xcx.md
+      - adr/0027-periodic-kohn-sham-on-local-partition-grids.md
   - API reference: api.md
 
 markdown_extensions:
