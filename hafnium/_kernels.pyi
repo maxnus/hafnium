@@ -1,5 +1,7 @@
 """Type stubs for the compiled kernel module built from crates/hafnium-py."""
 
+from typing import Any
+
 import numpy as np
 from numpy.typing import NDArray
 
@@ -102,17 +104,18 @@ def coulomb_three_center_bloch(
     image_coordinates: NDArray[np.int64],
     steps: NDArray[np.float64],
     step_coordinates: NDArray[np.int64],
-    bra_phases: NDArray[np.complex128],
-    ket_phases: NDArray[np.complex128],
+    image_classes: NDArray[np.int64],
+    kpoints: NDArray[np.float64],
     omega: float | None = None,
     short_range: bool = False,
     threshold: float = 0.0,
 ) -> NDArray[np.complex128]:
     """Return the Bloch-summed three-centre integrals ``[kpt, kpt, aux, bra, ket]``.
 
-    ``Σ_ij bra_phases[k1, i] ket_phases[k2, j] (P | u(T_i) v(T_j))`` over the
-    image pairs whose difference is a step, found by the lattice
-    coordinates, the auxiliary function in the home cell.
+    ``Σ_ij exp(−i k1·T_i) exp(i k2·T_j) (P | u(T_i) v(T_j))`` over the image
+    pairs whose difference is a step, found by the lattice coordinates, the
+    auxiliary function in the home cell; ``exp(i (k2 − k1)·T_i)`` is taken
+    from the class of every image (ADR-0025).
     """
 
 def coulomb_four_center(
@@ -169,6 +172,47 @@ def ewald_energy(
     ``vectors`` ``[d, 3]`` span the lattice, ``translations`` ``[T, 3]`` are
     the real-space images summed over and ``g_vectors`` ``[G, 3]`` the
     non-zero reciprocal vectors; ``omega`` is the range-separation parameter.
+    """
+
+def basis_values(
+    table: ShellTable,
+    points: NDArray[np.float64],
+    radii: NDArray[np.float64],
+    order: int = 0,
+) -> NDArray[np.float64]:
+    """Return the basis functions at ``points`` ``[g, 3]`` as ``[g, component, ao]``.
+
+    The components are the value and, for ``order`` 1 and 2, the derivatives
+    ``x, y, z`` and ``xx, xy, xz, yy, yz, zz``; a shell's functions are zero
+    farther than its entry of ``radii`` from its centre.
+    """
+
+def functional_info(name: str) -> dict[str, Any]:
+    """Return the metadata of the functional with the libxc ``name``.
+
+    Keys: ``id``, ``name``, ``rung`` (``"lda"``, ``"gga"``, ``"meta-gga"``),
+    ``needs_laplacian``, ``exact_exchange``, ``range_separation`` (``(omega,
+    alpha, beta)`` or ``None``), ``vv10`` (``(b, C)`` or ``None``) and
+    ``density_threshold``.
+    """
+
+def evaluate_functional(
+    names: list[str],
+    weights: NDArray[np.float64],
+    rho: NDArray[np.float64],
+    sigma: NDArray[np.float64] | None = None,
+    tau: NDArray[np.float64] | None = None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+]:
+    """Return ``(exc, vrho, vsigma, vtau)`` of ``Σ weights[i] names[i]``.
+
+    ``rho`` is ``[2, g]``, ``sigma`` ``[3, g]`` and ``tau`` ``[2, g]``; the
+    energy per particle is ``[g]`` and the derivatives of the energy density
+    follow the input layouts, ``None`` below the rung that needs them.
     """
 
 def configure_threads(n_threads: int) -> None:

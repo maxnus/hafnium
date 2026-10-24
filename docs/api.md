@@ -27,6 +27,14 @@ Until then the packages are documented directly.
 
 ::: hafnium.integrals
 
+## hafnium.grid
+
+::: hafnium.grid
+
+## hafnium.xc
+
+::: hafnium.xc
+
 ## hafnium.scf
 
 ::: hafnium.scf

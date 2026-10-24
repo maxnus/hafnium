@@ -12,8 +12,9 @@ authoritative and this file explains the intent.
   `pyproject.toml`); `pyright` in strict mode type-checks (ADR-0004);
   `pytest` runs tests. All three gate merges.
 - Function size is limited by ruff: at most 30 statements, 10 branches,
-  cyclomatic complexity 10 and 6 parameters. A function that trips a limit
-  is split, not exempted.
+  cyclomatic complexity 10 and 7 parameters (raised from 6 for the
+  Kohn–Sham entry point, which is the Hartree–Fock one plus a functional).
+  A function that trips a limit is split, not exempted.
 - Rust: `rustfmt` default style; `cargo clippy -- -D warnings` with the
   `pedantic` group enabled; `cargo nextest` runs tests. All gate merges.
 - `pre-commit` runs the formatters and linters locally.
@@ -139,6 +140,17 @@ Spin never appears as an explicit index in method code; it is part of the
   and `K[u, v] = Σ_wx (uw|xv) D[w, x]` per spin block; `D_total` is the
   spin trace. Energy `E = E_nuc + tr(D (h + F)) / 2` with the structured
   trace.
+- Kohn–Sham (ADR-0026): functionals are named by libxc's names and ids.
+  The densities on a grid follow libxc's layout, `rho [2, g]` for the
+  spins, `sigma [3, g]` for `∇ρ_α·∇ρ_α, ∇ρ_α·∇ρ_β, ∇ρ_β·∇ρ_β` and
+  `tau [2, g]` for `½ Σ_i |∇ψ_iσ|²`, and the energy per particle `ε_xc`
+  and the derivatives of the energy density `ρ ε_xc` come back in the
+  same layout. The exact exchange of a hybrid is `a K + b K_lr(ω)` in
+  libxc's range-separation convention `a + b erf(ω r)`, so
+  `Functional.exact_exchange` is `a` and `long_range_exchange` is `b`.
+  Basis values on grid points are `[g, component, ao]` with the
+  components value, `x, y, z`, `xx, xy, xz, yy, yz, zz`. Grid sizes by
+  level follow PySCF's tables so that results compare directly.
 - Two-electron integrals in the AO basis use chemists' notation
   `(uv|wx)` stored as `eri[u, v, w, x]`. Correlated-method code uses
   antisymmetrized physicists' integrals `<pq||rs>` stored as

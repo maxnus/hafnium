@@ -14,7 +14,7 @@ mod hermite;
 mod one_electron;
 mod pairs;
 #[cfg(test)]
-mod test_tables;
+pub(crate) mod test_tables;
 mod three_center_bloch;
 mod two_electron;
 

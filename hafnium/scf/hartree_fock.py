@@ -1,4 +1,4 @@
-"""Hartree–Fock for a molecule or a cell in one call."""
+"""Hartree–Fock for a molecule or a cell in one call, and the Hamiltonian behind it."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from hafnium.scf.coulomb_exchange import (
     KPointDensityFittedCoulombExchange,
 )
 from hafnium.scf.driver import ScfOptions, ScfResult, solve_scf
+from hafnium.scf.exchange_correlation import ExchangeCorrelation
 from hafnium.scf.hamiltonian import Hamiltonian
 from hafnium.symmetry import SymmetrySpec
 
@@ -87,17 +88,58 @@ def _hamiltonian(
             two_body,
             space_group=symmetry.space_group,
         )
+    return molecular_hamiltonian(engine, basis, system, symmetry, auxiliary)
+
+
+def molecular_hamiltonian(
+    engine: IntegralEngine,
+    basis: BasisSet,
+    molecule: Molecule,
+    symmetry: SymmetrySpec,
+    auxiliary: BasisSet | None,
+    *,
+    exchange_correlation: ExchangeCorrelation | None = None,
+) -> Hamiltonian:
+    """Build the Hamiltonian of a molecule for ``symmetry``, exact or density-fitted.
+
+    With ``exchange_correlation`` the Hamiltonian is a Kohn–Sham one; the
+    two-electron integrals with the long-range kernel of a range-separated
+    functional are built alongside the full-range ones.
+    """
     if symmetry.kpoints is not None or symmetry.space_group is not None:
         raise InputError(
             "a molecule has no k-points or space group; drop them from the symmetry"
         )
-    molecular: CoulombExchange = (
-        ExactCoulombExchange.from_molecule(engine, basis, system)
-        if auxiliary is None
-        else DensityFittedCoulombExchange.from_molecule(
-            engine, basis, auxiliary, system
-        )
+    functional = (
+        None if exchange_correlation is None else exchange_correlation.functional
     )
+    omegas: list[float | None] = [None]
+    if functional is not None and functional.is_range_separated:
+        omegas.append(functional.omega)
+    two_body: list[CoulombExchange] = [
+        _molecular_two_body(engine, basis, molecule, auxiliary, omega)
+        for omega in omegas
+    ]
     return Hamiltonian.from_molecule(
-        engine, basis, system, molecular, point_group=symmetry.point_group
+        engine,
+        basis,
+        molecule,
+        two_body[0],
+        point_group=symmetry.point_group,
+        exchange_correlation=exchange_correlation,
+        long_range_two_body=two_body[1] if len(two_body) > 1 else None,
+    )
+
+
+def _molecular_two_body(
+    engine: IntegralEngine,
+    basis: BasisSet,
+    molecule: Molecule,
+    auxiliary: BasisSet | None,
+    omega: float | None,
+) -> CoulombExchange:
+    if auxiliary is None:
+        return ExactCoulombExchange.from_molecule(engine, basis, molecule, omega=omega)
+    return DensityFittedCoulombExchange.from_molecule(
+        engine, basis, auxiliary, molecule, omega=omega
     )

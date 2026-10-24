@@ -101,3 +101,37 @@ IRREP_WEIGHT_TOL = 1e-10
 # the exponent that absorbs the polynomial; the largest envelope sampled on a
 # grid must still reach this fraction of the bound.
 AMPLITUDE_BOUND_RATIO = 0.05
+
+# Lebedev rules against the closed-form integrals of monomials up to their
+# degree, and the sum of their weights against one.
+ANGULAR_QUADRATURE_TOL = 1e-13
+# Radial quadratures against the closed-form integrals of Gaussians, relative.
+RADIAL_QUADRATURE_TOL = 1e-11
+# Becke's partition weights summed over the atoms against one.
+PARTITION_TOL = 1e-13
+# Basis functions on grid points against a direct evaluation of the
+# contracted solid harmonics.
+BASIS_VALUE_TOL = 1e-12
+# Analytic derivatives against central finite differences with a step of 1e-5.
+FINITE_DIFFERENCE_TOL = 1e-7
+# Basis values left out beyond the cutoff radii of this precision.
+BASIS_CUTOFF_PRECISION = 1e-10
+# Functional values and derivatives against PySCF's libxc at the same points,
+# relative: the two implementations differ in rounding only.
+LIBXC_REL_TOL = 1e-12
+# Kohn–Sham energies against PySCF with grids built from the same tables: the
+# grids coincide up to the CODATA value of the Bohr, which moves the weights
+# of the steepest partition regions by 1e-9 relative, and both codes converge
+# to 1e-12.
+KOHN_SHAM_ENERGY_TOL = 1e-9
+# Grid points against PySCF's: the positions differ by the CODATA value of
+# the Bohr the two codes convert Ångström with.
+GRID_POINT_TOL = 1e-9
+# Grid weights against PySCF's, relative, for weights above the floor; the
+# tiny weights far from the atoms are the most sensitive to the positions.
+GRID_WEIGHT_REL_TOL = 1e-8
+GRID_WEIGHT_FLOOR = 1e-6
+# The orbital gradient at which the Kohn–Sham states compared with PySCF are
+# converged, PySCF's conv_tol_grad there, so that the orbital energies compare
+# at MO_ENERGY_TOL.
+REFERENCE_GRADIENT_TOL = 1e-8

@@ -7,6 +7,7 @@ data, so the comparison does not depend on PySCF's own basis library.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -611,3 +612,115 @@ def symmetric_kscf_reference(
         "fractional": np.asarray(kpts.kpts_scaled_ibz)[:, : cell.dimension],
         "mo_energies": np.asarray(mean_field.mo_energy),
     }
+
+
+def dft_reference(
+    molecule: Molecule,
+    basis: BasisSet,
+    functional: str,
+    kind: str,
+    *,
+    auxiliary: BasisSet | None = None,
+    grid: tuple[int, tuple[int, int] | None, bool] = (3, None, True),
+) -> dict[str, Any]:
+    """Converged ``kind`` (``"rks"`` or ``"uks"``) state with PySCF's ``functional``.
+
+    ``grid`` is ``(level, atom_grid, prune)`` in PySCF's terms: the size
+    level, an optional ``(radial, angular)`` size for every atom, and whether
+    the NWChem pruning is applied; the other grid settings are PySCF's
+    defaults, which :mod:`hafnium.grid` follows. The VV10 nonlocal
+    correlation of the ωB97 functionals is switched off (``nlc = 0``), since
+    Hafnium does not evaluate it. With ``auxiliary`` the Coulomb and exact
+    exchange terms are density-fitted in that basis.
+    """
+    dft: Any = pytest.importorskip("pyscf.dft")
+    mol = pyscf_molecule(molecule, basis)
+    mean_field = {"rks": dft.RKS, "uks": dft.UKS}[kind](mol)
+    mean_field.xc = functional
+    mean_field.nlc = 0
+    level, atom_grid, prune = grid
+    mean_field.grids.level = level
+    if atom_grid is not None:
+        mean_field.grids.atom_grid = atom_grid
+    if not prune:
+        mean_field.grids.prune = None
+    if auxiliary is not None:
+        mean_field = mean_field.density_fit(auxbasis=basis_input(molecule, auxiliary))
+    mean_field.conv_tol = 1e-12
+    mean_field.conv_tol_grad = 1e-8
+    mean_field.max_cycle = 200
+    energy = float(mean_field.kernel())
+    assert mean_field.converged
+    spin_square = 0.0 if kind == "rks" else float(mean_field.spin_square()[0])
+    return {
+        "energy": energy,
+        "mo_energies": np.asarray(mean_field.mo_energy),
+        "mo_occupations": np.asarray(mean_field.mo_occ),
+        "spin_square": spin_square,
+        "n_grid_nonzero": int(np.count_nonzero(mean_field.grids.weights)),
+    }
+
+
+def grid_reference(
+    molecule: Molecule, level: int = 3, *, prune: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
+    """PySCF's grid points ``[g, 3]`` and weights ``[g]`` at ``level``.
+
+    PySCF pads its grid to a multiple of eight points with zero weights,
+    which are dropped here; the remaining points keep their order, atom by
+    atom and radial shell by radial shell.
+    """
+    dft: Any = pytest.importorskip("pyscf.dft")
+    mol = pyscf_molecule(molecule, BasisSet.for_atoms(molecule, "sto-3g"))
+    grids = dft.gen_grid.Grids(mol)
+    grids.level = level
+    if not prune:
+        grids.prune = None
+    grids.build(sort_grids=False, with_non0tab=False)
+    table = dft.gen_grid.gen_atomic_grids(
+        mol, radi_method=grids.radi_method, level=level, prune=grids.prune
+    )
+    n = sum(len(table[mol.atom_symbol(atom)][1]) for atom in range(mol.natm))
+    return np.asarray(grids.coords[:n]), np.asarray(grids.weights[:n])
+
+
+@dataclass(frozen=True)
+class FunctionalValues:
+    """libxc's energy per particle and first derivatives in Hafnium's layout."""
+
+    energy_per_particle: np.ndarray
+    vrho: np.ndarray
+    vsigma: np.ndarray | None
+    vtau: np.ndarray | None
+
+
+def functional_reference(
+    name: str, rho: np.ndarray, sigma: np.ndarray, tau: np.ndarray
+) -> FunctionalValues:
+    """libxc's values of ``name`` at spin-polarized points through PySCF.
+
+    ``rho`` is ``[2, g]``, ``sigma`` ``[3, g]`` and ``tau`` ``[2, g]`` in the
+    layout of :class:`hafnium.xc.DensityOnGrid`; the gradients PySCF takes
+    are reconstructed with ``∇ρ_α`` along ``x`` and ``∇ρ_β`` in the ``xy``
+    plane. Returns the energy per particle and ``vrho``, ``vsigma`` and
+    ``vtau`` in Hafnium's layout, ``None`` where the rung does not have them.
+    """
+    libxc: Any = pytest.importorskip("pyscf.dft.libxc")
+    n = rho.shape[1]
+    grad_a = np.zeros((3, n))
+    grad_a[0] = np.sqrt(sigma[0])
+    grad_b = np.zeros((3, n))
+    grad_b[0] = sigma[1] / grad_a[0]
+    grad_b[1] = np.sqrt(np.maximum(sigma[2] - grad_b[0] ** 2, 0.0))
+    rows = {"LDA": 1, "GGA": 4, "MGGA": 6}[libxc.xc_type(name)]
+    full_a = np.vstack([rho[0], grad_a, np.zeros(n), tau[0]])
+    full_b = np.vstack([rho[1], grad_b, np.zeros(n), tau[1]])
+    arg = (full_a[:rows], full_b[:rows]) if rows > 1 else (full_a[0], full_b[0])
+    exc, vxc = libxc.eval_xc(name, arg, spin=1, deriv=1)[:2]
+    vxc = list(vxc)
+    return FunctionalValues(
+        np.asarray(exc),
+        np.asarray(vxc[0]).T,
+        np.asarray(vxc[1]).T if rows > 1 else None,
+        np.asarray(vxc[3]).T if rows > 4 else None,
+    )

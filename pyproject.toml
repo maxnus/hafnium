@@ -101,7 +101,7 @@ max-complexity = 10
 [tool.ruff.lint.pylint]
 max-statements = 30
 max-branches = 10
-max-args = 6
+max-args = 7
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "numpy".msg = "Import numpy only inside hafnium/backend; elsewhere use the array namespace (CONVENTIONS.md §5)."

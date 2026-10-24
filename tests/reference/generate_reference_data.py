@@ -7,8 +7,8 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
 ``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json``,
 ``bloch_<cell>_<basis>.json``, ``nuclear_<cell>_<basis>.json``,
-``fitting_<cell>_<basis>.json`` and ``kscf_<cell>_<basis>.json`` with the
-PySCF values and their provenance.
+``fitting_<cell>_<basis>.json``, ``kscf_<cell>_<basis>.json`` and
+``dft_<molecule>_<basis>.json`` with the PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from tests.reciprocal_vectors import G_VECTORS
 from tests.reference.pyscf_oracle import (
     bloch_one_electron_reference,
     density_fitting_reference,
+    dft_reference,
     ewald_reference,
     four_center_reference,
     fourier_transform_reference,
@@ -44,6 +45,7 @@ from tests.reference.test_density_fitting_reference import AUXILIARY
 from tests.reference.test_density_fitting_reference import (
     STORED_CASES as DENSITY_FITTING_CASES,
 )
+from tests.reference.test_dft_reference import STORED_CASES as DFT_CASES
 from tests.reference.test_ewald_reference import CELLS
 from tests.reference.test_ewald_reference import STORED_CASES as EWALD_CASES
 from tests.reference.test_fitting_reference import AUXILIARY as FITTING_AUXILIARY
@@ -104,6 +106,7 @@ def main() -> None:
     DIRECTORY.mkdir(exist_ok=True)
     record_molecules()
     record_cells()
+    record_kohn_sham()
 
 
 def record_molecules() -> None:
@@ -287,3 +290,24 @@ def record_cells() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def record_kohn_sham() -> None:
+    """Write the Kohn–Sham cases, with PySCF's default grids."""
+    for name, basis_name, kind, _, code in DFT_CASES:
+        molecule = SCF_MOLECULES[name]
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+        reference = dft_reference(molecule, basis, code, kind)
+        record(
+            "dft",
+            molecule,
+            name,
+            basis_name,
+            f"dft.{kind.upper()} with xc={code!r}, nlc=0, grids.level=3; "
+            "conv_tol=1e-12, conv_tol_grad=1e-8; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            functional=code,
+            charge=molecule.charge,
+            spin=molecule.spin,
+        )

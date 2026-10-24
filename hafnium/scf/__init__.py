@@ -18,6 +18,8 @@ from hafnium.scf.coulomb_exchange import (
     ExactCoulombExchange,
     KPointDensityFittedCoulombExchange,
     coulomb_exchange_matrices,
+    coulomb_matrix,
+    exchange_matrix,
 )
 from hafnium.scf.diis import Diis
 from hafnium.scf.driver import (
@@ -28,8 +30,14 @@ from hafnium.scf.driver import (
     orbital_gradient,
     solve_scf,
 )
+from hafnium.scf.exchange_correlation import (
+    DEFAULT_BASIS_CUTOFF,
+    DEFAULT_BATCH_SIZE,
+    ExchangeCorrelation,
+)
 from hafnium.scf.hamiltonian import EnergyTerms, Hamiltonian
 from hafnium.scf.hartree_fock import hartree_fock
+from hafnium.scf.kohn_sham import KohnShamOptions, kohn_sham
 from hafnium.scf.occupation import (
     AufbauOccupation,
     AveragedOccupation,
@@ -43,6 +51,8 @@ from hafnium.scf.orthogonalization import (
 from hafnium.scf.spin import SpinExpectation, spin_expectation
 
 __all__ = [
+    "DEFAULT_BASIS_CUTOFF",
+    "DEFAULT_BATCH_SIZE",
     "DEFAULT_OVERLAP_THRESHOLD",
     "AufbauOccupation",
     "AveragedOccupation",
@@ -51,8 +61,10 @@ __all__ = [
     "Diis",
     "EnergyTerms",
     "ExactCoulombExchange",
+    "ExchangeCorrelation",
     "Hamiltonian",
     "KPointDensityFittedCoulombExchange",
+    "KohnShamOptions",
     "OccupationPolicy",
     "ScfIteration",
     "ScfOptions",
@@ -63,8 +75,11 @@ __all__ = [
     "canonical_orthogonalizer",
     "core_hamiltonian_guess",
     "coulomb_exchange_matrices",
+    "coulomb_matrix",
     "electrons_per_block",
+    "exchange_matrix",
     "hartree_fock",
+    "kohn_sham",
     "orbital_gradient",
     "solve_scf",
     "spin_expectation",
