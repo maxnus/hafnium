@@ -12,6 +12,7 @@ from hafnium.scf.coulomb_exchange import (
     CoulombExchange,
     DensityFittedCoulombExchange,
     ExactCoulombExchange,
+    KPointDensityFittedCoulomb,
     KPointDensityFittedCoulombExchange,
 )
 from hafnium.scf.driver import ScfOptions, ScfResult, solve_scf
@@ -99,13 +100,24 @@ def system_hamiltonian(
     from ``symmetry`` and the fitted two-electron terms in ``auxiliary``;
     see :func:`molecular_hamiltonian` for a molecule. With
     ``exchange_correlation``, built for the same system and k-points, the
-    Hamiltonian is a Kohn–Sham one.
+    Hamiltonian is a Kohn–Sham one, and a cell with a functional free of
+    exact exchange fits the Coulomb term alone (ADR-0028).
     """
     if isinstance(system, Cell):
         kpoints, auxiliary = require_periodic_inputs(system, symmetry, auxiliary)
-        two_body = KPointDensityFittedCoulombExchange.from_cell(
-            engine, basis, auxiliary, system, kpoints
-        )
+        two_body: CoulombExchange
+        if exchange_correlation is not None and not (
+            exchange_correlation.functional.is_hybrid
+        ):
+            # A pure functional needs the Coulomb term alone: the blocks of
+            # zero momentum transfer (ADR-0028).
+            two_body = KPointDensityFittedCoulomb.from_cell(
+                engine, basis, auxiliary, system, kpoints
+            )
+        else:
+            two_body = KPointDensityFittedCoulombExchange.from_cell(
+                engine, basis, auxiliary, system, kpoints
+            )
         return Hamiltonian.from_cell(
             engine,
             basis,

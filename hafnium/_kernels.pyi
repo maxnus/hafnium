@@ -105,17 +105,21 @@ def coulomb_three_center_bloch(
     steps: NDArray[np.float64],
     step_coordinates: NDArray[np.int64],
     image_classes: NDArray[np.int64],
+    step_classes: NDArray[np.int64],
     kpoints: NDArray[np.float64],
     omega: float | None = None,
     short_range: bool = False,
     threshold: float = 0.0,
+    coulomb_only: bool = False,
 ) -> NDArray[np.complex128]:
     """Return the Bloch-summed three-centre integrals ``[kpt, kpt, aux, bra, ket]``.
 
     ``Σ_ij exp(−i k1·T_i) exp(i k2·T_j) (P | u(T_i) v(T_j))`` over the image
     pairs whose difference is a step, found by the lattice coordinates, the
     auxiliary function in the home cell; ``exp(i (k2 − k1)·T_i)`` is taken
-    from the class of every image (ADR-0025).
+    from the class of every image and ``exp(i k2·T_s)`` from the class of
+    every step (ADR-0025, ADR-0028). With ``coulomb_only`` only the blocks
+    of zero transfer are formed, ``[kpt, aux, bra, ket]``.
     """
 
 def coulomb_four_center(

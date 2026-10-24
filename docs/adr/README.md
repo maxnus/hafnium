@@ -34,3 +34,4 @@ ADR that supersedes it.
 | [0025](0025-lattice-sums-reach-by-exponent.md) | Lattice sums reach by exponent, and the Bloch three-centre kernel accumulates by class | accepted 2026-10-24 |
 | [0026](0026-dft-grids-and-functionals-from-xcx.md) | DFT grids follow PySCF's tables, and the functionals come from `xcx` | accepted 2026-10-24 |
 | [0027](0027-periodic-kohn-sham-on-local-partition-grids.md) | Periodic Kohn–Sham integrates on atom-centred grids with a local partition | accepted 2026-10-24 |
+| [0028](0028-folded-phases-and-coulomb-only-fitting.md) | The Bloch three-centre kernel folds both phases, and pure functionals fit the Coulomb term alone | accepted 2026-10-24 |

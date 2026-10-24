@@ -28,9 +28,11 @@ from hafnium.integrals.one_electron import (
 )
 from hafnium.integrals.periodic import (
     DEFAULT_LATTICE_SUM_PRECISION,
+    PeriodicCoulombFitting,
     PeriodicDensityFitting,
     bloch_sum,
     core_hamiltonian_k,
+    coulomb_fitting_k,
     density_fitting_k,
     kinetic_k,
     lattice_images,
@@ -47,6 +49,7 @@ __all__ = [
     "CoulombKernel",
     "DensityFitting",
     "IntegralEngine",
+    "PeriodicCoulombFitting",
     "PeriodicDensityFitting",
     "PointCharges",
     "RustEngine",
@@ -54,6 +57,7 @@ __all__ = [
     "bloch_sum",
     "core_hamiltonian",
     "core_hamiltonian_k",
+    "coulomb_fitting_k",
     "density_fitting_k",
     "eri",
     "kinetic",

@@ -62,6 +62,10 @@ from hafnium.symmetry import KPoints
 _TRANSFORM_CHUNK_BYTES = 128 * 2**20
 """Memory budget of one batch of pair transforms ``[image, G, ao, ao]``."""
 
+_SHIFT_TOLERANCE = 1e-8
+"""A mesh counts as shifted along a direction when its points sit this far
+from the multiples of ``1/n``."""
+
 
 @dataclass(frozen=True, slots=True, eq=False)
 class PeriodicDensityFitting:
@@ -193,6 +197,75 @@ class PeriodicDensityFitting:
         )
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class PeriodicCoulombFitting:
+    """The blocks of zero momentum transfer of a cell's density fitting (ADR-0028).
+
+    The Coulomb matrix ``J(k)`` needs only ``(P^0 | u k v k)`` and the metric
+    at ``q = 0``, one block per k-point instead of one per pair, so a pure
+    functional fits the Coulomb term alone and skips the exchange blocks.
+
+    Parameters
+    ----------
+    kpoints
+        The k-point set, a uniform mesh.
+    metric : Array[aux, aux]
+        ``(P^0 | Q^0)``, complex and Hermitian.
+    three_center : Array[kpt, aux, ao, ao]
+        ``(P^0 | u k v k)`` at every k-point.
+    """
+
+    kpoints: KPoints
+    metric: Array
+    three_center: Array
+
+    def __post_init__(self) -> None:
+        n_aux = self.metric.shape[0] if self.metric.ndim == 2 else -1
+        if self.metric.shape != (n_aux, n_aux):
+            raise InputError("the metric has shape [aux, aux]")
+        shape = self.three_center.shape
+        if (
+            self.three_center.ndim != 4
+            or shape[:2] != (self.kpoints.n_kpt, n_aux)
+            or shape[2] != shape[3]
+        ):
+            raise InputError("three-centre integrals have shape [kpt, aux, ao, ao]")
+
+    @property
+    def n_aux(self) -> int:
+        """Number of auxiliary functions."""
+        return int(self.metric.shape[0])
+
+    @property
+    def n_ao(self) -> int:
+        """Number of orbital basis functions."""
+        return int(self.three_center.shape[2])
+
+    def df_tensor(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
+        """``df_tensor[kpt, aux, ao, ao]`` with the metric at zero transfer absorbed.
+
+        See :meth:`PeriodicDensityFitting.df_tensor`; contractions carry the
+        :meth:`signature` of the same threshold.
+        """
+        xp = array_namespace(self.metric)
+        half, _ = signed_inverse_square_root(self.metric, threshold)
+        n_aux = self.n_aux
+        return xp.stack(
+            [
+                xp.reshape(
+                    half @ xp.reshape(self.three_center[k], (n_aux, -1)),
+                    self.three_center.shape[1:],
+                )
+                for k in range(self.kpoints.n_kpt)
+            ]
+        )
+
+    def signature(self, *, threshold: float = DEFAULT_METRIC_THRESHOLD) -> Array:
+        """Signs ``[aux]`` of the metric eigenvalues behind :meth:`df_tensor`."""
+        _, signs = signed_inverse_square_root(self.metric, threshold)
+        return signs
+
+
 def density_fitting_k(
     engine: IntegralEngine,
     basis: BasisSet,
@@ -207,16 +280,65 @@ def density_fitting_k(
     of the lattice sums; by default :meth:`RangeSeparation.for_lattice` of
     the cell's lattice.
     """
+    builder, tables, table = _prepare(
+        engine, basis, auxiliary, cell, kpoints, separation
+    )
+    fitting, orbital = tables
+    metric = builder.metric(fitting, auxiliary)
+    three_center = builder.three_center(fitting, auxiliary, orbital, basis, table)
+    return PeriodicDensityFitting(
+        kpoints, builder.transfers, table, metric, three_center
+    )
+
+
+def coulomb_fitting_k(
+    engine: IntegralEngine,
+    basis: BasisSet,
+    auxiliary: BasisSet,
+    cell: Cell,
+    kpoints: KPoints,
+    separation: RangeSeparation | None = None,
+) -> PeriodicCoulombFitting:
+    """Evaluate the zero-transfer metric and three-centre integrals of ``cell``.
+
+    The fitting of the Coulomb term alone (ADR-0028): the same lattice sums
+    as :func:`density_fitting_k` restricted to ``q = 0``, one three-centre
+    block per k-point.
+    """
+    builder, tables, table = _prepare(
+        engine, basis, auxiliary, cell, kpoints, separation
+    )
+    fitting, orbital = tables
+    metric = builder.metric(fitting, auxiliary)[_ZERO_TRANSFER]
+    three_center = builder.three_center(
+        fitting, auxiliary, orbital, basis, table, coulomb_only=True
+    )
+    return PeriodicCoulombFitting(kpoints, metric, three_center)
+
+
+_ZERO_TRANSFER = 0
+"""Index of the zero momentum transfer in :meth:`KPoints.momentum_transfers`."""
+
+
+def _prepare(
+    engine: IntegralEngine,
+    basis: BasisSet,
+    auxiliary: BasisSet,
+    cell: Cell,
+    kpoints: KPoints,
+    separation: RangeSeparation | None,
+) -> tuple[_Builder, tuple[ShellTable, ShellTable], Array]:
+    """Return the builder, the (auxiliary, orbital) tables and the transfer table."""
     require_kpoints_for_lattice(kpoints, cell.lattice)
     if separation is None:
         separation = RangeSeparation.for_lattice(cell.lattice)
     transfers, table = kpoints.momentum_transfers()
+    if any(coordinate != 0.0 for coordinate in transfers.fractional[_ZERO_TRANSFER]):
+        raise InputError("the first momentum transfer of a mesh is zero")
     orbital = ShellTable.from_basis(basis, cell)
     fitting = ShellTable.from_basis(auxiliary, cell)
     builder = _Builder(engine, cell, separation, kpoints, transfers)
-    metric = builder.metric(fitting, auxiliary)
-    three_center = builder.three_center(fitting, auxiliary, orbital, basis, table)
-    return PeriodicDensityFitting(kpoints, transfers, table, metric, three_center)
+    return builder, (fitting, orbital), table
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,12 +389,16 @@ class _Builder:
         orbital: ShellTable,
         basis: BasisSet,
         table: Array,
+        *,
+        coulomb_only: bool = False,
     ) -> Array:
         """``(P^q | u k1 v k2)`` as complex ``[kpt, kpt, aux, ao, ao]``.
 
         The orbital functions are imaged where the short-range kernel
         reaches them from the home-cell auxiliary functions, with the
         third function of the triple bounded by its periodic amplitude.
+        With ``coulomb_only`` the blocks of zero transfer alone,
+        ``[kpt, aux, ao, ao]`` (ADR-0028).
         """
         xp = default_namespace()
         lattice = self.cell.lattice
@@ -293,48 +419,78 @@ class _Builder:
         per_pair = precision / max(int(pair_images.shape[0]), 1)
         kpts = xp.asarray(self.kpoints.cartesian(lattice))
         coordinates = integer_coordinates(lattice, images)
+        step_coordinates = integer_coordinates(lattice, pair_images)
+        step_classes = self._step_classes(step_coordinates)
         bloch = BlochImages(
             images,
             pair_images,
-            (coordinates, integer_coordinates(lattice, pair_images)),
+            (coordinates, step_coordinates),
             self._image_classes(coordinates),
+            step_classes,
             kpts,
         )
-        short = self.engine.coulomb_three_center_bloch(
+        total = self.engine.coulomb_three_center_bloch(
             fitting,
             orbital,
             orbital,
             bloch,
             kernel=CoulombKernel(self.separation.omega, short_range=True),
             threshold=per_pair,
+            coulomb_only=coulomb_only,
         )
         charge = max(function_absolute_integral(shell) for shell in auxiliary.shells)
         profile = PerpendicularProfile.from_functions(self.cell, basis, auxiliary)
         n_images = int(pair_images.shape[0])
-        pair_angles = xp.astype(
-            kpts @ xp.linalg.matrix_transpose(pair_images), xp.complex128
-        )
-        pair_phases = xp.exp(1j * pair_angles)
-        parts = [
-            [short[k1, k2] for k2 in range(self.kpoints.n_kpt)]
-            for k1 in range(self.kpoints.n_kpt)
-        ]
-        for q in range(self.transfers.n_kpt):
+        steps = self._sorted_steps(kpts, pair_images, step_classes)
+        transfers = [_ZERO_TRANSFER] if coulomb_only else range(self.transfers.n_kpt)
+        # The reciprocal-space part is added block by block into the array
+        # the engine returned, a writable host array that holds the whole
+        # tensor already; a second copy of it would cost as much memory as
+        # the tensor.
+        for q in transfers:
             reciprocal = self._reciprocal_sum(q, charge, profile)
             weights, _ = self._auxiliary_weights(fitting, reciprocal)
             summed = self._pair_transforms(
                 orbital,
-                pair_images,
-                pair_phases,
+                steps,
                 reciprocal.vectors,
                 precision / (n_images * self._weight_norm(weights)),
             )
             for k2 in range(self.kpoints.n_kpt):
-                k1 = int(xp.argmax(xp.astype(table[:, k2] == q, xp.int64)))
-                parts[k1][k2] = parts[k1][k2] + xp.tensordot(
-                    weights, summed[k2], axes=1
-                )
-        return xp.stack([xp.stack(row) for row in parts])
+                addition = xp.tensordot(weights, summed[k2], axes=1)
+                if coulomb_only:
+                    total[k2] = total[k2] + addition
+                else:
+                    k1 = int(xp.argmax(xp.astype(table[:, k2] == q, xp.int64)))
+                    total[k1, k2] = total[k1, k2] + addition
+        return total
+
+    @staticmethod
+    def _sorted_steps(
+        kpts: Array, images: Array, classes: Array
+    ) -> tuple[Array, Array, Array]:
+        """Sort the steps by class for :meth:`_pair_transforms`.
+
+        Returns the images in class order, the offsets ``[class + 1]`` of
+        every class in that order, and the phases ``exp(i k·T_c)``
+        ``[kpt, class]`` of the first image of every class, zero for a class
+        without images.
+        """
+        xp = array_namespace(images)
+        n_classes = int(xp.max(classes)) + 1
+        order = xp.argsort(classes, stable=True)
+        sorted_images = images[order]
+        counts = xp.asarray(
+            [int(xp.sum(xp.astype(classes == c, xp.int64))) for c in range(n_classes)],
+            dtype=xp.int64,
+        )
+        offsets = xp.concat([xp.zeros((1,), dtype=xp.int64), xp.cumulative_sum(counts)])
+        phases = xp.zeros((int(kpts.shape[0]), n_classes), dtype=xp.complex128)
+        for c in range(n_classes):
+            if int(counts[c]) > 0:
+                angles = kpts @ sorted_images[int(offsets[c])]
+                phases[:, c] = xp.exp(1j * xp.astype(angles, xp.complex128))
+        return sorted_images, offsets, phases
 
     def _image_classes(self, coordinates: Array) -> Array:
         """Return the Born–von Kármán class of every image.
@@ -343,8 +499,31 @@ class _Builder:
         flattened: ``exp(i q·T)`` is the same for every image of a class at
         every momentum transfer ``q`` of the mesh.
         """
+        return self._classes(coordinates, (1, 1, 1))
+
+    def _step_classes(self, coordinates: Array) -> Array:
+        """Return the class of every step for the phases ``exp(i k·T_s)`` (ADR-0028).
+
+        A k-point ``(m + ½) / n`` of a shifted mesh changes sign over ``n``
+        cells, so along a shifted direction the period of the classes is
+        twice the mesh size.
+        """
+        xp = array_namespace(coordinates)
+        sizes = self.kpoints.mesh_size()
+        fractional = self.kpoints.fractional_array(xp)
+        offsets = fractional * xp.asarray(sizes, dtype=xp.float64)
+        offsets = offsets - xp.floor(offsets + 0.5)
+        shifted = xp.any(xp.abs(offsets) > _SHIFT_TOLERANCE, axis=0)
+        multipliers = tuple(2 if bool(flag) else 1 for flag in shifted)
+        return self._classes(coordinates, multipliers + (1,) * (3 - len(sizes)))
+
+    def _classes(self, coordinates: Array, multipliers: tuple[int, ...]) -> Array:
+        """Flattened ``coordinates`` modulo the mesh sizes times ``multipliers``."""
         xp = array_namespace(coordinates)
         sizes = self.kpoints.mesh_size() + (1,) * (3 - self.cell.lattice.dimension)
+        sizes = tuple(
+            size * factor for size, factor in zip(sizes, multipliers, strict=True)
+        )
         n = xp.asarray(sizes, dtype=xp.int64)
         residues = coordinates - n * xp.floor_divide(coordinates, n)
         return (residues[:, 0] * sizes[1] + residues[:, 1]) * sizes[2] + residues[:, 2]
@@ -385,28 +564,42 @@ class _Builder:
     def _pair_transforms(
         self,
         orbital: ShellTable,
-        pair_images: Array,
-        pair_phases: Array,
+        steps: tuple[Array, Array, Array],
         vectors: Array,
         threshold: float,
     ) -> Array:
-        """Return ``Σ_T exp(i k2·T) ρ̃_T(q+G)`` as ``[kpt, G, ao, ao]``, in batches."""
+        """Return ``Σ_T exp(i k·T) ρ̃_T(q+G)`` as ``[kpt, G, ao, ao]``, in batches.
+
+        ``steps`` is the output of :meth:`_sorted_steps`: the pair images
+        in class order, the offsets of the classes and the phase of every
+        class. The transforms are summed per class first, since the phase
+        is the same within a class, and the phases multiply the class sums
+        (ADR-0028).
+        """
         xp = array_namespace(vectors)
+        sorted_images, offsets, class_phases = steps
         n_ao = orbital.n_functions
+        n_classes = int(class_phases.shape[1])
+        n_images = int(sorted_images.shape[0])
         per_image = int(vectors.shape[0]) * n_ao * n_ao * 16
         chunk = max(1, _TRANSFORM_CHUNK_BYTES // per_image)
-        total = xp.zeros(
-            (self.kpoints.n_kpt, int(vectors.shape[0]), n_ao, n_ao), dtype=xp.complex128
+        # The class sums are accumulated into a preallocated array, batch by
+        # batch; the images of a class are contiguous in the sorted list.
+        totals = xp.zeros(
+            (n_classes, int(vectors.shape[0]), n_ao, n_ao), dtype=xp.complex128
         )
-        for start in range(0, int(pair_images.shape[0]), chunk):
+        for start in range(0, n_images, chunk):
+            stop = min(start + chunk, n_images)
             transforms = self.engine.pair_fourier_transform(
                 orbital,
                 orbital,
-                pair_images[start : start + chunk],
+                sorted_images[start:stop],
                 vectors,
                 threshold=threshold,
             )
-            total = total + xp.tensordot(
-                pair_phases[:, start : start + chunk], transforms, axes=1
-            )
-        return total
+            for c in range(n_classes):
+                low = max(int(offsets[c]), start) - start
+                high = min(int(offsets[c + 1]), stop) - start
+                if high > low:
+                    totals[c] = totals[c] + xp.sum(transforms[low:high], axis=0)
+        return xp.tensordot(class_phases, totals, axes=1)

@@ -13,6 +13,7 @@ from hafnium.integrals import (
     PeriodicDensityFitting,
     RustEngine,
     ShellTable,
+    coulomb_fitting_k,
     density_fitting_k,
     overlap,
 )
@@ -23,6 +24,7 @@ from hafnium.integrals.periodic import (
     integer_coordinates,
 )
 from hafnium.molecule import AtomicSystem, Cell, Molecule, default_omega
+from hafnium.scf import KPointDensityFittedCoulomb, KPointDensityFittedCoulombExchange
 from hafnium.symmetry import KPoints
 from tests.cells import CUBIC, box, helium, helium_atom
 from tests.molecules import water
@@ -238,24 +240,37 @@ def test_bloch_kernel_reduces_to_the_plain_kernel_for_one_image() -> None:
     zero = np.zeros((1, 3))
     origin = np.zeros((1, 3), dtype=np.int64)
     one_class = np.zeros(1, dtype=np.int64)
-    images = BlochImages(zero, zero, (origin, origin), one_class, zero)
+    images = BlochImages(zero, zero, (origin, origin), one_class, one_class, zero)
     assert images.n_kpt == 1
     summed = ENGINE.coulomb_three_center_bloch(fitting, orbital, orbital, images)
     plain = ENGINE.coulomb_three_center(fitting, orbital, orbital, np.zeros((1, 2, 3)))
     np.testing.assert_allclose(summed[0, 0], plain[0], atol=INTEGRAL_TOL)
     # A step that reaches no image adds nothing.
-    far = BlochImages(zero, zero + 5.0, (origin, origin + 1), one_class, zero)
+    far = BlochImages(
+        zero, zero + 5.0, (origin, origin + 1), one_class, one_class, zero
+    )
     assert np.all(
         ENGINE.coulomb_three_center_bloch(fitting, orbital, orbital, far) == 0.0
     )
     with pytest.raises(InputError, match="three lattice coordinates"):
         BlochImages(
-            zero, zero, (origin, np.zeros((2, 3), dtype=np.int64)), one_class, zero
+            zero,
+            zero,
+            (origin, np.zeros((2, 3), dtype=np.int64)),
+            one_class,
+            one_class,
+            zero,
         )
     with pytest.raises(InputError, match=r"\[image\]"):
-        BlochImages(zero, zero, (origin, origin), np.zeros(2, dtype=np.int64), zero)
+        BlochImages(
+            zero, zero, (origin, origin), np.zeros(2, dtype=np.int64), one_class, zero
+        )
+    with pytest.raises(InputError, match=r"\[step\]"):
+        BlochImages(
+            zero, zero, (origin, origin), one_class, np.zeros(2, dtype=np.int64), zero
+        )
     with pytest.raises(InputError, match=r"\[kpt, 3\]"):
-        BlochImages(zero, zero, (origin, origin), one_class, np.zeros(3))
+        BlochImages(zero, zero, (origin, origin), one_class, one_class, np.zeros(3))
     two = np.zeros((2, 3))
     two_coordinates = np.zeros((2, 3), dtype=np.int64)
     with pytest.raises(ValueError, match="distinct"):
@@ -264,7 +279,12 @@ def test_bloch_kernel_reduces_to_the_plain_kernel_for_one_image() -> None:
             orbital,
             orbital,
             BlochImages(
-                two, zero, (two_coordinates, origin), np.zeros(2, dtype=np.int64), zero
+                two,
+                zero,
+                (two_coordinates, origin),
+                np.zeros(2, dtype=np.int64),
+                one_class,
+                zero,
             ),
         )
     # Two images of one class whose transfer phases differ are rejected.
@@ -280,6 +300,31 @@ def test_bloch_kernel_reduces_to_the_plain_kernel_for_one_image() -> None:
                 apart,
                 zero,
                 (apart_coordinates, origin),
+                np.zeros(2, dtype=np.int64),
+                one_class,
+                kpts,
+            ),
+        )
+
+
+def test_bloch_kernel_rejects_mixed_step_classes() -> None:
+    """Two steps of one class whose k-point phases differ are rejected (ADR-0028)."""
+    cell = helium(3)
+    orbital = ShellTable.from_basis(basis_for(cell, "cc-pvdz"), cell)
+    fitting = ShellTable.from_basis(basis_for(cell, AUXILIARY), cell)
+    apart = np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
+    apart_coordinates = np.array([[0, 0, 0], [1, 0, 0]], dtype=np.int64)
+    kpts = np.array([[0.0, 0.0, 0.0], [0.3, 0.0, 0.0]])
+    with pytest.raises(ValueError, match="varies within a step class"):
+        ENGINE.coulomb_three_center_bloch(
+            fitting,
+            orbital,
+            orbital,
+            BlochImages(
+                apart,
+                apart,
+                (apart_coordinates, apart_coordinates),
+                np.array([0, 1], dtype=np.int64),
                 np.zeros(2, dtype=np.int64),
                 kpts,
             ),
@@ -342,3 +387,55 @@ def test_inputs_are_validated() -> None:
             fit.metric,
             fit.three_center[0],
         )
+
+
+def test_coulomb_fitting_holds_the_zero_transfer_blocks() -> None:
+    """The Coulomb-only fitting is the diagonal of the full one (ADR-0028)."""
+    cell = helium(3)
+    basis = basis_for(cell, "cc-pvdz")
+    auxiliary = basis_for(cell, AUXILIARY)
+    mesh = KPoints.mesh((2, 1, 2))
+    full = density_fitting_k(ENGINE, basis, auxiliary, cell, mesh)
+    coulomb = coulomb_fitting_k(ENGINE, basis, auxiliary, cell, mesh)
+    assert coulomb.n_aux == full.n_aux
+    assert coulomb.n_ao == full.n_ao
+    np.testing.assert_allclose(
+        np.asarray(coulomb.metric, dtype=np.complex128),
+        np.asarray(full.metric[0], dtype=np.complex128),
+        atol=INTEGRAL_TOL,
+    )
+    tensor = np.asarray(full.df_tensor(), dtype=np.complex128)
+    reduced = np.asarray(coulomb.df_tensor(), dtype=np.complex128)
+    for k in range(mesh.n_kpt):
+        np.testing.assert_allclose(
+            np.asarray(full.three_center[k, k], dtype=np.complex128),
+            np.asarray(coulomb.three_center[k], dtype=np.complex128),
+            atol=INTEGRAL_TOL,
+        )
+        np.testing.assert_allclose(tensor[k, k], reduced[k], atol=INTEGRAL_TOL)
+    np.testing.assert_allclose(
+        np.asarray(coulomb.signature(), dtype=np.float64),
+        np.asarray(full.signature()[0, 0], dtype=np.float64),
+    )
+    # The Coulomb matrices of a Hermitian density agree; exchange is refused.
+    rng = np.random.default_rng(3)
+    n = full.n_ao
+    density = rng.normal(size=(mesh.n_kpt, n, n)) + 1j * rng.normal(
+        size=(mesh.n_kpt, n, n)
+    )
+    density = density + np.conj(np.swapaxes(density, -1, -2))
+    both = KPointDensityFittedCoulombExchange.from_fitting(
+        full, np.zeros((mesh.n_kpt, n, n)), 0.0
+    )
+    alone = KPointDensityFittedCoulomb(
+        reduced, coulomb.signature(), np.asarray(mesh.weights_array())
+    )
+    np.testing.assert_allclose(
+        np.asarray(alone.coulomb(density), dtype=np.complex128),
+        np.asarray(both.coulomb(density), dtype=np.complex128),
+        atol=INTEGRAL_TOL,
+    )
+    with pytest.raises(InputError, match="Coulomb term alone"):
+        alone.exchange(density)
+    with pytest.raises(InputError, match=r"\[kpt, aux, ao, ao\]"):
+        KPointDensityFittedCoulomb(tensor, coulomb.signature(), alone.weights)

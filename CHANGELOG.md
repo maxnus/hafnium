@@ -250,4 +250,15 @@ uses [Semantic Versioning](https://semver.org/).
   its candidate translations in chunks, so that its memory stays bounded
   for the many points of a grid. `ExchangeCorrelation.from_molecule` and
   `from_cell` take a prebuilt grid and no longer a batch size.
+- The Bloch three-centre kernel accumulates real integrals per class of
+  the image and class of the step and applies both phase transforms once
+  at the end, auxiliary shell by auxiliary shell, with the conjugate
+  completion in place (`BlochImages.step_classes`); pure functionals fit
+  the Coulomb term alone from the blocks of zero momentum transfer
+  (`coulomb_fitting_k`, `PeriodicCoulombFitting`,
+  `KPointDensityFittedCoulomb`, chosen by `kohn_sham` for a cell when the
+  functional has no exact exchange); the reciprocal-space part is added
+  into the kernel's tensor in place (ADR-0028). The silicon 3×3×3 LDA
+  build falls from 78 s to 9.7 s, the full tensor to
+  38 s.
 

@@ -32,7 +32,9 @@ from hafnium.integrals.periodic.coulomb import (
 )
 from hafnium.integrals.periodic.exchange import madelung_constant
 from hafnium.integrals.periodic.fitting import (
+    PeriodicCoulombFitting,
     PeriodicDensityFitting,
+    coulomb_fitting_k,
     density_fitting_k,
 )
 from hafnium.integrals.periodic.nuclear import (
@@ -43,6 +45,7 @@ from hafnium.integrals.periodic.nuclear import (
 
 __all__ = [
     "DEFAULT_LATTICE_SUM_PRECISION",
+    "PeriodicCoulombFitting",
     "PeriodicDensityFitting",
     "PerpendicularProfile",
     "RangeSeparation",
@@ -50,6 +53,7 @@ __all__ = [
     "atom_radii",
     "bloch_sum",
     "core_hamiltonian_k",
+    "coulomb_fitting_k",
     "coulomb_reach",
     "density_fitting_k",
     "function_absolute_integral",
