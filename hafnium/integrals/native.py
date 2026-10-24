@@ -188,3 +188,11 @@ class RustEngine:
             to_host(g_vectors),
             threshold,
         )
+
+    def basis_values(
+        self, table: ShellTable, points: Array, radii: Array, *, order: int = 0
+    ) -> Array:
+        """Basis functions and derivatives at ``points``, ``[g, component, ao]``."""
+        return _kernels.basis_values(
+            _kernel_table(table), to_host(points), to_host(radii), order
+        )

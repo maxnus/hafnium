@@ -258,3 +258,18 @@ class IntegralEngine(Protocol):
         are left at zero (ADR-0018).
         """
         ...
+
+    def basis_values(
+        self, table: ShellTable, points: Array, radii: Array, *, order: int = 0
+    ) -> Array:
+        """Values of the functions at ``points [g, 3]`` as ``[g, component, ao]``.
+
+        The components are the value and, for ``order`` 1 and 2, the
+        derivatives ``x, y, z`` and ``xx, xy, xz, yy, yz, zz``. A shell's
+        functions are left at zero at points farther than its entry of
+        ``radii [shell]`` (Bohr, infinity for no cutoff) from its centre;
+        the radii come from the exponents through
+        :func:`hafnium.integrals.periodic.function_radius`, so the neglected
+        values are below the precision given there.
+        """
+        ...

@@ -15,7 +15,12 @@ from hafnium.integrals import (
     overlap_k,
 )
 from hafnium.molecule import Cell, Molecule
-from hafnium.scf.coulomb_exchange import CoulombExchange, coulomb_exchange_matrices
+from hafnium.scf.coulomb_exchange import (
+    CoulombExchange,
+    coulomb_matrix,
+    exchange_matrix,
+)
+from hafnium.scf.exchange_correlation import ExchangeCorrelation
 from hafnium.scf.orthogonalization import (
     DEFAULT_OVERLAP_THRESHOLD,
     canonical_orthogonalizer,
@@ -35,19 +40,25 @@ from hafnium.symmetry import (
 class EnergyTerms:
     """Components of a mean-field energy in Hartree, per cell for a periodic system.
 
-    ``E = E_nuc + tr(D h) + tr(D J) / 2 − tr(D K) / 2`` with the structured
-    trace (CONVENTIONS.md §3).
+    ``E = E_nuc + tr(D h) + tr(D J) / 2 − tr(D K) / 2 + E_xc`` with the
+    structured trace (CONVENTIONS.md §3); for a Kohn–Sham state ``K`` is the
+    exact exchange scaled by the functional's fractions, zero for a pure
+    functional, and ``E_xc`` the exchange–correlation energy of the
+    functional, zero for Hartree–Fock.
     """
 
     nuclear_repulsion: float
     one_electron: float
     coulomb: float
     exchange: float
+    exchange_correlation: float = 0.0
 
     @property
     def electronic(self) -> float:
         """Energy of the electrons in the field of the nuclei."""
-        return self.one_electron + self.coulomb + self.exchange
+        return (
+            self.one_electron + self.coulomb + self.exchange + self.exchange_correlation
+        )
 
     @property
     def total(self) -> float:
@@ -79,6 +90,14 @@ class Hamiltonian:
         the molecule (ADR-0023), or the space-group adaptation of the basis
         of a cell over its k-points (ADR-0024), which a specification
         naming that group needs; ``None`` when no group is imposed.
+    exchange_correlation
+        The exchange–correlation term of a Kohn–Sham Hamiltonian
+        (ADR-0026); ``None`` for Hartree–Fock. Its functional scales the
+        exact exchange built from ``two_body``.
+    long_range_two_body
+        The two-electron integrals with the long-range kernel
+        ``erf(ω r) / r`` at the functional's ``omega``, which the long-range
+        exact exchange of a range-separated hybrid needs; ``None`` otherwise.
     """
 
     overlap: Array
@@ -91,9 +110,12 @@ class Hamiltonian:
     adaptation: SymmetryAdaptation | SpaceGroupAdaptation | None = field(
         default=None, kw_only=True
     )
+    exchange_correlation: ExchangeCorrelation | None = field(default=None, kw_only=True)
+    long_range_two_body: CoulombExchange | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         n = self.two_body.n_ao
+        self._check_exchange_correlation(n)
         shape = (n, n) if self.kpoints is None else (self.kpoints.n_kpt, n, n)
         if self.overlap.shape != shape or self.core_hamiltonian.shape != shape:
             raise InputError(
@@ -118,6 +140,44 @@ class Hamiltonian:
                 f"functions, the integrals {n}"
             )
 
+    def _check_exchange_correlation(self, n: int) -> None:
+        xc = self.exchange_correlation
+        long_range = self.long_range_two_body
+        if xc is None:
+            if long_range is not None:
+                raise InputError(
+                    "long-range two-electron integrals serve the range-separated "
+                    "exchange of a functional; pass an exchange–correlation term"
+                )
+            return
+        if self.kpoints is not None:
+            raise InputError(
+                "periodic Kohn–Sham is not available yet; the exchange–correlation "
+                "term serves molecules"
+            )
+        if xc.n_ao != n:
+            raise InputError(
+                f"the exchange–correlation term covers {xc.n_ao} functions, the "
+                f"integrals {n}"
+            )
+        if xc.functional.is_range_separated:
+            if long_range is None:
+                raise InputError(
+                    f"{xc.functional.name} needs long-range exact exchange: pass the "
+                    "two-electron integrals with the long-range kernel at omega "
+                    f"{xc.functional.omega:g} as long_range_two_body"
+                )
+            if long_range.n_ao != n:
+                raise InputError(
+                    "the long-range two-electron integrals cover another basis than "
+                    "the full-range ones"
+                )
+        elif long_range is not None:
+            raise InputError(
+                f"{xc.functional.name} has no long-range exact exchange; drop the "
+                "long-range two-electron integrals"
+            )
+
     @classmethod
     def from_molecule(
         cls,
@@ -127,12 +187,16 @@ class Hamiltonian:
         two_body: CoulombExchange,
         *,
         point_group: PointGroup | None = None,
+        exchange_correlation: ExchangeCorrelation | None = None,
+        long_range_two_body: CoulombExchange | None = None,
     ) -> Hamiltonian:
         """Evaluate the one-electron integrals of a molecule.
 
         With ``point_group`` the basis is adapted to the group, which
         requires the molecule in the group's standard frame
-        (:meth:`~hafnium.symmetry.PointGroupDetection.orient`).
+        (:meth:`~hafnium.symmetry.PointGroupDetection.orient`). With
+        ``exchange_correlation`` the Hamiltonian is a Kohn–Sham one; a
+        range-separated functional also needs ``long_range_two_body``.
         """
         adaptation = (
             None
@@ -147,6 +211,8 @@ class Hamiltonian:
             molecule.n_alpha,
             molecule.n_beta,
             adaptation=adaptation,
+            exchange_correlation=exchange_correlation,
+            long_range_two_body=long_range_two_body,
         )
 
     @classmethod
@@ -252,16 +318,45 @@ class Hamiltonian:
         ).embed(structure)
 
     def fock(self, density: BlockMatrix) -> tuple[BlockMatrix, EnergyTerms]:
-        """Fock matrix ``h + J − K`` and energy terms of a Hermitian density."""
+        """Fock matrix and energy terms of a Hermitian density.
+
+        ``h + J − K`` for Hartree–Fock; for a Kohn–Sham Hamiltonian
+        ``h + J − a K − b K_lr + V_xc`` with the fractions ``a`` and ``b`` of
+        full-range and long-range exact exchange of the functional, the
+        exchange terms left out when their fraction is zero.
+        """
         one_body = self.one_body(density.structure)
-        coulomb, exchange = coulomb_exchange_matrices(self.two_body, density)
+        coulomb = coulomb_matrix(self.two_body, density)
+        fock = one_body + coulomb
+        exchange_energy = 0.0
+        xc = self.exchange_correlation
+        if xc is None:
+            fractions: tuple[tuple[float, CoulombExchange | None], ...] = (
+                (1.0, self.two_body),
+            )
+        else:
+            fractions = (
+                (xc.functional.exact_exchange, self.two_body),
+                (xc.functional.long_range_exchange, self.long_range_two_body),
+            )
+        for fraction, two_body in fractions:
+            if fraction == 0.0 or two_body is None:
+                continue
+            exchange = fraction * exchange_matrix(two_body, density)
+            fock = fock - exchange
+            exchange_energy -= _real_trace(density, exchange) / 2
+        xc_energy = 0.0
+        if xc is not None:
+            xc_energy, potential = xc.evaluate(density)
+            fock = fock + potential
         energies = EnergyTerms(
             self.nuclear_repulsion,
             _real_trace(density, one_body),
             _real_trace(density, coulomb) / 2,
-            -_real_trace(density, exchange) / 2,
+            exchange_energy,
+            xc_energy,
         )
-        return one_body + coulomb - exchange, energies
+        return fock, energies
 
     def _embed_spatial(self, matrix: Array, structure: BlockStructure) -> BlockMatrix:
         self._require_matching_sectors(structure)

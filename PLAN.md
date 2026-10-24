@@ -616,8 +616,8 @@ to retrofit:
 - Integrals: exposed to JAX through `jax.ffi`, with `custom_vjp` rules
   that call the derivative-integral kernels. Those kernels are required for
   analytic gradients anyway, so AD support costs only the registration.
-- Exchange–correlation functionals: libxc supplies derivatives up to
-  fourth order, so a `custom_jvp` wrapper makes libxc functionals
+- Exchange–correlation functionals: `xcx` supplies first and second
+  derivatives (ADR-0026), so a `custom_jvp` wrapper makes the functionals
   differentiable to the order needed for gradients and Hessians. A small
   set of functionals may additionally be implemented natively in array-API
   code for fully traceable use.
@@ -683,9 +683,10 @@ angular grids, Becke partitioning, pruning, batching; basis values and
 gradients on batches from Rust. For cells, the same atom-centred grids
 with lattice images and Bloch-phased basis values.
 
-**xc.** Functional registry by name, libxc binding (`pylibxc` or an own
-thin binding; decide in an ADR), evaluation for collinear densities with
-LDA, GGA, meta-GGA, hybrid and range-separated hybrids; noncollinear later.
+**xc.** Functional registry by name, the functionals of libxc through the
+pure-Rust `xcx` crate with libxc's ids and conventions (ADR-0026),
+evaluation for collinear densities with LDA, GGA, meta-GGA, hybrid and
+range-separated hybrids; noncollinear later.
 
 **scf.** One `SelfConsistentField` driver with pluggable parts: initial
 guess (core Hamiltonian, superposition of atomic densities, generalized
@@ -997,10 +998,26 @@ over wedge × full set and the exchange and the one-electron integrals at
 the wedge alone, which the projection does not yet save; little-group
 blocking at high-symmetry points.
 
-**M7 DFT.** Grids and basis-on-grid in Rust, libxc binding, RKS and UKS
-with LDA/GGA/meta-GGA/hybrid/range-separated functionals, then periodic
-KS with lattice-image grids. Exit: matches PySCF to grid-limited precision
-on a functional matrix, molecular and periodic.
+**M7 DFT.** Grids and basis-on-grid in Rust, the functionals of libxc,
+RKS and UKS with LDA/GGA/meta-GGA/hybrid/range-separated functionals,
+then periodic KS with lattice-image grids. Exit: matches PySCF to
+grid-limited precision on a functional matrix, molecular and periodic.
+Status: part one done 2026-10-24 (ADR-0026): grids from the
+Treutler–Ahlrichs mapping, the Lebedev–Laikov rules, NWChem pruning and
+Becke's partition with PySCF's size tables, which reproduce PySCF's grids
+point by point; basis values with first and second derivatives on grid
+points from the compiled layer; the functionals through the pure-Rust
+`xcx` crate, which reproduces libxc to 1e-13 at the points tried, named
+as libxc names them with a registry of common names; the
+exchange–correlation term of the Hamiltonian for the restricted and
+unrestricted classes with point-group sectors, hybrids and
+range-separated hybrids through the exact and fitted builders with the
+long-range kernel; RKS and UKS energies match PySCF to 1e-10 Hartree for
+SVWN, PBE, BLYP, B3LYP, PBE0, TPSS, r²SCAN, M06-L, M06-2X and the ωB97
+functionals without VV10, with exact and fitted integrals. Later: the
+periodic part, noncollinear functionals for the generalized classes,
+VV10 and dispersion corrections, functionals outside `xcx`'s list
+(SCAN, HSE, CAM-B3LYP, Laplacian meta-GGAs).
 
 **M8 Correlated methods.** DF MO transformation, DF-MP2, `BlockTensor`
 with structured einsum over irreps and crystal momentum, equation
@@ -1067,6 +1084,13 @@ for periodic results.
 ## 12. Open decisions needing your input
 
 1. libxc binding: `pylibxc` versus an own binding through the Rust crate.
+   Decided 2026-10-24 (ADR-0026): neither; the pure-Rust `xcx` crate,
+   which reproduces libxc's functionals with libxc's ids and conventions
+   and differentiates them automatically, since `pylibxc` has no wheels
+   for Python 3.10 and later and a C build of libxc would add a C
+   toolchain to the Rust-only build. A libxc build behind the same
+   interface stays the fallback if a functional outside `xcx`'s list is
+   needed.
 2. Whether JAX is a development target from M1 (recommended: honor its
    constraints from M1, ship the backend in M9).
 3. Space-group detection: spglib (recommended; the standard library for
@@ -1109,7 +1133,9 @@ with `Cell` as an `AtomicSystem` plus a `Lattice` of only the periodic vectors
 Bloch and k-point conventions, and range-separated density fitting for
 the periodic Coulomb terms (2026-10-21, ADR-0007); McMurchie–Davidson for
 every integral type in the native engine, with Rys quadrature held in
-reserve for four-centre integrals (2026-10-21, ADR-0008).
+reserve for four-centre integrals (2026-10-21, ADR-0008); the
+functionals from the pure-Rust `xcx` crate instead of a libxc binding,
+and DFT grids built from PySCF's tables (2026-10-24, ADR-0026).
 
 ## 13. Risks
 

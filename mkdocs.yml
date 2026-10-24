@@ -52,6 +52,7 @@ nav:
       - adr/0023-irrep-sectors-of-the-structured-matrices.md
       - adr/0024-space-groups-reduce-the-k-point-set.md
       - adr/0025-lattice-sums-reach-by-exponent.md
+      - adr/0026-dft-grids-and-functionals-from-xcx.md
   - API reference: api.md
 
 markdown_extensions:

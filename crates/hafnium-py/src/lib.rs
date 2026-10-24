@@ -4,13 +4,14 @@
 //! calls `hafnium-core`, and maps errors to Python exceptions. No numerics
 //! live here.
 
-use hafnium_core::{integrals, periodic};
+use hafnium_core::{grid, integrals, periodic, xc};
 use numpy::{
     Complex64, IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArray5, PyArrayMethods,
     PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 /// Return the version of the compiled kernel crate.
 #[pyfunction]
@@ -465,6 +466,133 @@ fn ewald_energy(
     .map_err(|error| value_error(&error))
 }
 
+/// Values of every function of `table` at `points` (`[g, 3]`, Bohr) with
+/// derivatives up to `order` (at most two), `[g, component, ao]`; the
+/// components are the value, the derivatives `x, y, z` and the second
+/// derivatives `xx, xy, xz, yy, yz, zz`. A shell's functions are zero at
+/// points farther than its entry of `radii` from its centre.
+#[pyfunction]
+#[pyo3(signature = (table, points, radii, order=0))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn basis_values<'py>(
+    py: Python<'py>,
+    table: &PyShellTable,
+    points: PyReadonlyArray2<'py, f64>,
+    radii: PyReadonlyArray1<'py, f64>,
+    order: usize,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let points = to_vectors(&points, "points")?;
+    let values = grid::basis_values(&table.inner, &points, radii.as_slice()?, order)
+        .map_err(|error| value_error(&error))?;
+    let shape = [
+        points.len(),
+        grid::n_components(order),
+        table.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
+/// Metadata of the functional with the libxc `name`: its id, canonical
+/// name, rung (`"lda"`, `"gga"` or `"meta-gga"`), whether it needs the
+/// Laplacian, the fraction of exact exchange, the range separation
+/// `(omega, alpha, beta)` or `None`, the VV10 parameters `(b, C)` or
+/// `None`, and the density threshold.
+#[pyfunction]
+fn functional_info<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
+    let info = xc::functional_info(name).map_err(|error| value_error(&error))?;
+    let dict = PyDict::new(py);
+    dict.set_item("id", info.id)?;
+    dict.set_item("name", info.name)?;
+    dict.set_item("rung", info.rung.name())?;
+    dict.set_item("needs_laplacian", info.needs_laplacian)?;
+    dict.set_item("exact_exchange", info.exact_exchange)?;
+    dict.set_item("range_separation", info.range_separation)?;
+    dict.set_item("vv10", info.vv10)?;
+    dict.set_item("density_threshold", info.density_threshold)?;
+    Ok(dict)
+}
+
+/// Energy per particle `[g]` and the derivatives `vrho [2, g]`,
+/// `vsigma [3, g]` and `vtau [2, g]` of `Σ_i weights[i] names[i]` at the
+/// spin densities `rho [2, g]`, contracted gradients `sigma [3, g]` and
+/// kinetic energy densities `tau [2, g]`; `vsigma` and `vtau` are `None`
+/// below the rung that needs them, and `sigma` and `tau` may be `None`
+/// then.
+#[pyfunction]
+#[pyo3(signature = (names, weights, rho, sigma=None, tau=None))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "the binding returns the four arrays of the kernel"
+)]
+fn evaluate_functional<'py>(
+    py: Python<'py>,
+    names: Vec<String>,
+    weights: PyReadonlyArray1<'py, f64>,
+    rho: PyReadonlyArray2<'py, f64>,
+    sigma: Option<PyReadonlyArray2<'py, f64>>,
+    tau: Option<PyReadonlyArray2<'py, f64>>,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+)> {
+    let weights = weights.as_slice()?;
+    if weights.len() != names.len() {
+        return Err(PyValueError::new_err("one weight per functional name"));
+    }
+    let components: Vec<(String, f64)> = names.into_iter().zip(weights.iter().copied()).collect();
+    if rho.shape()[0] != 2 {
+        return Err(PyValueError::new_err("densities have shape [2, g]"));
+    }
+    let n = rho.shape()[1];
+    let sigma = to_rows(sigma.as_ref(), 3, n, "contracted gradients")?;
+    let tau = to_rows(tau.as_ref(), 2, n, "kinetic energy densities")?;
+    let values = xc::evaluate_functional(&components, rho.as_slice()?, sigma, tau)
+        .map_err(|error| value_error(&error))?;
+    let rows = |data: Vec<f64>, parts: usize| -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
+        if data.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(data.into_pyarray(py).reshape([parts, n])?))
+        }
+    };
+    let vrho = values.vrho.into_pyarray(py).reshape([2, n])?;
+    Ok((
+        values.energy_per_particle.into_pyarray(py),
+        vrho,
+        rows(values.vsigma, 3)?,
+        rows(values.vtau, 2)?,
+    ))
+}
+
+/// The contiguous data of an optional `[parts, n]` array, empty for `None`.
+fn to_rows<'a>(
+    array: Option<&'a PyReadonlyArray2<'a, f64>>,
+    parts: usize,
+    n: usize,
+    name: &str,
+) -> PyResult<&'a [f64]> {
+    match array {
+        None => Ok(&[]),
+        Some(array) => {
+            if array.shape() != [parts, n] {
+                return Err(PyValueError::new_err(format!(
+                    "{name} have shape [{parts}, g] over the same points as the densities"
+                )));
+            }
+            Ok(array.as_slice()?)
+        }
+    }
+}
+
 /// Set the size of the kernel thread pool once per process.
 #[pyfunction]
 fn configure_threads(n_threads: usize) -> PyResult<()> {
@@ -563,6 +691,9 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(fourier_transform, module)?)?;
     module.add_function(wrap_pyfunction!(pair_fourier_transform, module)?)?;
     module.add_function(wrap_pyfunction!(ewald_energy, module)?)?;
+    module.add_function(wrap_pyfunction!(basis_values, module)?)?;
+    module.add_function(wrap_pyfunction!(functional_info, module)?)?;
+    module.add_function(wrap_pyfunction!(evaluate_functional, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())
 }

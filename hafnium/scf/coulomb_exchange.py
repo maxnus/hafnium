@@ -94,10 +94,15 @@ class ExactCoulombExchange:
         basis: BasisSet,
         molecule: Molecule,
         *,
+        omega: float | None = None,
         threshold: float = DEFAULT_SCHWARZ_THRESHOLD,
     ) -> ExactCoulombExchange:
-        """Evaluate the integrals of a molecule with Schwarz screening."""
-        return cls(eri(engine, basis, molecule, threshold=threshold))
+        """Evaluate the integrals of a molecule with Schwarz screening.
+
+        With ``omega`` the long-range kernel ``erf(ω r) / r`` replaces
+        ``1 / r``, for the long-range exchange of a range-separated hybrid.
+        """
+        return cls(eri(engine, basis, molecule, omega=omega, threshold=threshold))
 
     @property
     def n_ao(self) -> int:
@@ -145,9 +150,16 @@ class DensityFittedCoulombExchange:
         basis: BasisSet,
         auxiliary: BasisSet,
         molecule: Molecule,
+        *,
+        omega: float | None = None,
     ) -> DensityFittedCoulombExchange:
-        """Fit the integrals of a molecule in the auxiliary basis."""
-        fitting = DensityFitting.build(engine, basis, auxiliary, molecule)
+        """Fit the integrals of a molecule in the auxiliary basis.
+
+        With ``omega`` the long-range kernel ``erf(ω r) / r`` is fitted with
+        its own metric, for the long-range exchange of a range-separated
+        hybrid.
+        """
+        fitting = DensityFitting.build(engine, basis, auxiliary, molecule, omega=omega)
         return cls(fitting.df_tensor())
 
     @property
@@ -300,44 +312,68 @@ def coulomb_exchange_matrices(
 ) -> tuple[BlockMatrix, BlockMatrix]:
     """Return ``(J, K)`` in the structure of a Hermitian ``density``.
 
-    The Coulomb matrix is built from the total density: for a molecule its
-    real part, since for a Hermitian density the imaginary part is
-    antisymmetric and drops out of the contraction with the symmetric
-    integrals; over k-points the full set of the spin trace. The exchange
-    matrix of a stored block is the contraction of each of its spin
-    sub-blocks, over the full k set when there is a k axis, projected back
-    onto the block's stored k-points in its ring.
+    :func:`coulomb_matrix` and :func:`exchange_matrix` in one call.
     """
-    n = density.n_spatial
-    if n != two_body.n_ao:
-        raise InputError(
-            f"the density has {n} atomic orbitals, the integrals {two_body.n_ao}"
-        )
-    if density.structure.k_axis is None:
-        return _molecular_matrices(two_body, density)
-    return _periodic_matrices(two_body, density)
+    return coulomb_matrix(two_body, density), exchange_matrix(two_body, density)
 
 
-def _molecular_matrices(
-    two_body: CoulombExchange, density: BlockMatrix
-) -> tuple[BlockMatrix, BlockMatrix]:
-    """Contract in the atomic basis, over the irrep sectors if there are any."""
-    structure, n = density.structure, density.n_spatial
-    sectors = structure.irreps
+def coulomb_matrix(two_body: CoulombExchange, density: BlockMatrix) -> BlockMatrix:
+    """Return the Coulomb matrix of a Hermitian ``density`` in its structure.
+
+    It is built from the total density: for a molecule its real part, since
+    for a Hermitian density the imaginary part is antisymmetric and drops
+    out of the contraction with the symmetric integrals; over k-points the
+    full set of the spin trace, projected back onto the stored points.
+    """
+    _check_basis(two_body, density)
+    structure = density.structure
     total = density.spin_trace()
-    total_ao = (
-        total.blocks[0]
-        if sectors is None
-        else sectors.to_atomic(total.blocks, spinor=False, orbitals=False)
+    if structure.k_axis is None:
+        sectors = structure.irreps
+        total_ao = (
+            total.blocks[0]
+            if sectors is None
+            else sectors.to_atomic(total.blocks, spinor=False, orbitals=False)
+        )
+        xp = array_namespace(total_ao)
+        coulomb_ao = two_body.coulomb(xp.astype(xp.real(total_ao), xp.float64))
+        return BlockMatrix.from_spatial(coulomb_ao, irreps=sectors).embed(structure)
+    (total_block,) = total.structure.stored_blocks
+    total_full = expand_k(
+        total.structure, total_block, total.blocks[0], structure.all_kpoints
     )
-    xp = array_namespace(total_ao)
-    coulomb_ao = two_body.coulomb(xp.astype(xp.real(total_ao), xp.float64))
-    coulomb = BlockMatrix.from_spatial(coulomb_ao, irreps=sectors).embed(structure)
+    xp = array_namespace(total_full)
+    coulomb_full = two_body.coulomb(xp.astype(total_full, xp.complex128))
+    ring = (
+        Ring.COMPLEX
+        if any(block.ring is Ring.COMPLEX for block in structure.stored_blocks)
+        else Ring.REAL
+    )
+    return BlockMatrix.from_spatial(
+        coulomb_full, structure.k_axis, ring=ring, check=False
+    ).embed(structure)
+
+
+def exchange_matrix(two_body: CoulombExchange, density: BlockMatrix) -> BlockMatrix:
+    """Return the exchange matrix of a Hermitian ``density`` in its structure.
+
+    The exchange of a stored block is the contraction of each of its spin
+    sub-blocks, over the full k set when there is a k axis, projected back
+    onto the block's stored k-points in its ring; with irrep sectors the
+    sector blocks of each spin block are assembled into its atomic-basis
+    matrix and the results projected back onto the sectors.
+    """
+    _check_basis(two_body, density)
+    structure, n = density.structure, density.n_spatial
+    if structure.k_axis is not None:
+        return _periodic_exchange(two_body, density)
+    sectors = structure.irreps
     if sectors is None:
         exchange = tuple(
             _exchange_block(two_body, block, n) for block in density.blocks
         )
-        return coulomb, BlockMatrix(structure, exchange)
+        return BlockMatrix(structure, exchange)
+    xp = array_namespace(*density.blocks)
     size = structure.stored_per_sector
     blocks: dict[int, Array] = {}
     for index, block in enumerate(structure.sector_structure.stored_blocks):
@@ -352,36 +388,30 @@ def _molecular_matrices(
             blocks[sector * size + index] = cast_to_ring(
                 xp, part, structure.storage_ring(block)
             )
-    return coulomb, BlockMatrix(
+    return BlockMatrix(
         structure, tuple(blocks[position] for position in range(structure.n_stored))
     )
 
 
-def _periodic_matrices(
-    two_body: CoulombExchange, density: BlockMatrix
-) -> tuple[BlockMatrix, BlockMatrix]:
+def _check_basis(two_body: CoulombExchange, density: BlockMatrix) -> None:
+    n = density.n_spatial
+    if n != two_body.n_ao:
+        raise InputError(
+            f"the density has {n} atomic orbitals, the integrals {two_body.n_ao}"
+        )
+
+
+def _periodic_exchange(two_body: CoulombExchange, density: BlockMatrix) -> BlockMatrix:
     """Contract over the full k set and store the results at the stored points."""
     structure = density.structure
-    axis, wanted, n = structure.k_axis, structure.all_kpoints, density.n_spatial
-    total = density.spin_trace()
-    (total_block,) = total.structure.stored_blocks
-    total_full = expand_k(total.structure, total_block, total.blocks[0], wanted)
-    xp = array_namespace(total_full)
-    coulomb_full = two_body.coulomb(xp.astype(total_full, xp.complex128))
-    ring = (
-        Ring.COMPLEX
-        if any(block.ring is Ring.COMPLEX for block in structure.stored_blocks)
-        else Ring.REAL
-    )
-    coulomb = BlockMatrix.from_spatial(
-        coulomb_full, axis, ring=ring, check=False
-    ).embed(structure)
+    wanted, n = structure.all_kpoints, density.n_spatial
+    xp = array_namespace(*density.blocks)
     exchange: list[Array] = []
     for block, array in zip(structure.stored_blocks, density.blocks, strict=True):
         full = _exchange_block(two_body, expand_k(structure, block, array, wanted), n)
         kept = reduce_k(structure, block, full, check=False, tolerance=0.0)
         exchange.append(cast_to_ring(xp, kept, structure.storage_ring(block)))
-    return coulomb, BlockMatrix(structure, tuple(exchange))
+    return BlockMatrix(structure, tuple(exchange))
 
 
 def _exchange_block(two_body: CoulombExchange, block: Array, n: int) -> Array:

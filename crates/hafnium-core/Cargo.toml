@@ -13,6 +13,7 @@ thiserror.workspace = true
 libm.workspace = true
 rayon.workspace = true
 num-complex.workspace = true
+xcx.workspace = true
 
 [lints]
 workspace = true

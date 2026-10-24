@@ -209,4 +209,25 @@ uses [Semantic Versioning](https://semver.org/).
   `BlochImages.kpoints` replace the phase tables) and evaluates every
   pair of images once; the fitted tensor of a silicon cell builds 6.7×
   faster (ADR-0025).
+- Molecular Kohn–Sham DFT (M7, part one): quadrature grids from the
+  Treutler–Ahlrichs radial mapping, the Lebedev–Laikov rules, NWChem
+  pruning and Becke's partition with Treutler's adjustment, sized by
+  PySCF's level tables so that they coincide with PySCF's grids
+  (`hafnium.grid`: `GridSpec`, `MolecularGrid`, `build_grid`); basis
+  functions with first and second derivatives on grid points from the
+  compiled layer (`IntegralEngine.basis_values`); the functionals of
+  libxc through the pure-Rust `xcx` crate, a new dependency of the
+  kernel crate, as linear combinations with their exact exchange
+  (`hafnium.xc`: `Functional`, `evaluate_functional`, the named
+  functionals from SVWN to ωB97M-V); the exchange–correlation term of the
+  Hamiltonian for the restricted and unrestricted classes, real and
+  complex, with point-group sectors (`ExchangeCorrelation`,
+  `Hamiltonian.exchange_correlation`, `long_range_two_body`,
+  `EnergyTerms.exchange_correlation`), global and range-separated
+  hybrids through the existing exact and fitted builders with the
+  long-range kernel (`coulomb_matrix` and `exchange_matrix` split the
+  former pair), `kohn_sham` with `KohnShamOptions`; RKS and UKS energies
+  match PySCF to 1e-10 Hartree for LDA, GGA, meta-GGA, hybrid and
+  range-separated functionals (ADR-0026). The limit on function
+  arguments rises from six to seven.
 

@@ -10,3 +10,15 @@ licenses, are listed here as they are added.
   (https://www.basissetexchange.org), Copyright (c) 2020 The Molecular
   Sciences Software Institute, Virginia Tech; BSD-3-Clause. Please cite
   Pritchard et al., J. Chem. Inf. Model. 59, 4814 (2019) when using it.
+
+- The exchange–correlation functionals are evaluated by the Rust crate
+  `xcx` (https://github.com/nmrtist/xcx), Copyright (c) 2026 Jiekang Tian
+  and the xcx authors; MIT or Apache-2.0, with the functional formulas
+  ported from libxc (https://libxc.gitlab.io, Copyright the libxc
+  developers) under the Mozilla Public License 2.0. Please cite Lehtola,
+  Steigemann, Oliveira and Marques, SoftwareX 7, 1 (2018), for libxc and
+  the original references of each functional when using them.
+- The Lebedev–Laikov quadrature rules in hafnium/grid/data/lebedev.json
+  are the published parameters of V. I. Lebedev and D. N. Laikov, Doklady
+  Mathematics 59, 477 (1999), as tabulated in PySCF (Copyright 2014-2022
+  The PySCF Developers; Apache-2.0). Please cite the paper when using them.

@@ -1,7 +1,8 @@
 //! Compiled kernels for Hafnium.
 //!
 //! This crate holds the numerically expensive, index-heavy code: Gaussian
-//! integrals, DFT grids and basis-function evaluation on grids. It knows
+//! integrals, basis-function evaluation on DFT grids and the
+//! exchange–correlation functionals. It knows
 //! nothing about Python; the `hafnium-py` crate wraps it. Matrix contractions
 //! do not belong here, they run on the Python array backend.
 //!
@@ -9,9 +10,11 @@
 //! pair is expanded in Hermite Gaussians, and Coulomb-type integrals come
 //! from Hermite integrals of the Boys function.
 
+pub mod grid;
 pub mod integrals;
 pub mod periodic;
 pub mod special;
+pub mod xc;
 
 /// Version of this crate, as given in `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

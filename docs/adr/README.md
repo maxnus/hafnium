@@ -32,3 +32,4 @@ ADR that supersedes it.
 | [0023](0023-irrep-sectors-of-the-structured-matrices.md) | Irrep sectors of the structured matrices | accepted 2026-10-22 |
 | [0024](0024-space-groups-reduce-the-k-point-set.md) | Space groups reduce the k-point set | accepted 2026-10-23 |
 | [0025](0025-lattice-sums-reach-by-exponent.md) | Lattice sums reach by exponent, and the Bloch three-centre kernel accumulates by class | accepted 2026-10-24 |
+| [0026](0026-dft-grids-and-functionals-from-xcx.md) | DFT grids follow PySCF's tables, and the functionals come from `xcx` | accepted 2026-10-24 |
