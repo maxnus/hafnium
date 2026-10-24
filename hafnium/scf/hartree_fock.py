@@ -5,6 +5,7 @@ from __future__ import annotations
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.integrals import IntegralEngine
+from hafnium.integrals.periodic import require_kpoints_for_lattice
 from hafnium.molecule import Cell, Molecule
 from hafnium.scf.atoms import atomic_density_guess
 from hafnium.scf.coulomb_exchange import (
@@ -16,7 +17,7 @@ from hafnium.scf.coulomb_exchange import (
 from hafnium.scf.driver import ScfOptions, ScfResult, solve_scf
 from hafnium.scf.exchange_correlation import ExchangeCorrelation
 from hafnium.scf.hamiltonian import Hamiltonian
-from hafnium.symmetry import SymmetrySpec
+from hafnium.symmetry import KPoints, SymmetrySpec
 
 
 def hartree_fock(
@@ -50,45 +51,78 @@ def hartree_fock(
     :func:`~hafnium.scf.solve_scf` directly.
     """
     symmetry = SymmetrySpec() if symmetry is None else symmetry
-    hamiltonian = _hamiltonian(engine, basis, system, symmetry, auxiliary)
+    hamiltonian = system_hamiltonian(engine, basis, system, symmetry, auxiliary)
     structure = hamiltonian.structure(symmetry)
     guess = atomic_density_guess(engine, basis, structure, options=options)
     return solve_scf(hamiltonian, symmetry, guess=guess, options=options)
 
 
-def _hamiltonian(
+def require_periodic_inputs(
+    cell: Cell, symmetry: SymmetrySpec, auxiliary: BasisSet | None
+) -> tuple[KPoints, BasisSet]:
+    """Return the k-points and auxiliary basis a cell's Hamiltonian needs.
+
+    Raises
+    ------
+    InputError
+        Without a k-point set or an auxiliary basis, or with a space group
+        that does not map the k-point set onto itself.
+    """
+    if symmetry.kpoints is None:
+        raise InputError(
+            "a cell needs a k-point set: pass SymmetrySpec.with_kpoints(kpoints)"
+        )
+    if auxiliary is None:
+        raise InputError(
+            "a cell needs an auxiliary basis: its two-electron terms are density-fitted"
+        )
+    if symmetry.space_group is not None:
+        # Fails fast on a k-point set the group does not map onto itself,
+        # before the fitted integrals are built.
+        symmetry.space_group.kpoint_images(symmetry.kpoints)
+    require_kpoints_for_lattice(symmetry.kpoints, cell.lattice)
+    return symmetry.kpoints, auxiliary
+
+
+def system_hamiltonian(
     engine: IntegralEngine,
     basis: BasisSet,
     system: Molecule | Cell,
     symmetry: SymmetrySpec,
     auxiliary: BasisSet | None,
+    *,
+    exchange_correlation: ExchangeCorrelation | None = None,
 ) -> Hamiltonian:
+    """Build the Hamiltonian of a molecule or a cell for ``symmetry``.
+
+    A cell takes the k-points and, for its space group, the adaptation
+    from ``symmetry`` and the fitted two-electron terms in ``auxiliary``;
+    see :func:`molecular_hamiltonian` for a molecule. With
+    ``exchange_correlation``, built for the same system and k-points, the
+    Hamiltonian is a Kohn–Sham one.
+    """
     if isinstance(system, Cell):
-        if symmetry.kpoints is None:
-            raise InputError(
-                "a cell needs a k-point set: pass SymmetrySpec.with_kpoints(kpoints)"
-            )
-        if auxiliary is None:
-            raise InputError(
-                "a cell needs an auxiliary basis: its two-electron terms are "
-                "density-fitted"
-            )
-        if symmetry.space_group is not None:
-            # Fails fast on a k-point set the group does not map onto itself,
-            # before the fitted integrals are built.
-            symmetry.space_group.kpoint_images(symmetry.kpoints)
+        kpoints, auxiliary = require_periodic_inputs(system, symmetry, auxiliary)
         two_body = KPointDensityFittedCoulombExchange.from_cell(
-            engine, basis, auxiliary, system, symmetry.kpoints
+            engine, basis, auxiliary, system, kpoints
         )
         return Hamiltonian.from_cell(
             engine,
             basis,
             system,
-            symmetry.kpoints,
+            kpoints,
             two_body,
             space_group=symmetry.space_group,
+            exchange_correlation=exchange_correlation,
         )
-    return molecular_hamiltonian(engine, basis, system, symmetry, auxiliary)
+    return molecular_hamiltonian(
+        engine,
+        basis,
+        system,
+        symmetry,
+        auxiliary,
+        exchange_correlation=exchange_correlation,
+    )
 
 
 def molecular_hamiltonian(

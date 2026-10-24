@@ -23,6 +23,7 @@ from hafnium.integrals.periodic.bloch import (
     pair_reach,
     periodic_amplitude,
     reaching_images,
+    require_kpoints_for_lattice,
 )
 from hafnium.integrals.periodic.coulomb import (
     PerpendicularProfile,
@@ -63,4 +64,5 @@ __all__ = [
     "pair_reach",
     "periodic_amplitude",
     "reaching_images",
+    "require_kpoints_for_lattice",
 ]

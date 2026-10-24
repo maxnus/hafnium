@@ -1,28 +1,43 @@
-"""The exchange–correlation term of a Kohn–Sham Hamiltonian (M7, ADR-0026).
+"""The exchange–correlation term of a Kohn–Sham Hamiltonian (M7, ADR-0026, ADR-0027).
 
-The densities of a structured density matrix are evaluated on a molecular
-grid from the basis functions and their derivatives, the functional is
-evaluated point by point, and the potential is assembled back into the
-structure of the density. The term is collinear: it reads the alpha and
-beta densities of a restricted or unrestricted class, real or complex, so
-that one implementation serves RKS and UKS; the spinor classes need the
+The densities of a structured density matrix are evaluated on a grid from
+the basis functions and their derivatives, the functional is evaluated
+point by point, and the potential is assembled back into the structure of
+the density. The term is collinear: it reads the alpha and beta densities
+of a restricted or unrestricted class, real or complex, so that one
+implementation serves RKS and UKS; the spinor classes need the
 noncollinear evaluation of PLAN.md §5.4, a later addition.
+
+For a cell the densities come from the k-point density matrices through
+the Bloch sums of the basis functions over the lattice images,
+``ρ(r) = Σ_k w_k Σ_uv D[v, u](k) conj(φ_u^k(r)) φ_v^k(r)`` with the index
+convention of the Coulomb matrix (:mod:`hafnium.scf.coulomb_exchange`),
+integrated over one cell on the grid of ADR-0027, and the potential
+``V[u, v](k) = ∫ conj(φ_u^k) v_xc φ_v^k`` at every k-point of the full set
+is projected onto the stored points of the structure as the Coulomb matrix
+is. A molecule is the case of one k-point with the real basis functions.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from hafnium.backend import Array, array_namespace, host_array
+from hafnium.backend import Array, adjoint, array_namespace, host_array
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.grid import GridSpec, MolecularGrid, build_grid
 from hafnium.integrals import IntegralEngine, ShellTable
-from hafnium.integrals.periodic import function_radius
-from hafnium.molecule import Molecule
+from hafnium.integrals.periodic import (
+    function_radius,
+    reaching_images,
+    require_kpoints_for_lattice,
+)
+from hafnium.molecule import Cell, Lattice, Molecule
 from hafnium.structured import BlockMatrix, BlockStructure, Spin
+from hafnium.structured.dense import reduce_k
 from hafnium.structured.validation import cast_to_ring
+from hafnium.symmetry import KPoints
 from hafnium.xc import DensityOnGrid, Functional, XcValues, evaluate_functional
 
 logger = logging.getLogger(__name__)
@@ -31,7 +46,8 @@ DEFAULT_BASIS_CUTOFF = 1e-12
 """Basis function values below this are left out of the densities on the grid."""
 
 DEFAULT_BATCH_SIZE = 8192
-"""Grid points evaluated at a time, which bounds the memory of the basis values."""
+"""Grid points evaluated at a time, which bounds the memory of the basis
+values; for a cell the points times the k-points."""
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -44,7 +60,7 @@ class ExchangeCorrelation:
         The functional; its semilocal components are evaluated here, its
         exact exchange by the Hamiltonian.
     grid
-        The quadrature grid.
+        The quadrature grid, of the molecule or of one cell.
     engine
         Evaluates the basis functions on the grid.
     table
@@ -52,7 +68,12 @@ class ExchangeCorrelation:
     radii : Array[shell]
         Cutoff radius of every shell for the basis values.
     batch_size
-        Grid points evaluated at a time.
+        Grid points evaluated at a time; for a cell the points times the
+        k-points.
+    kpoints, lattice, translations
+        For a cell: the k-point set of the densities, the lattice, and the
+        lattice vectors ``[image, 3]`` over which the Bloch sums of the
+        basis functions run on the grid; ``None`` for a molecule.
     """
 
     functional: Functional
@@ -61,6 +82,9 @@ class ExchangeCorrelation:
     table: ShellTable
     radii: Array
     batch_size: int = DEFAULT_BATCH_SIZE
+    kpoints: KPoints | None = field(default=None, kw_only=True)
+    lattice: Lattice | None = field(default=None, kw_only=True)
+    translations: Array | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.functional.vv10 is not None:
@@ -73,6 +97,22 @@ class ExchangeCorrelation:
             raise InputError("one cutoff radius per shell")
         if self.batch_size < 1:
             raise InputError("a batch holds at least one point")
+        periodic = (self.kpoints, self.lattice, self.translations)
+        if any(item is None for item in periodic) and any(
+            item is not None for item in periodic
+        ):
+            raise InputError(
+                "a cell's term carries its k-points, lattice and translations "
+                "together; a molecule's none of them"
+            )
+        if self.kpoints is not None and self.lattice is not None:
+            require_kpoints_for_lattice(self.kpoints, self.lattice)
+        if self.translations is not None and (
+            self.translations.ndim != 2
+            or self.translations.shape[1] != 3
+            or self.translations.shape[0] < 1
+        ):
+            raise InputError("translations have shape [image, 3] with an image")
 
     @classmethod
     def from_molecule(
@@ -82,21 +122,58 @@ class ExchangeCorrelation:
         molecule: Molecule,
         functional: Functional,
         *,
-        grid: GridSpec | None = None,
+        grid: GridSpec | MolecularGrid | None = None,
         basis_cutoff: float = DEFAULT_BASIS_CUTOFF,
-        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> ExchangeCorrelation:
         """Build the grid of ``molecule`` and lay ``basis`` out on its atoms.
 
+        ``grid`` is a :class:`GridSpec`, or a grid built beforehand;
         ``basis_cutoff`` bounds the basis function values neglected far
-        from their centres.
+        from their centres. The batch size is the default,
+        :func:`dataclasses.replace` changes it.
         """
         table = ShellTable.from_basis(basis, molecule)
-        radii = host_array(
-            [function_radius(shell, basis_cutoff) for shell in basis.shells]
-        )
+        radii = _cutoff_radii(basis, basis_cutoff)
+        if not isinstance(grid, MolecularGrid):
+            grid = build_grid(molecule, grid)
+        return cls(functional, grid, engine, table, radii)
+
+    @classmethod
+    def from_cell(
+        cls,
+        engine: IntegralEngine,
+        basis: BasisSet,
+        cell: Cell,
+        kpoints: KPoints,
+        functional: Functional,
+        *,
+        grid: GridSpec | MolecularGrid | None = None,
+        basis_cutoff: float = DEFAULT_BASIS_CUTOFF,
+    ) -> ExchangeCorrelation:
+        """Build the grid of ``cell`` and the image list of its Bloch sums.
+
+        The densities are those of the k-point density matrices over
+        ``kpoints``; ``grid`` is a :class:`GridSpec`, or a grid built
+        beforehand. The Bloch sums on the grid run over every lattice image
+        of a shell within its cutoff radius of a grid point, the radii from
+        ``basis_cutoff`` as for a molecule. The batch size is the default,
+        :func:`dataclasses.replace` changes it.
+        """
+        require_kpoints_for_lattice(kpoints, cell.lattice)
+        table = ShellTable.from_basis(basis, cell)
+        radii = _cutoff_radii(basis, basis_cutoff)
+        if not isinstance(grid, MolecularGrid):
+            grid = build_grid(cell, grid)
+        translations = _bloch_translations(cell.lattice, grid.points, table, radii)
         return cls(
-            functional, build_grid(molecule, grid), engine, table, radii, batch_size
+            functional,
+            grid,
+            engine,
+            table,
+            radii,
+            kpoints=kpoints,
+            lattice=cell.lattice,
+            translations=translations,
         )
 
     @property
@@ -104,35 +181,39 @@ class ExchangeCorrelation:
         """Number of atomic orbitals."""
         return self.table.n_functions
 
+    @property
+    def is_periodic(self) -> bool:
+        """Whether the term serves a cell."""
+        return self.kpoints is not None
+
     def evaluate(self, density: BlockMatrix) -> tuple[float, BlockMatrix]:
         """Exchange–correlation energy and potential of a Hermitian ``density``.
 
-        The potential is in the structure of the density. The number of
-        electrons found on the grid is logged at DEBUG level.
+        The potential is in the structure of the density; for a cell both
+        are per cell. The number of electrons found on the grid is logged
+        at DEBUG level.
 
         Raises
         ------
         InputError
-            For a spinor (generalized) structure or a k axis, which this
-            version does not serve.
+            For a spinor (generalized) structure, which this version does
+            not serve, or a density over other k-points than the term's.
         """
         structure = density.structure
-        spins = self._spin_densities(density)
+        spins, k_weights = self._spin_densities(density)
         xp = array_namespace(*spins)
         potentials = [xp.zeros_like(matrix) for matrix in spins]
         if not self.functional.components:
             # Exact exchange alone: nothing to integrate.
-            return 0.0, _structured(structure, potentials)
+            return 0.0, self._structured(structure, potentials)
         order = 1 if self.functional.needs_gradient or self.functional.needs_tau else 0
+        phases = self._phases()
         energy = 0.0
         electrons = 0.0
-        for batch in self.grid.batches(self.batch_size):
-            values = self.engine.basis_values(
-                self.table, self.grid.points[batch], self.radii, order=order
-            )
-            values = xp.asarray(values)
+        for batch in self.grid.batches(self._points_per_batch()):
+            values = xp.asarray(self._values(batch, order, phases))
             weights = self.grid.weights[batch]
-            batch_density = _densities(values, spins, self.functional)
+            batch_density = _densities(values, spins, k_weights, self.functional)
             xc = evaluate_functional(self.functional, batch_density.on_grid)
             total = batch_density.on_grid.rho[0] + batch_density.on_grid.rho[1]
             energy += float(xp.sum(weights * total * xc.energy_per_particle))
@@ -147,19 +228,60 @@ class ExchangeCorrelation:
             electrons,
             self.grid.n_points,
         )
-        return energy, _structured(structure, potentials)
+        return energy, self._structured(structure, potentials)
 
-    def _spin_densities(self, density: BlockMatrix) -> tuple[Array, ...]:
-        """Return the real alpha and beta density matrices in the atomic basis.
+    def _points_per_batch(self) -> int:
+        n_kpt = 1 if self.kpoints is None else self.kpoints.n_kpt
+        return max(1, self.batch_size // n_kpt)
+
+    def _phases(self) -> Array | None:
+        """``exp(i k·T)`` as ``[kpt, image]`` for a cell, ``None`` for a molecule."""
+        if self.kpoints is None or self.lattice is None or self.translations is None:
+            return None
+        xp = array_namespace(self.translations)
+        kpts = xp.asarray(self.kpoints.cartesian(self.lattice))
+        angles = kpts @ xp.linalg.matrix_transpose(self.translations)
+        return xp.exp(1j * xp.astype(angles, xp.complex128))
+
+    def _values(self, batch: slice, order: int, phases: Array | None) -> Array:
+        """Basis values of a batch as ``[kpt, g, component, ao]``.
+
+        A molecule's values carry one k-point.
+        """
+        points = self.grid.points[batch]
+        if phases is None or self.translations is None:
+            values = self.engine.basis_values(
+                self.table, points, self.radii, order=order
+            )
+            return array_namespace(values).expand_dims(values, 0)
+        return self.engine.bloch_basis_values(
+            self.table, points, self.radii, self.translations, phases, order=order
+        )
+
+    def _spin_densities(self, density: BlockMatrix) -> tuple[tuple[Array, ...], Array]:
+        """Return the spin density matrices ``[kpt, ao, ao]`` and the k-point weights.
 
         One matrix for a restricted structure, whose beta block repeats the
-        alpha block, two for an unrestricted one.
+        alpha block, two for an unrestricted one; real over the one k-point
+        of a molecule, complex over the full k set of a cell.
         """
         structure = density.structure
-        if structure.k_axis is not None:
+        axis = structure.k_axis
+        if (axis is None) != (self.kpoints is None):
             raise InputError(
-                "periodic Kohn–Sham is not available yet; the exchange–correlation "
-                "term serves molecules"
+                "the exchange–correlation term serves "
+                + ("a molecule" if self.kpoints is None else "a cell")
+                + ", the density is "
+                + ("periodic" if axis is not None else "molecular")
+            )
+        if (
+            axis is not None
+            and self.kpoints is not None
+            and axis.n_kpt != self.kpoints.n_kpt
+        ):
+            raise InputError(
+                f"the density runs over {axis.n_kpt} k-points, the "
+                f"exchange–correlation term over {self.kpoints.n_kpt}"
             )
         if structure.is_spinor or structure.is_spatial:
             raise InputError(
@@ -176,9 +298,73 @@ class ExchangeCorrelation:
         xp = array_namespace(*blocks)
         if _is_restricted(structure):
             blocks = blocks[:1]
-        # The basis functions are real, so only the real part of a Hermitian
-        # density enters the densities on the grid.
-        return tuple(xp.astype(xp.real(block), xp.float64) for block in blocks)
+        if self.kpoints is None:
+            # The basis functions are real, so only the real part of a
+            # Hermitian density enters the densities on the grid.
+            spins = tuple(
+                xp.expand_dims(xp.astype(xp.real(block), xp.float64), 0)
+                for block in blocks
+            )
+            return spins, xp.ones((1,), dtype=xp.float64)
+        spins = tuple(xp.astype(block, xp.complex128) for block in blocks)
+        return spins, self.kpoints.weights_array(xp)
+
+    def _structured(
+        self, structure: BlockStructure, potentials: list[Array]
+    ) -> BlockMatrix:
+        """Place the alpha and beta potentials ``[kpt, ao, ao]`` into the stored blocks.
+
+        A single potential serves a restricted structure, whose stored
+        blocks are all alpha. Over a k axis each stored block is the
+        reduction of the full set onto its stored points, as for the
+        Coulomb matrix; with irrep sectors the matrices are projected onto
+        the sectors.
+        """
+        xp = array_namespace(*potentials)
+        by_spin = {Spin.ALPHA: potentials[0], Spin.BETA: potentials[-1]}
+        sectors = structure.irreps
+        projected = None
+        if structure.k_axis is None:
+            by_spin = {spin: matrix[0] for spin, matrix in by_spin.items()}
+            if sectors is not None:
+                projected = {
+                    spin: sectors.from_atomic(matrix, spinor=False)
+                    for spin, matrix in by_spin.items()
+                }
+        blocks: list[Array] = []
+        for block in structure.stored_blocks:
+            if structure.k_axis is not None:
+                matrix = reduce_k(
+                    structure, block, by_spin[block.spin], check=False, tolerance=0.0
+                )
+            elif projected is None:
+                matrix = by_spin[block.spin]
+            else:
+                assert block.irrep is not None
+                matrix = projected[block.spin][block.irrep]
+            blocks.append(cast_to_ring(xp, matrix, structure.storage_ring(block)))
+        return BlockMatrix(structure, tuple(blocks))
+
+
+def _cutoff_radii(basis: BasisSet, basis_cutoff: float) -> Array:
+    return host_array([function_radius(shell, basis_cutoff) for shell in basis.shells])
+
+
+def _bloch_translations(
+    lattice: Lattice, points: Array, table: ShellTable, radii: Array
+) -> Array:
+    """Lattice vectors ``[image, 3]`` at which some shell's image reaches some point.
+
+    A shell centred at ``C`` with cutoff radius ``R`` contributes to the
+    Bloch sum at a point ``r`` through the image ``T`` when
+    ``|r − C − T| ≤ R``; the zero vector comes first.
+    """
+    xp = array_namespace(points)
+    centers = xp.asarray(table.centers)
+    shape = (int(centers.shape[0]), int(points.shape[0]))
+    reach = xp.broadcast_to(xp.expand_dims(xp.asarray(radii), 1), shape)
+    # reaching_images keeps T with |C − r − T| ≤ R, the image −T of the shell.
+    return -reaching_images(lattice, centers, points, xp.asarray(reach))
 
 
 def _is_restricted(structure: BlockStructure) -> bool:
@@ -195,34 +381,40 @@ class _BatchDensities:
 
 
 def _densities(
-    values: Array, densities: tuple[Array, ...], functional: Functional
+    values: Array,
+    densities: tuple[Array, ...],
+    k_weights: Array,
+    functional: Functional,
 ) -> _BatchDensities:
     """Return the spin densities, gradients and kinetic energy densities of a batch.
 
-    ``values`` is ``[g, component, ao]``; with real symmetric density matrices
-    ``ρ_σ = Σ_uv χ_u D_σ,uv χ_v``, ``∇ρ_σ = 2 Σ_uv ∇χ_u D_σ,uv χ_v`` and
-    ``τ_σ = ½ Σ_uv ∇χ_u · D_σ,uv ∇χ_v``. A single density matrix stands for
-    both spins, and its quantities are repeated for the beta spin.
+    ``values`` is ``[kpt, g, component, ao]`` and each density matrix
+    ``[kpt, ao, ao]``, Hermitian. With ``M = conj(Φ D)`` at every k-point,
+    ``ρ_σ = Σ_k w_k Re Σ_u Φ_u M_u``, ``∇ρ_σ = 2 Σ_k w_k Re Σ_u ∇Φ_u M_u`` and
+    ``τ_σ = ½ Σ_k w_k Re Σ_u ∇Φ_u · conj(∇Φ D)_u``, which for the real
+    functions of a molecule are ``Σ_uv χ_u D_uv χ_v``, ``2 Σ_uv ∇χ_u D_uv χ_v``
+    and ``½ Σ_uv ∇χ_u · D_uv ∇χ_v``. A single density matrix stands for both
+    spins, and its quantities are repeated for the beta spin.
     """
     xp = array_namespace(values)
-    functions = values[:, 0, :]
-    derivatives = values[:, 1:4, :] if values.shape[1] > 1 else None
+    functions = values[:, :, 0, :]
+    derivatives = values[:, :, 1:4, :] if values.shape[2] > 1 else None
     rho: list[Array] = []
     gradients: list[Array] = []
     taus: list[Array] = []
     for matrix in densities:
-        half = functions @ matrix
-        rho.append(xp.sum(half * functions, axis=1))
+        half = xp.conj(functions @ matrix)
+        rho.append(xp.real(xp.einsum("k,kgu,kgu->g", k_weights, functions, half)))
         if derivatives is None:
             continue
-        gradients.append(2.0 * xp.einsum("gxu,gu->xg", derivatives, half))
+        gradients.append(
+            2.0 * xp.real(xp.einsum("k,kgxu,kgu->xg", k_weights, derivatives, half))
+        )
         if functional.needs_tau:
+            moved = xp.conj(derivatives @ xp.expand_dims(matrix, 1))
             taus.append(
                 0.5
-                * xp.sum(
-                    xp.einsum("gxu,uv->gxv", derivatives, matrix) * derivatives,
-                    axis=(1, 2),
-                )
+                * xp.real(xp.einsum("k,kgxu,kgxu->g", k_weights, derivatives, moved))
             )
     if len(densities) == 1:
         rho, gradients, taus = 2 * rho, 2 * gradients, 2 * taus
@@ -248,54 +440,28 @@ def _potential(
     xc: XcValues,
     spin: int,
 ) -> Array:
-    """Return the potential matrix of one spin from a batch of points.
+    """Return the potential matrices ``[kpt, ao, ao]`` of one spin from a batch.
 
     With ``A_σ = ½ w v_ρσ Φ + Σ_x w (2 v_σσ ∂_xρ_σ + v_αβ ∂_xρ_σ') ∂_xΦ`` the
-    matrix is ``Φᵀ A_σ + A_σᵀ Φ``, plus ``½ Σ_x w v_τσ ∂_xΦᵀ ∂_xΦ`` for a
-    meta-GGA, with ``Φ[g, ao]`` the function values and ``∂_xΦ`` their
-    derivatives.
+    matrix at every k-point is ``Φ† A_σ + A_σ† Φ``, plus
+    ``½ Σ_x w v_τσ ∂_xΦ† ∂_xΦ`` for a meta-GGA, with ``Φ[g, ao]`` the
+    function values and ``∂_xΦ`` their derivatives.
     """
     xp = array_namespace(values)
-    functions = values[:, 0, :]
-    scaled = 0.5 * (weights * xc.vrho[spin])[:, None] * functions
+    functions = values[:, :, 0, :]
+    scaled = (0.5 * (weights * xc.vrho[spin]))[None, :, None] * functions
     if xc.vsigma is not None:
         other = 1 - spin
         same = 2 * xc.vsigma[2 * spin]
         cross = xc.vsigma[1]
         combination = weights * (same * gradients[spin] + cross * gradients[other])
-        scaled = scaled + xp.einsum("xg,gxu->gu", combination, values[:, 1:4, :])
-    potential = xp.linalg.matrix_transpose(functions) @ scaled
-    potential = potential + xp.linalg.matrix_transpose(potential)
+        scaled = scaled + xp.einsum("xg,kgxu->kgu", combination, values[:, :, 1:4, :])
+    potential = adjoint(functions) @ scaled
+    potential = potential + adjoint(potential)
     if xc.vtau is not None:
-        derivatives = values[:, 1:4, :]
-        weighted = (0.5 * weights * xc.vtau[spin])[:, None, None] * derivatives
-        potential = potential + xp.einsum("gxu,gxv->uv", weighted, derivatives)
+        derivatives = values[:, :, 1:4, :]
+        weighted = (0.5 * weights * xc.vtau[spin])[None, :, None, None] * derivatives
+        potential = potential + xp.einsum(
+            "kgxu,kgxv->kuv", xp.conj(weighted), derivatives
+        )
     return potential
-
-
-def _structured(structure: BlockStructure, potentials: list[Array]) -> BlockMatrix:
-    """Place the alpha and beta potentials into the stored blocks of ``structure``.
-
-    A single potential serves a restricted structure, whose stored blocks are
-    all alpha.
-    """
-    xp = array_namespace(*potentials)
-    sectors = structure.irreps
-    by_spin = {Spin.ALPHA: potentials[0], Spin.BETA: potentials[-1]}
-    projected = (
-        None
-        if sectors is None
-        else {
-            spin: sectors.from_atomic(matrix, spinor=False)
-            for spin, matrix in by_spin.items()
-        }
-    )
-    blocks: list[Array] = []
-    for block in structure.stored_blocks:
-        if projected is None:
-            matrix = by_spin[block.spin]
-        else:
-            assert block.irrep is not None
-            matrix = projected[block.spin][block.irrep]
-        blocks.append(cast_to_ring(xp, matrix, structure.storage_ring(block)))
-    return BlockMatrix(structure, tuple(blocks))

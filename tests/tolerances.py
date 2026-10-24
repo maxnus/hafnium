@@ -135,3 +135,19 @@ GRID_WEIGHT_FLOOR = 1e-6
 # converged, PySCF's conv_tol_grad there, so that the orbital energies compare
 # at MO_ENERGY_TOL.
 REFERENCE_GRADIENT_TOL = 1e-8
+
+# The quadrature of a cell's grid (ADR-0027) on Bloch sums of Gaussians and on
+# the electron density at level 3, relative: the shared-shell rule brings the
+# periodic partition to this accuracy for the test cells.
+PERIODIC_GRID_TOL = 1e-5
+# Kohn–Sham energies of a cell on Hafnium's grid against PySCF's on its own
+# periodic Becke grid at the same level: PySCF truncates the atomic grids at
+# the cell faces, so the two quadratures differ by this much; on one and the
+# same grid the two codes agree at KOHN_SHAM_ENERGY_TOL.
+PERIODIC_GRID_ENERGY_TOL = 1e-4
+# Kohn–Sham energies of a cell at grid levels 3 and 5.
+PERIODIC_LEVEL_TOL = 1e-5
+# The exchange–correlation term of a molecule in a box of 80 Bohr at the Γ
+# point against the molecular term on the same grid: the partition is shared
+# with the images only where the density has decayed.
+MOLECULAR_LIMIT_TOL = 1e-9

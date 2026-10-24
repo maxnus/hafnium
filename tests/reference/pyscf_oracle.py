@@ -661,6 +661,52 @@ def dft_reference(
     }
 
 
+def kdft_reference(
+    cell: Cell,
+    basis: BasisSet,
+    auxiliary: BasisSet,
+    kpoints: KPoints,
+    functional: str,
+    kind: str,
+    *,
+    level: int = 3,
+) -> dict[str, Any]:
+    """Converged k-point ``kind`` (``"krks"``, ``"kuks"``) state with ``functional``.
+
+    The exchange–correlation term is integrated on PySCF's periodic Becke
+    grids at ``level`` (``pbc.dft.gen_grid.BeckeGrids``: the atomic grids
+    truncated to the cell and partitioned among the atoms whose grids reach
+    into it), whose points and weights are returned as ``grid_points`` and
+    ``grid_weights`` so that Hafnium can integrate on the same grid; its
+    uniform grids would need thousands of points per direction for an
+    all-electron basis. The two-electron terms are density-fitted in
+    ``auxiliary`` with the Ewald exchange correction as in
+    :func:`kscf_reference`, and ``cell.spin`` is the spin over the mesh.
+    """
+    pbc_dft: Any = pytest.importorskip("pyscf.pbc.dft")
+    reference = pyscf_cell(cell, basis)
+    reference.spin = cell.spin * kpoints.n_kpt
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    method = {"krks": pbc_dft.KRKS, "kuks": pbc_dft.KUKS}[kind]
+    mean_field = method(reference, kpts=kpts).density_fit(
+        auxbasis=basis_input(cell, auxiliary)
+    )
+    mean_field.xc = functional
+    mean_field.grids = pbc_dft.gen_grid.BeckeGrids(reference)
+    mean_field.grids.level = level
+    mean_field.conv_tol = 1e-12
+    mean_field.conv_tol_grad = 1e-8
+    mean_field.max_cycle = 200
+    energy = float(mean_field.kernel())
+    assert mean_field.converged
+    return {
+        "energy": energy,
+        "mo_energies": np.asarray(mean_field.mo_energy),
+        "grid_points": np.asarray(mean_field.grids.coords),
+        "grid_weights": np.asarray(mean_field.grids.weights),
+    }
+
+
 def grid_reference(
     molecule: Molecule, level: int = 3, *, prune: bool = True
 ) -> tuple[np.ndarray, np.ndarray]:

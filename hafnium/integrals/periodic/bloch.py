@@ -31,6 +31,9 @@ DEFAULT_LATTICE_SUM_PRECISION = 1e-12
 """Bound on what the images left out of a lattice sum contribute to any
 matrix element: the tail of the sum beyond the images kept."""
 
+_REACH_ELEMENTS = 4_000_000
+"""Elements of the largest temporary array of :func:`reaching_images`."""
+
 _RADIUS_BISECTIONS = 60
 """Bisection steps of a radius equation, bringing the bracket to ``2^-60``."""
 
@@ -432,14 +435,23 @@ def reaching_images(
     separations = xp.expand_dims(positions, 1) - xp.expand_dims(targets, 0)
     extent = float(xp.max(xp.linalg.vector_norm(separations, axis=-1)))
     candidates = lattice.translations(float(xp.max(reach)) + extent)
-    keep = xp.zeros(candidates.shape[0], dtype=xp.bool)
-    for index in range(n):
-        distance = xp.linalg.vector_norm(
-            xp.expand_dims(separations[index], 0) - xp.expand_dims(candidates, 1),
-            axis=-1,
-        )
-        keep = keep | xp.any(distance <= xp.expand_dims(reach[index], 0), axis=1)
-    return candidates[keep]
+    n_candidates = int(candidates.shape[0])
+    # The distances of every candidate to every target are taken in chunks
+    # of candidates, so that the memory stays bounded for many targets (the
+    # points of a grid) and many candidates (a small cell).
+    chunk = max(1, _REACH_ELEMENTS // (3 * m))
+    kept: list[Array] = []
+    for start in range(0, n_candidates, chunk):
+        part = candidates[start : start + chunk]
+        keep = xp.zeros(part.shape[0], dtype=xp.bool)
+        for index in range(n):
+            distance = xp.linalg.vector_norm(
+                xp.expand_dims(separations[index], 0) - xp.expand_dims(part, 1),
+                axis=-1,
+            )
+            keep = keep | xp.any(distance <= xp.expand_dims(reach[index], 0), axis=1)
+        kept.append(part[keep])
+    return xp.concat(kept, axis=0)
 
 
 def integer_coordinates(lattice: Lattice, translations: Array) -> Array:

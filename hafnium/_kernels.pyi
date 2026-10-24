@@ -187,6 +187,39 @@ def basis_values(
     farther than its entry of ``radii`` from its centre.
     """
 
+def bloch_basis_values(
+    table: ShellTable,
+    points: NDArray[np.float64],
+    radii: NDArray[np.float64],
+    translations: NDArray[np.float64],
+    phases: NDArray[np.complex128],
+    order: int = 0,
+) -> NDArray[np.complex128]:
+    """Return the Bloch sums of the basis functions at ``points``.
+
+    The result is ``[kpt, g, component, ao]``: ``Σ_T exp(i k·T) φ(r − T)``
+    over the ``translations`` ``[image, 3]``
+    with the ``phases`` ``exp(i k·T)`` given as ``[kpt, image]``; the
+    components and the cutoff ``radii`` are those of :func:`basis_values`,
+    the radii applying to every image of a shell.
+    """
+
+def partition_weights(
+    points: NDArray[np.float64],
+    centers: NDArray[np.float64],
+    owner: int,
+    adjustments: NDArray[np.float64] | None = None,
+    scheme: str = "becke",
+) -> NDArray[np.float64]:
+    """Return the partition weights ``[g]`` of the centre ``owner`` at ``points``.
+
+    The normalized cell function of ``centers[owner]`` among all ``centers``
+    ``[centre, 3]``, with Becke's step (``scheme`` ``"becke"``) or the
+    compactly supported step of Stratmann, Scuseria and Frisch
+    (``"stratmann"``), and the atomic size ``adjustments`` ``[centre, centre]``
+    when given.
+    """
+
 def functional_info(name: str) -> dict[str, Any]:
     """Return the metadata of the functional with the libxc ``name``.
 

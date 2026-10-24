@@ -230,4 +230,24 @@ uses [Semantic Versioning](https://semver.org/).
   match PySCF to 1e-10 Hartree for LDA, GGA, meta-GGA, hybrid and
   range-separated functionals (ADR-0026). The limit on function
   arguments rises from six to seven.
+- Periodic Kohn–Sham DFT (M7, part two): a cell's grid partitions space
+  among the atoms and their lattice images with the compactly supported
+  step of Stratmann, Scuseria and Frisch, which makes the periodic
+  partition of unity local, takes a larger Lebedev rule on the shells
+  shared with the neighbours and drops the points of zero weight
+  (`build_grid` of a `Cell`, `build_cell_grid`, `GridSpec.partition`,
+  `partition_radius` and `shared_angular_points`, `partition_weights`
+  from the compiled layer, `becke_partition` with the `scheme` of the
+  step); Bloch sums of the basis functions and their derivatives on grid
+  points from the compiled layer (`IntegralEngine.bloch_basis_values`);
+  the exchange–correlation term over the full k set, reduced onto the
+  stored points as the Coulomb matrix is (`ExchangeCorrelation.from_cell`,
+  `Hamiltonian.from_cell` with `exchange_correlation`, `kohn_sham` of a
+  cell with the k-points and auxiliary basis of `hartree_fock`); periodic
+  RKS and UKS energies match PySCF to 1e-12 Hartree on one and the same
+  grid for LDA, GGA, meta-GGA and hybrid functionals (ADR-0027).
+  Range-separated hybrids serve molecules only. `reaching_images` takes
+  its candidate translations in chunks, so that its memory stays bounded
+  for the many points of a grid. `ExchangeCorrelation.from_molecule` and
+  `from_cell` take a prebuilt grid and no longer a batch size.
 

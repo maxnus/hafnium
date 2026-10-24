@@ -187,6 +187,12 @@ impl ShellTable {
         self.angular_momenta.iter().copied().max().unwrap_or(0)
     }
 
+    /// Largest number of contractions of any shell, or zero for an empty table.
+    #[must_use]
+    pub fn max_contractions(&self) -> usize {
+        self.n_contractions.iter().copied().max().unwrap_or(0)
+    }
+
     /// Index of the first basis function of each shell.
     #[must_use]
     pub fn function_offsets(&self) -> Vec<usize> {
