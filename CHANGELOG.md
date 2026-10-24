@@ -260,5 +260,5 @@ uses [Semantic Versioning](https://semver.org/).
   functional has no exact exchange); the reciprocal-space part is added
   into the kernel's tensor in place (ADR-0028). The silicon 3×3×3 LDA
   build falls from 78 s to 9.7 s, the full tensor to
-  42 s.
+  38 s.
 

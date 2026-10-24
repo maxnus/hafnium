@@ -106,7 +106,9 @@ def system_hamiltonian(
     if isinstance(system, Cell):
         kpoints, auxiliary = require_periodic_inputs(system, symmetry, auxiliary)
         two_body: CoulombExchange
-        if exchange_correlation is not None and _coulomb_only(exchange_correlation):
+        if exchange_correlation is not None and not (
+            exchange_correlation.functional.is_hybrid
+        ):
             # A pure functional needs the Coulomb term alone: the blocks of
             # zero momentum transfer (ADR-0028).
             two_body = KPointDensityFittedCoulomb.from_cell(
@@ -187,9 +189,3 @@ def _molecular_two_body(
     return DensityFittedCoulombExchange.from_molecule(
         engine, basis, auxiliary, molecule, omega=omega
     )
-
-
-def _coulomb_only(exchange_correlation: ExchangeCorrelation) -> bool:
-    """Whether the functional asks for no exact exchange at all."""
-    functional = exchange_correlation.functional
-    return functional.exact_exchange == 0.0 and functional.long_range_exchange == 0.0

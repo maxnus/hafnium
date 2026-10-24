@@ -1238,6 +1238,25 @@ mod tests {
         let ket = sp_table();
         let summed = bloch(&aux, &table, &ket, case.sum(), kernel, 0.0).expect("valid");
         assert_close(&summed, &explicit_bloch(&aux, &table, &ket, &case, kernel));
+        // The zero-transfer blocks of the general path are its diagonal too.
+        let zero = coulomb_three_center_bloch(
+            &aux,
+            &table,
+            &ket,
+            case.sum(),
+            kernel,
+            0.0,
+            Transfers::Zero,
+        )
+        .expect("valid");
+        let n_k = case.kpoints.len();
+        let block = aux.n_functions() * table.n_functions() * ket.n_functions();
+        for k in 0..n_k {
+            assert_close(
+                &zero[k * block..][..block],
+                &summed[(k * n_k + k) * block..][..block],
+            );
+        }
         // Steps that are not closed under negation also take the general path.
         let open: Vec<usize> = (0..case.step_coordinates.len())
             .filter(|&s| case.step_coordinates[s][0] >= 0)

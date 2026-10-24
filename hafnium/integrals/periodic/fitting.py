@@ -441,14 +441,12 @@ class _Builder:
         charge = max(function_absolute_integral(shell) for shell in auxiliary.shells)
         profile = PerpendicularProfile.from_functions(self.cell, basis, auxiliary)
         n_images = int(pair_images.shape[0])
-        steps = (
-            pair_images,
-            step_classes,
-            self._class_phases(kpts, pair_images, step_classes),
-        )
+        steps = self._sorted_steps(kpts, pair_images, step_classes)
         transfers = [_ZERO_TRANSFER] if coulomb_only else range(self.transfers.n_kpt)
         # The reciprocal-space part is added block by block into the array
-        # the engine returned, which holds the whole tensor already.
+        # the engine returned, a writable host array that holds the whole
+        # tensor already; a second copy of it would cost as much memory as
+        # the tensor.
         for q in transfers:
             reciprocal = self._reciprocal_sum(q, charge, profile)
             weights, _ = self._auxiliary_weights(fitting, reciprocal)
@@ -468,20 +466,31 @@ class _Builder:
         return total
 
     @staticmethod
-    def _class_phases(kpts: Array, images: Array, classes: Array) -> Array:
-        """``exp(i k·T_c)`` as ``[kpt, class]`` from the first image of every class."""
+    def _sorted_steps(
+        kpts: Array, images: Array, classes: Array
+    ) -> tuple[Array, Array, Array]:
+        """Sort the steps by class for :meth:`_pair_transforms`.
+
+        Returns the images in class order, the offsets ``[class + 1]`` of
+        every class in that order, and the phases ``exp(i k·T_c)``
+        ``[kpt, class]`` of the first image of every class, zero for a class
+        without images.
+        """
         xp = array_namespace(images)
         n_classes = int(xp.max(classes)) + 1
-        representatives = xp.stack(
-            [
-                images[xp.argmax(xp.astype(classes == c, xp.int64))]
-                for c in range(n_classes)
-            ]
+        order = xp.argsort(classes, stable=True)
+        sorted_images = images[order]
+        counts = xp.asarray(
+            [int(xp.sum(xp.astype(classes == c, xp.int64))) for c in range(n_classes)],
+            dtype=xp.int64,
         )
-        angles = xp.astype(
-            kpts @ xp.linalg.matrix_transpose(representatives), xp.complex128
-        )
-        return xp.exp(1j * angles)
+        offsets = xp.concat([xp.zeros((1,), dtype=xp.int64), xp.cumulative_sum(counts)])
+        phases = xp.zeros((int(kpts.shape[0]), n_classes), dtype=xp.complex128)
+        for c in range(n_classes):
+            if int(counts[c]) > 0:
+                angles = kpts @ sorted_images[int(offsets[c])]
+                phases[:, c] = xp.exp(1j * xp.astype(angles, xp.complex128))
+        return sorted_images, offsets, phases
 
     def _image_classes(self, coordinates: Array) -> Array:
         """Return the Born–von Kármán class of every image.
@@ -561,28 +570,26 @@ class _Builder:
     ) -> Array:
         """Return ``Σ_T exp(i k·T) ρ̃_T(q+G)`` as ``[kpt, G, ao, ao]``, in batches.
 
-        ``steps`` holds the pair images ``[image, 3]``, their classes
-        ``[image]`` and the phases ``exp(i k·T_c)`` ``[kpt, class]`` of one
-        representative per class: the transforms are summed per class
-        first, since the phase is the same within a class, and the phases
-        multiply the class sums (ADR-0028).
+        ``steps`` is the output of :meth:`_sorted_steps`: the pair images
+        in class order, the offsets of the classes and the phase of every
+        class. The transforms are summed per class first, since the phase
+        is the same within a class, and the phases multiply the class sums
+        (ADR-0028).
         """
         xp = array_namespace(vectors)
-        pair_images, classes, class_phases = steps
+        sorted_images, offsets, class_phases = steps
         n_ao = orbital.n_functions
         n_classes = int(class_phases.shape[1])
+        n_images = int(sorted_images.shape[0])
         per_image = int(vectors.shape[0]) * n_ao * n_ao * 16
         chunk = max(1, _TRANSFORM_CHUNK_BYTES // per_image)
-        order = xp.argsort(classes, stable=True)
-        sorted_classes = classes[order]
-        sorted_images = pair_images[order]
-        # The images of a class are contiguous after the sort; the class
-        # sums are accumulated into a preallocated array, batch by batch.
+        # The class sums are accumulated into a preallocated array, batch by
+        # batch; the images of a class are contiguous in the sorted list.
         totals = xp.zeros(
             (n_classes, int(vectors.shape[0]), n_ao, n_ao), dtype=xp.complex128
         )
-        for start in range(0, int(pair_images.shape[0]), chunk):
-            stop = min(start + chunk, int(pair_images.shape[0]))
+        for start in range(0, n_images, chunk):
+            stop = min(start + chunk, n_images)
             transforms = self.engine.pair_fourier_transform(
                 orbital,
                 orbital,
@@ -590,11 +597,9 @@ class _Builder:
                 vectors,
                 threshold=threshold,
             )
-            batch_classes = sorted_classes[start:stop]
-            first = int(batch_classes[0])
-            last = int(batch_classes[-1])
-            for c in range(first, last + 1):
-                members = batch_classes == c
-                if bool(xp.any(members)):
-                    totals[c] = totals[c] + xp.sum(transforms[members], axis=0)
+            for c in range(n_classes):
+                low = max(int(offsets[c]), start) - start
+                high = min(int(offsets[c + 1]), stop) - start
+                if high > low:
+                    totals[c] = totals[c] + xp.sum(transforms[low:high], axis=0)
         return xp.tensordot(class_phases, totals, axes=1)

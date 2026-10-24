@@ -55,7 +55,7 @@ meta-GGA, never asks for exchange, yet the whole tensor was built for it.
 - Silicon def2-SVP, 3×3×3, sixteen threads, precision 1e-12: the
   Coulomb-only build takes 9.7 s instead of 78 s, 8 s of it the
   integrals, so an LDA calculation runs in 24 s against PySCF's 5.5 s;
-  the full tensor for a hybrid or Hartree–Fock builds in 42 s, 19 s of
+  the full tensor for a hybrid or Hartree–Fock builds in 38 s, 20 s of
   it the pair Fourier transforms and 11 s the kernel. The energies are
   unchanged to 1e-10 Hartree.
 - The Coulomb-only tensor holds `n_k` blocks, 140 MB for the silicon
