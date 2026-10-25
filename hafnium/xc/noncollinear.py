@@ -22,7 +22,6 @@ collinear functional ``f(ρ, |m|, ∇|m|, m̂·τ_m)`` with its exact derivative
 
 from __future__ import annotations
 
-import logging
 import math
 from dataclasses import dataclass
 
@@ -31,8 +30,6 @@ from hafnium.backend import Array, array_namespace, host_array, to_host
 from hafnium.errors import InputError
 from hafnium.grid.angular import lebedev_degree, lebedev_grid
 from hafnium.xc.functional import Functional
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_PRECISION = 1e-14
 """Tolerated change of the energy density and energy response between two
@@ -168,7 +165,8 @@ class NoncollinearValues:
         ``∂f_mc/∂τ`` and ``∂f_mc/∂τ_m,a``.
     unconverged
         Points whose aligned rules reached the finest level without
-        converging to the precision; zero for a Lebedev rule.
+        converging to the precision; zero for a Lebedev rule. The caller
+        decides whether to report them.
     """
 
     energy_density: Array
@@ -249,15 +247,6 @@ def evaluate_noncollinear(
     except ValueError as error:
         raise InputError(str(error)) from None
     energy, v_rho, v_m, v_grad_rho, v_grad_m, v_tau, v_tau_m, unconverged = results
-    if unconverged:
-        logger.warning(
-            "the aligned rules over spin directions did not converge to %g at %d of "
-            "%d points at level %d",
-            options.precision,
-            unconverged,
-            n,
-            options.max_level,
-        )
     return NoncollinearValues(
         xp.asarray(energy),
         xp.asarray(v_rho),

@@ -269,6 +269,7 @@ class ExchangeCorrelation:
         phases = self._phases()
         energy = 0.0
         electrons = 0.0
+        unconverged = 0
         for batch in self.grid.batches(self._points_per_batch()):
             values = xp.asarray(self._values(batch, order, phases))
             weights = self.grid.weights[batch]
@@ -278,7 +279,17 @@ class ExchangeCorrelation:
             )
             energy += float(xp.sum(weights * xc.energy_density))
             electrons += float(xp.sum(weights * on_grid.rho))
+            unconverged += xc.unconverged
             potential = potential + _spinor_potential(values, weights, xc)
+        if unconverged:
+            logger.warning(
+                "the rules over spin directions did not reach the precision %g at "
+                "%d of %d grid points at level %d",
+                self.noncollinear.precision,
+                unconverged,
+                self.grid.n_points,
+                self.noncollinear.max_level,
+            )
         logger.debug(
             "exchange-correlation (noncollinear): %.10f Hartree, %.8f electrons on "
             "%d points",
@@ -555,7 +566,7 @@ def _spinor_densities(
     with the alpha components first. The spin-density matrix on the grid is
     ``ρ_στ = Σ_k w_k Σ_uv φ_v^k D[vσ, uτ](k) conj(φ_u^k)``: with
     ``T_στ = Φ D_στ`` for every component, ``ρ_στ = Σ_u T_στ[0, u] conj(Φ_u)``,
-    ``∂_i ρ_στ = C_στ,i + conj(C_τσ,i)`` for ``C_στ,i = Σ_u T_στ[i, u] conj(Φ_u)``
+    ``∂_i ρ_στ = Σ_u T_στ[i, u] conj(Φ_u) + Σ_u T_στ[0, u] conj(∂_iΦ_u)``
     and ``τ_στ = ½ Σ_i Σ_u T_στ[i, u] conj(∂_iΦ_u)``. The density is
     ``ρ_αα + ρ_ββ`` and the magnetization ``(2 Re ρ_αβ, −2 Im ρ_αβ, ρ_αα − ρ_ββ)``,
     likewise for the gradients and the kinetic energy densities.
@@ -564,28 +575,30 @@ def _spinor_densities(
     n = int(matrix.shape[-1]) // 2
     conj_functions = xp.conj(values[:, :, 0, :])
     derivatives = values[:, :, 1:4, :] if values.shape[2] > 1 else None
+    conj_derivatives = None if derivatives is None else xp.conj(derivatives)
     values_of: dict[tuple[int, int], Array] = {}
-    fluxes: dict[tuple[int, int], Array] = {}
+    gradients: dict[tuple[int, int], Array] = {}
     kinetic: dict[tuple[int, int], Array] = {}
-    for pair in ((0, 0), (1, 1), (0, 1), (1, 0)):
+    # Three spin pairs suffice: the beta–alpha quantities are the conjugates
+    # of the alpha–beta ones and the magnetization reads the latter.
+    for pair in ((0, 0), (1, 1), (0, 1)):
         rows, columns = (slice(s * n, (s + 1) * n) for s in pair)
         moved = values @ xp.expand_dims(matrix[:, rows, columns], 1)
         values_of[pair] = xp.einsum(
             "k,kgu,kgu->g", k_weights, moved[:, :, 0, :], conj_functions
         )
-        if derivatives is None:
+        if derivatives is None or conj_derivatives is None:
             continue
-        fluxes[pair] = xp.einsum(
+        gradients[pair] = xp.einsum(
             "k,kgxu,kgu->xg", k_weights, moved[:, :, 1:4, :], conj_functions
-        )
+        ) + xp.einsum("k,kgu,kgxu->xg", k_weights, moved[:, :, 0, :], conj_derivatives)
         if functional.needs_tau:
             kinetic[pair] = 0.5 * xp.einsum(
-                "k,kgxu,kgxu->g", k_weights, moved[:, :, 1:4, :], xp.conj(derivatives)
+                "k,kgxu,kgxu->g", k_weights, moved[:, :, 1:4, :], conj_derivatives
             )
     rho, m = _total_and_magnetization(values_of)
     grad_rho = grad_m = tau = tau_m = None
-    if fluxes:
-        gradients = {(s, t): fluxes[s, t] + xp.conj(fluxes[t, s]) for s, t in fluxes}
+    if gradients:
         grad_rho, grad_m = _total_and_magnetization(gradients)
     if kinetic:
         tau, tau_m = _total_and_magnetization(kinetic)

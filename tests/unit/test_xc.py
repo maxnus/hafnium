@@ -404,6 +404,38 @@ def test_lda_is_invariant_under_spin_rotations_and_the_sphere_nearly_so() -> Non
         np.testing.assert_allclose(after.v_m, rotation @ before.v_m, atol=tolerance)
 
 
+def test_aligned_rules_agree_with_a_fine_lebedev_rule_and_report_failures() -> None:
+    """The adaptive rules reach the fine fixed rule; a hopeless precision is counted."""
+    functional = Functional.named("pbe")
+    density = noncollinear_at(POINTS, polarization=0.6, twist=1.0)
+    adaptive = evaluate_noncollinear(
+        functional, density, NoncollinearOptions(precision=1e-12)
+    )
+    fixed = evaluate_noncollinear(
+        functional, density, NoncollinearOptions(lebedev_points=5810)
+    )
+    assert adaptive.unconverged == 0
+    np.testing.assert_allclose(
+        adaptive.energy_density, fixed.energy_density, atol=1e-10
+    )
+    assert adaptive.v_grad_m is not None
+    assert fixed.v_grad_m is not None
+    np.testing.assert_allclose(adaptive.v_m, fixed.v_m, atol=1e-9)
+    np.testing.assert_allclose(adaptive.v_grad_m, fixed.v_grad_m, atol=1e-9)
+    hopeless = evaluate_noncollinear(
+        functional, density, NoncollinearOptions(precision=1e-300, max_level=0)
+    )
+    assert hopeless.unconverged == density.n_points
+    # The weights scale the tolerance to one, which the first comparison meets.
+    light = evaluate_noncollinear(
+        functional,
+        density,
+        NoncollinearOptions(precision=1e-300, max_level=1),
+        weights=np.full(density.n_points, 1e-300),
+    )
+    assert light.unconverged == 0
+
+
 def test_vanishing_spin_variables_and_inputs_are_validated() -> None:
     density = noncollinear_at(POINTS, polarization=0.0, twist=0.0)
     functional = Functional.named("pbe")

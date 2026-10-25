@@ -1,5 +1,6 @@
 """The multi-collinear functional and the generalized Kohn–Sham classes versus PySCF."""
 
+import dataclasses
 import json
 from importlib import resources
 from typing import Any
@@ -108,22 +109,15 @@ def test_term_matches_pyscf_for_a_noncollinear_density(
     term = ExchangeCorrelation.from_molecule(
         ENGINE, basis, molecule, Functional.named(name), grid=grid
     )
-    term = dataclasses_replace(
-        term, NoncollinearOptions(lebedev_points=770, collinear_threshold=None)
+    term = dataclasses.replace(
+        term,
+        noncollinear=NoncollinearOptions(lebedev_points=770, collinear_threshold=None),
     )
     energy, potential = term.evaluate(density)
     assert energy == pytest.approx(expected["energy"], abs=KOHN_SHAM_ENERGY_TOL)
     np.testing.assert_allclose(
         potential.blocks[0], expected["potential"], atol=STRUCTURE_TOL
     )
-
-
-def dataclasses_replace(
-    term: ExchangeCorrelation, options: NoncollinearOptions
-) -> ExchangeCorrelation:
-    import dataclasses
-
-    return dataclasses.replace(term, noncollinear=options)
 
 
 def converge(molecule_name: str, basis_name: str, functional: str) -> ScfResult:

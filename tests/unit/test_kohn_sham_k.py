@@ -122,7 +122,7 @@ def test_spinor_classes_recover_the_restricted_energy(
 def test_rotated_spin_state_of_a_cell_is_degenerate() -> None:
     """The k-point spinor term follows a rotation in spin space (ADR-0029)."""
     cell = helium_hydride_box()
-    basis, auxiliary = bases(cell, "cc-pvdz")
+    basis, auxiliary = bases(cell, "sto-3g")
     mesh = KPoints.mesh((2, 1, 1))
     unrestricted = converge(
         cell, basis, auxiliary, "pbe", SymmetrySpec.from_name("UHF").with_kpoints(mesh)

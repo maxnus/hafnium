@@ -409,7 +409,7 @@ def test_kohn_sham_inputs_are_validated(water_basis: tuple[Molecule, BasisSet]) 
             exchange_correlation=pbe,
         )
     spatial = BlockMatrix(BlockStructure.spatial(), (np.eye(basis.n_functions),))
-    with pytest.raises(InputError, match="collinear"):
+    with pytest.raises(InputError, match="density with spin"):
         pbe.evaluate(spatial)
     density = BlockStructure.restricted()
     with pytest.raises(InputError, match="atomic orbitals"):
