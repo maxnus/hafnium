@@ -81,7 +81,8 @@ criterion of M7 asks for.
   any. The restricted and unrestricted classes, real and complex, are
   served by the one implementation (RKS and UKS); the generalized
   classes need the noncollinear evaluation of PLAN.md §5.4 and are
-  rejected, as is a k axis until the periodic part of M7. `kohn_sham`
+  rejected, as is a k axis until the periodic part of M7 (both since
+  served: ADR-0027 and ADR-0029). `kohn_sham`
   mirrors `hartree_fock` with a functional and `KohnShamOptions`, the SCF
   options plus the grid.
 

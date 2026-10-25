@@ -150,12 +150,15 @@ Hamiltonian as GHF does.
   noncollinear state compares to PySCF only on the same rule with the
   branch off, since the branches differ.
 - The cost of a GGA or meta-GGA term grows with the number of directions
-  the points need: the water cation's PBE term costs a few times the
-  collinear one with the aligned rules, where the fixed rule of 770
-  directions cost thirty times, and the meta-GGA, whose second
-  derivatives are the dearest, remains an order of magnitude more.
-  Closed shells and the paired class skip the sphere and cost nothing
-  extra; nor does an LDA.
+  the points need. For the water cation in STO-3G on the default grid
+  (16 threads) a PBE Kohn–Sham run takes 6.7 s in the complex
+  generalized class against 0.3 s in the unrestricted one, where the
+  fixed rule of 770 directions took 26 s; a precision of 1e-12 brings it
+  to 4.6 s and 1e-11 to 3.6 s, the energy unchanged to 1e-13 in this
+  collinear case. TPSS takes 105 s against 0.3 s: its second derivatives
+  cost fifteen first derivatives in ``xcx`` and the kinetic variables
+  demand finer rules. Closed shells and the paired class skip the sphere
+  and cost nothing extra; nor does an LDA (0.3 s against 0.1 s).
 - A GGA or meta-GGA energy is invariant under rotations in spin space to
   the precision of the aligned rules, which turn with the magnetization;
   a Lebedev rule carries the octahedral group alone and is invariant
