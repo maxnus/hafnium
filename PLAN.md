@@ -20,8 +20,9 @@ Goals, in priority order:
 
 1. Mean-field methods. Hartree–Fock in all eight Fukutome symmetry classes
    (real, complex and paired variants of restricted, unrestricted and
-   generalized HF) and Kohn–Sham DFT (restricted and unrestricted first,
-   noncollinear later), each optionally constrained by a spatial point group.
+   generalized HF) and Kohn–Sham DFT in the same eight classes, the
+   generalized ones through the multi-collinear form of the functional,
+   each optionally constrained by a spatial point group.
 2. Periodic systems in one, two and three dimensions with k-point
    sampling, treated by the same mean-field and correlated code as
    molecules: translational symmetry is one more symmetry in the data
@@ -318,8 +319,10 @@ and already yields the block-diagonal Fock matrix.
 
 For DFT, the density on the grid is a 2×2 spin-density matrix per point
 ρ_στ(r), computed generically from the structure. Restricted and collinear
-functionals read ρ_α, ρ_β; noncollinear functionals read (ρ, m) and are a
-later addition.
+functionals read ρ_α, ρ_β; the generalized classes read the density and the
+magnetization (ρ, m) with their gradients and take the multi-collinear form
+of the collinear functional (ADR-0029), which recovers the collinear
+functional exactly where the spin variables are parallel.
 
 ### 5.5 Correlated methods
 
@@ -689,7 +692,8 @@ Rust (ADR-0027).
 **xc.** Functional registry by name, the functionals of libxc through the
 pure-Rust `xcx` crate with libxc's ids and conventions (ADR-0026),
 evaluation for collinear densities with LDA, GGA, meta-GGA, hybrid and
-range-separated hybrids; noncollinear later.
+range-separated hybrids, and the multi-collinear evaluation for the
+density and magnetization of the generalized classes (ADR-0029).
 
 **scf.** One `SelfConsistentField` driver with pluggable parts: initial
 guess (core Hamiltonian, superposition of atomic densities, generalized
@@ -1031,11 +1035,23 @@ the full k set, reduced onto the stored points as the Coulomb matrix is,
 for RKS and UKS with the fitted exchange of hybrids; periodic energies
 match PySCF to 1e-12 on one and the same grid, and the grid of ADR-0027
 integrates the electron count to 1e-5 where PySCF's truncated grids
-reach 1e-3. Later: range-separated hybrids for cells (fitted integrals
-with the long-range kernel on a lattice), noncollinear functionals for
-the generalized classes, VV10 and dispersion corrections, functionals
+reach 1e-3. Part three done 2026-10-25 (ADR-0029): the generalized classes take the
+multi-collinear form of the functional, the closed form `f(ρ, |m|)` for
+an LDA and a quadrature over spin directions with the second derivatives
+of `xcx` for GGA and meta-GGA, on product rules aligned with the
+magnetization of each point and refined to a precision, strongly
+polarized points in the locally collinear branch with its exact
+derivatives; the spinor
+density on the grid and the potential `v_ρ + v_m·σ` in the
+exchange–correlation term for molecules and cells; the kernel reproduces
+PySCF's `mcfun` to rounding, and the generalized classes reproduce the
+restricted and unrestricted energies in the collinear limit. Later:
+range-separated hybrids for cells (fitted integrals with the long-range
+kernel on a lattice), VV10 and dispersion corrections, functionals
 outside `xcx`'s list (SCAN, HSE, CAM-B3LYP, Laplacian meta-GGAs),
-caching the basis values across SCF iterations.
+caching the basis values across SCF iterations, a smooth blend of the
+two noncollinear branches and the second derivatives of the
+multi-collinear functional for response theory.
 
 **M8 Correlated methods.** DF MO transformation, DF-MP2, `BlockTensor`
 with structured einsum over irreps and crystal momentum, equation
@@ -1074,8 +1090,7 @@ and two-component energies against PySCF for a set of heavy-element atoms
 and molecules, the hydrogen-like convergence, and orientation invariance
 with spin–orbit coupling.
 
-Later: AO-direct J/K, non-Abelian point groups, noncollinear DFT,
-quaternion storage, EOM-CC, ECPs (pending §12) and pseudopotentials,
+Later: AO-direct J/K, non-Abelian point groups, quaternion storage, EOM-CC, ECPs (pending §12) and pseudopotentials,
 four-component Hamiltonians and the Breit interaction, the full per-k
 decoupling and analytic gradients of the full decoupling (§5.10),
 FFT-based density fitting, explicit Q-vector coupling between k-points.

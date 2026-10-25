@@ -3,10 +3,13 @@
 The densities of a structured density matrix are evaluated on a grid from
 the basis functions and their derivatives, the functional is evaluated
 point by point, and the potential is assembled back into the structure of
-the density. The term is collinear: it reads the alpha and beta densities
-of a restricted or unrestricted class, real or complex, so that one
-implementation serves RKS and UKS; the spinor classes need the
-noncollinear evaluation of PLAN.md §5.4, a later addition.
+the density. A restricted or unrestricted class, real or complex, gives
+the alpha and beta densities and the collinear functional, so that one
+implementation serves RKS and UKS; a generalized (spinor) class gives the
+density and the magnetization ``m`` of the spin-density matrix
+``ρ_στ(r)``, ``m = (2 Re ρ_αβ, −2 Im ρ_αβ, ρ_αα − ρ_ββ)``, and the
+multi-collinear form of the functional (ADR-0029), whose potential enters
+the spinor Fock matrix as ``v_ρ + v_m·σ`` with the Pauli matrices.
 
 For a cell the densities come from the k-point density matrices through
 the Bloch sums of the basis functions over the lattice images,
@@ -38,7 +41,16 @@ from hafnium.structured import BlockMatrix, BlockStructure, Spin
 from hafnium.structured.dense import reduce_k
 from hafnium.structured.validation import cast_to_ring
 from hafnium.symmetry import KPoints
-from hafnium.xc import DensityOnGrid, Functional, XcValues, evaluate_functional
+from hafnium.xc import (
+    DensityOnGrid,
+    Functional,
+    NoncollinearDensity,
+    NoncollinearOptions,
+    NoncollinearValues,
+    XcValues,
+    evaluate_functional,
+    evaluate_noncollinear,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +82,9 @@ class ExchangeCorrelation:
     batch_size
         Grid points evaluated at a time; for a cell the points times the
         k-points.
+    noncollinear
+        Controls of the multi-collinear evaluation for the generalized
+        classes (ADR-0029).
     kpoints, lattice, translations
         For a cell: the k-point set of the densities, the lattice, and the
         lattice vectors ``[image, 3]`` over which the Bloch sums of the
@@ -82,6 +97,9 @@ class ExchangeCorrelation:
     table: ShellTable
     radii: Array
     batch_size: int = DEFAULT_BATCH_SIZE
+    noncollinear: NoncollinearOptions = field(
+        default_factory=NoncollinearOptions, kw_only=True
+    )
     kpoints: KPoints | None = field(default=None, kw_only=True)
     lattice: Lattice | None = field(default=None, kw_only=True)
     translations: Array | None = field(default=None, kw_only=True)
@@ -190,16 +208,19 @@ class ExchangeCorrelation:
         """Exchange–correlation energy and potential of a Hermitian ``density``.
 
         The potential is in the structure of the density; for a cell both
-        are per cell. The number of electrons found on the grid is logged
-        at DEBUG level.
+        are per cell. A spinor structure takes the multi-collinear path.
+        The number of electrons found on the grid is logged at DEBUG level.
 
         Raises
         ------
         InputError
-            For a spinor (generalized) structure, which this version does
-            not serve, or a density over other k-points than the term's.
+            For a density of another basis, or over other k-points than
+            the term's.
         """
         structure = density.structure
+        self._check_density(density)
+        if structure.is_spinor:
+            return self._evaluate_spinor(density)
         spins, k_weights = self._spin_densities(density)
         xp = array_namespace(*spins)
         potentials = [xp.zeros_like(matrix) for matrix in spins]
@@ -230,6 +251,43 @@ class ExchangeCorrelation:
         )
         return energy, self._structured(structure, potentials)
 
+    def _evaluate_spinor(self, density: BlockMatrix) -> tuple[float, BlockMatrix]:
+        """Evaluate a generalized class through the multi-collinear form (ADR-0029)."""
+        structure = density.structure
+        (matrix,) = density.spin_blocks()
+        xp = array_namespace(matrix)
+        matrix = xp.astype(matrix, xp.complex128)
+        if self.kpoints is None:
+            matrix = xp.expand_dims(matrix, 0)
+            k_weights = xp.ones((1,), dtype=xp.float64)
+        else:
+            k_weights = self.kpoints.weights_array(xp)
+        potential = xp.zeros_like(matrix)
+        if not self.functional.components:
+            return 0.0, self._structured(structure, [potential])
+        order = 1 if self.functional.needs_gradient or self.functional.needs_tau else 0
+        phases = self._phases()
+        energy = 0.0
+        electrons = 0.0
+        for batch in self.grid.batches(self._points_per_batch()):
+            values = xp.asarray(self._values(batch, order, phases))
+            weights = self.grid.weights[batch]
+            on_grid = _spinor_densities(values, matrix, k_weights, self.functional)
+            xc = evaluate_noncollinear(
+                self.functional, on_grid, self.noncollinear, weights=weights
+            )
+            energy += float(xp.sum(weights * xc.energy_density))
+            electrons += float(xp.sum(weights * on_grid.rho))
+            potential = potential + _spinor_potential(values, weights, xc)
+        logger.debug(
+            "exchange-correlation (noncollinear): %.10f Hartree, %.8f electrons on "
+            "%d points",
+            energy,
+            electrons,
+            self.grid.n_points,
+        )
+        return energy, self._structured(structure, [potential])
+
     def _points_per_batch(self) -> int:
         n_kpt = 1 if self.kpoints is None else self.kpoints.n_kpt
         return max(1, self.batch_size // n_kpt)
@@ -258,13 +316,8 @@ class ExchangeCorrelation:
             self.table, points, self.radii, self.translations, phases, order=order
         )
 
-    def _spin_densities(self, density: BlockMatrix) -> tuple[tuple[Array, ...], Array]:
-        """Return the spin density matrices ``[kpt, ao, ao]`` and the k-point weights.
-
-        One matrix for a restricted structure, whose beta block repeats the
-        alpha block, two for an unrestricted one; real over the one k-point
-        of a molecule, complex over the full k set of a cell.
-        """
+    def _check_density(self, density: BlockMatrix) -> None:
+        """Require a density of this term's basis, system and k-points."""
         structure = density.structure
         axis = structure.k_axis
         if (axis is None) != (self.kpoints is None):
@@ -283,17 +336,25 @@ class ExchangeCorrelation:
                 f"the density runs over {axis.n_kpt} k-points, the "
                 f"exchange–correlation term over {self.kpoints.n_kpt}"
             )
-        if structure.is_spinor or structure.is_spatial:
+        if structure.is_spatial:
             raise InputError(
-                "the exchange–correlation term is collinear: it serves the "
-                "restricted and unrestricted classes, not the generalized ones "
-                "(noncollinear functionals are a later addition, PLAN.md §5.4)"
+                "the exchange–correlation term reads a density with spin: a "
+                "restricted, unrestricted or generalized structure"
             )
         if density.n_spatial != self.n_ao:
             raise InputError(
                 f"the density has {density.n_spatial} atomic orbitals, the grid's "
                 f"basis {self.n_ao}"
             )
+
+    def _spin_densities(self, density: BlockMatrix) -> tuple[tuple[Array, ...], Array]:
+        """Return the spin density matrices ``[kpt, ao, ao]`` and the k-point weights.
+
+        One matrix for a restricted structure, whose beta block repeats the
+        alpha block, two for an unrestricted one; real over the one k-point
+        of a molecule, complex over the full k set of a cell.
+        """
+        structure = density.structure
         blocks = density.spin_blocks()
         xp = array_namespace(*blocks)
         if _is_restricted(structure):
@@ -312,23 +373,27 @@ class ExchangeCorrelation:
     def _structured(
         self, structure: BlockStructure, potentials: list[Array]
     ) -> BlockMatrix:
-        """Place the alpha and beta potentials ``[kpt, ao, ao]`` into the stored blocks.
+        """Place the potentials ``[kpt, ao, ao]`` into the stored blocks.
 
-        A single potential serves a restricted structure, whose stored
-        blocks are all alpha. Over a k axis each stored block is the
-        reduction of the full set onto its stored points, as for the
-        Coulomb matrix; with irrep sectors the matrices are projected onto
-        the sectors.
+        The alpha and beta potentials of a collinear structure, a single
+        one serving a restricted structure, whose stored blocks are all
+        alpha; the spinor potential ``[kpt, 2n, 2n]`` of a generalized one.
+        Over a k axis each stored block is the reduction of the full set
+        onto its stored points, as for the Coulomb matrix; with irrep
+        sectors the matrices are projected onto the sectors.
         """
         xp = array_namespace(*potentials)
-        by_spin = {Spin.ALPHA: potentials[0], Spin.BETA: potentials[-1]}
+        if structure.is_spinor:
+            by_spin = {Spin.SPINOR: potentials[0]}
+        else:
+            by_spin = {Spin.ALPHA: potentials[0], Spin.BETA: potentials[-1]}
         sectors = structure.irreps
         projected = None
         if structure.k_axis is None:
             by_spin = {spin: matrix[0] for spin, matrix in by_spin.items()}
             if sectors is not None:
                 projected = {
-                    spin: sectors.from_atomic(matrix, spinor=False)
+                    spin: sectors.from_atomic(matrix, spinor=structure.is_spinor)
                     for spin, matrix in by_spin.items()
                 }
         blocks: list[Array] = []
@@ -477,5 +542,145 @@ def _potential(
         weighted = (0.5 * weights * xc.vtau[spin])[None, :, None, None] * derivatives
         potential = potential + xp.einsum(
             "kgxu,kgxv->kuv", xp.conj(weighted), derivatives
+        )
+    return potential
+
+
+def _spinor_densities(
+    values: Array, matrix: Array, k_weights: Array, functional: Functional
+) -> NoncollinearDensity:
+    """Density and magnetization of a batch from a spinor density matrix.
+
+    ``values`` is ``[kpt, g, component, ao]`` and ``matrix`` ``[kpt, 2n, 2n]``
+    with the alpha components first. The spin-density matrix on the grid is
+    ``ρ_στ = Σ_k w_k Σ_uv φ_v^k D[vσ, uτ](k) conj(φ_u^k)``: with
+    ``T_στ = Φ D_στ`` for every component, ``ρ_στ = Σ_u T_στ[0, u] conj(Φ_u)``,
+    ``∂_i ρ_στ = C_στ,i + conj(C_τσ,i)`` for ``C_στ,i = Σ_u T_στ[i, u] conj(Φ_u)``
+    and ``τ_στ = ½ Σ_i Σ_u T_στ[i, u] conj(∂_iΦ_u)``. The density is
+    ``ρ_αα + ρ_ββ`` and the magnetization ``(2 Re ρ_αβ, −2 Im ρ_αβ, ρ_αα − ρ_ββ)``,
+    likewise for the gradients and the kinetic energy densities.
+    """
+    xp = array_namespace(values)
+    n = int(matrix.shape[-1]) // 2
+    conj_functions = xp.conj(values[:, :, 0, :])
+    derivatives = values[:, :, 1:4, :] if values.shape[2] > 1 else None
+    values_of: dict[tuple[int, int], Array] = {}
+    fluxes: dict[tuple[int, int], Array] = {}
+    kinetic: dict[tuple[int, int], Array] = {}
+    for pair in ((0, 0), (1, 1), (0, 1), (1, 0)):
+        rows, columns = (slice(s * n, (s + 1) * n) for s in pair)
+        moved = values @ xp.expand_dims(matrix[:, rows, columns], 1)
+        values_of[pair] = xp.einsum(
+            "k,kgu,kgu->g", k_weights, moved[:, :, 0, :], conj_functions
+        )
+        if derivatives is None:
+            continue
+        fluxes[pair] = xp.einsum(
+            "k,kgxu,kgu->xg", k_weights, moved[:, :, 1:4, :], conj_functions
+        )
+        if functional.needs_tau:
+            kinetic[pair] = 0.5 * xp.einsum(
+                "k,kgxu,kgxu->g", k_weights, moved[:, :, 1:4, :], xp.conj(derivatives)
+            )
+    rho, m = _total_and_magnetization(values_of)
+    grad_rho = grad_m = tau = tau_m = None
+    if fluxes:
+        gradients = {(s, t): fluxes[s, t] + xp.conj(fluxes[t, s]) for s, t in fluxes}
+        grad_rho, grad_m = _total_and_magnetization(gradients)
+    if kinetic:
+        tau, tau_m = _total_and_magnetization(kinetic)
+    return NoncollinearDensity(rho, m, grad_rho, grad_m, tau, tau_m)
+
+
+def _total_and_magnetization(
+    pairs: dict[tuple[int, int], Array],
+) -> tuple[Array, Array]:
+    """Return ``ρ_αα + ρ_ββ`` and ``(2 Re ρ_αβ, −2 Im ρ_αβ, ρ_αα − ρ_ββ)``.
+
+    ``pairs`` holds a value per spin pair ``(σ, τ)``.
+    """
+    xp = array_namespace(*pairs.values())
+    total = xp.real(pairs[0, 0] + pairs[1, 1])
+    return total, xp.stack(
+        [
+            2.0 * xp.real(pairs[0, 1]),
+            -2.0 * xp.imag(pairs[0, 1]),
+            xp.real(pairs[0, 0] - pairs[1, 1]),
+        ]
+    )
+
+
+def _spinor_potential(values: Array, weights: Array, xc: NoncollinearValues) -> Array:
+    """Return the potential ``[kpt, 2n, 2n]`` of a batch from the derivatives.
+
+    The derivative of the energy with respect to ``D[vτ, uσ]`` is
+    ``∫ conj(φ_u) (v_ρ δ_στ + v_m·σ_στ) φ_v`` with the Pauli matrices, plus
+    the same combinations of the gradient derivatives on
+    ``∂_i(conj(φ_u) φ_v)`` and of the kinetic ones on
+    ``½ conj(∂_iφ_u) ∂_iφ_v``: the alpha–alpha block carries ``v + v_z``,
+    the beta–beta block ``v − v_z``, the alpha–beta block ``v_x − i v_y``
+    and the beta–alpha block its adjoint.
+    """
+    xp = array_namespace(values)
+
+    def pauli(total: Array | None, spin: Array | None) -> tuple[Array, Array, Array]:
+        assert total is not None
+        assert spin is not None
+        complex_spin = xp.astype(spin, xp.complex128)
+        return (
+            total + spin[2],
+            total - spin[2],
+            complex_spin[0] - 1j * complex_spin[1],
+        )
+
+    scalar = pauli(xc.v_rho, xc.v_m)
+    gradient = None if xc.v_grad_rho is None else pauli(xc.v_grad_rho, xc.v_grad_m)
+    kinetic = None if xc.v_tau is None else pauli(xc.v_tau, xc.v_tau_m)
+    blocks = [
+        _block_potential(
+            values,
+            weights,
+            scalar[index],
+            None if gradient is None else gradient[index],
+            None if kinetic is None else kinetic[index],
+        )
+        for index in range(3)
+    ]
+    alpha_alpha, beta_beta, alpha_beta = blocks
+    top = xp.concat([alpha_alpha, alpha_beta], axis=-1)
+    bottom = xp.concat([adjoint(alpha_beta), beta_beta], axis=-1)
+    return xp.concat([top, bottom], axis=-2)
+
+
+def _block_potential(
+    values: Array,
+    weights: Array,
+    scalar: Array,
+    gradient: Array | None,
+    kinetic: Array | None,
+) -> Array:
+    """Return ``Σ_g w [p conj(φ_u) φ_v + q·∂(conj(φ_u) φ_v) + ½ r ∂conj(φ_u)·∂φ_v]``.
+
+    One matrix per k-point.
+
+    ``scalar`` is ``p[g]``, ``gradient`` ``q[3, g]`` and ``kinetic`` ``r[g]``,
+    real or complex.
+    """
+    xp = array_namespace(values)
+    functions = values[:, :, 0, :]
+    scaled = (weights * scalar)[None, :, None] * functions
+    if gradient is not None:
+        derivatives = values[:, :, 1:4, :]
+        flux = weights * gradient
+        scaled = scaled + xp.einsum("xg,kgxu->kgu", flux, derivatives)
+        back = xp.einsum("xg,kgxu->kgu", flux, xp.conj(derivatives))
+        potential = adjoint(functions) @ scaled
+        potential = potential + xp.linalg.matrix_transpose(back) @ functions
+    else:
+        potential = adjoint(functions) @ scaled
+    if kinetic is not None:
+        derivatives = values[:, :, 1:4, :]
+        potential = potential + 0.5 * xp.einsum(
+            "g,kgxu,kgxv->kuv", weights * kinetic, xp.conj(derivatives), derivatives
         )
     return potential

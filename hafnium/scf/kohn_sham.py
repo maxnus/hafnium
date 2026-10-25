@@ -19,7 +19,7 @@ from hafnium.scf.exchange_correlation import (
 )
 from hafnium.scf.hartree_fock import require_periodic_inputs, system_hamiltonian
 from hafnium.symmetry import SymmetrySpec
-from hafnium.xc import Functional
+from hafnium.xc import Functional, NoncollinearOptions
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,16 @@ class KohnShamOptions(ScfOptions):
     batch_size
         Grid points evaluated at a time; for a cell the points times the
         k-points, which bounds the memory of the Bloch sums.
+    noncollinear
+        Controls of the multi-collinear evaluation for the generalized
+        classes (ADR-0029): the rule over spin directions and the
+        polarization from which a point is taken as collinear.
     """
 
     grid: GridSpec = field(default_factory=GridSpec)
     basis_cutoff: float = DEFAULT_BASIS_CUTOFF
     batch_size: int = DEFAULT_BATCH_SIZE
+    noncollinear: NoncollinearOptions = field(default_factory=NoncollinearOptions)
 
     def __post_init__(self) -> None:
         # Named explicitly: zero-argument super() has no __class__ cell in a
@@ -72,8 +77,9 @@ def kohn_sham(
         A :class:`~hafnium.xc.Functional`, or one of the names of
         :data:`~hafnium.xc.NAMED_FUNCTIONALS`.
     symmetry
-        Fukutome class of the state, real RKS by default; the restricted
-        and unrestricted classes are served. For a cell it carries the
+        Fukutome class of the state, real RKS by default; all eight classes
+        are served, the generalized ones with the multi-collinear form of
+        the functional (ADR-0029). For a cell it carries the
         k-point set, :meth:`SymmetrySpec.with_kpoints`, and may name the
         cell's space group (ADR-0024); for a molecule it may impose an
         Abelian point group (ADR-0023).
@@ -123,7 +129,9 @@ def kohn_sham(
             basis_cutoff=numerical.basis_cutoff,
         )
     exchange_correlation = replace(
-        exchange_correlation, batch_size=numerical.batch_size
+        exchange_correlation,
+        batch_size=numerical.batch_size,
+        noncollinear=numerical.noncollinear,
     )
     logger.info(
         "kohn-sham with %s on %d grid points",

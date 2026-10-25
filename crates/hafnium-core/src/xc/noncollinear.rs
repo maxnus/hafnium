@@ -20,16 +20,26 @@
 //! every point, `f_mc = f(ρ, |m|)`, the locally collinear functional. For
 //! a GGA or meta-GGA the sphere is sampled with a quadrature rule, and
 //! the derivatives of `f_mc` involve the second derivatives of `f`, which
-//! `xcx` provides. The integrand loses its smoothness where a projected
-//! spin density vanishes, `|m| → ρ`, and the rule converges slowly there;
-//! points polarized beyond a threshold are evaluated with the locally
-//! collinear functional, whose spin gradient is the gradient of `|m|`, and
-//! its exact derivatives. Points whose spin variables vanish are evaluated
-//! unpolarized, which spares the sphere.
+//! `xcx` provides. The sphere is sampled either with a fixed rule or,
+//! by default, with product rules aligned with the magnetization of the
+//! point, Gauss–Legendre in the cosine of the angle to `m` and uniform in
+//! the azimuth, refined until the energy density and the first-order
+//! response of the energy to the variables converge to a precision: the
+//! integrand varies most along `m`, where the spin density of one
+//! channel shrinks, and hardly at all where the spin variables are small.
+//! It loses its smoothness where a projected spin density vanishes,
+//! `|m| → ρ`, and no rule converges there; points polarized beyond a
+//! threshold are evaluated with the locally collinear functional, whose
+//! spin gradient is the gradient of `|m|`, and its exact derivatives.
+//! Points whose spin variables vanish are evaluated unpolarized, which
+//! spares the sphere.
 //!
 //! Layouts: every array is component-major and point-minor, `m[a][g]`,
 //! `grad_rho[i][g]`, `grad_m[a][i][g]` with the spin direction `a` before
 //! the spatial direction `i`, `tau_m[a][g]`.
+
+use std::f64::consts::PI;
+use std::sync::OnceLock;
 
 use rayon::prelude::*;
 use xcx::{Functional, XcInput, XcResult};
@@ -39,6 +49,13 @@ use crate::Error;
 
 /// Points evaluated per parallel task.
 const POINTS_PER_TASK: usize = 16;
+
+/// Directions per axis of the coarsest aligned product rule; a level
+/// doubles both counts.
+const BASE_DIRECTIONS: usize = 2;
+
+/// Finest level an adaptive rule may reach, 256 × 256 directions.
+pub const MAX_LEVEL: usize = 7;
 
 /// Relative size below which the spin variables of a point count as zero.
 ///
@@ -77,6 +94,25 @@ pub struct SphereRule<'a> {
     pub weights: &'a [f64],
 }
 
+/// How the sphere of spin directions is sampled for the GGA and meta-GGA rungs.
+#[derive(Debug, Clone, Copy)]
+pub enum Sampling<'a> {
+    /// One rule for every point.
+    Fixed(SphereRule<'a>),
+    /// Product rules aligned with the magnetization of each point,
+    /// `2·2^level` Gauss–Legendre nodes in the cosine of the angle to `m`
+    /// times as many uniform azimuths, refined from level 0 to `max_level`
+    /// until the energy density and the first-order response
+    /// `Σ_x |∂f/∂x| |x|` change by less than `precision` divided by the
+    /// point's weight between two levels.
+    Adaptive {
+        /// Tolerated change, in energy per point once the weight is applied.
+        precision: f64,
+        /// Finest level, at most [`MAX_LEVEL`].
+        max_level: usize,
+    },
+}
+
 /// Energy density and derivatives of the multi-collinear functional.
 ///
 /// The layout follows [`NoncollinearInput`]: `v_m[a][g]`, `v_grad_rho[i][g]`,
@@ -98,35 +134,63 @@ pub struct NoncollinearValues {
     pub v_tau: Vec<f64>,
     /// `∂f_mc/∂τ_m,a`.
     pub v_tau_m: Vec<f64>,
+    /// Points whose adaptive rule reached the finest level without
+    /// converging to the precision; zero for a fixed rule.
+    pub unconverged: usize,
 }
 
 /// Evaluate the multi-collinear form of `Σ_i w_i f_i` at every point.
 ///
-/// `rule` samples the sphere for the GGA and meta-GGA rungs; an LDA has
-/// its closed form and ignores it. With `collinear_threshold = Some(θ)`
-/// the points with `|m| ≥ θ ρ` take the locally collinear functional.
+/// `sampling` chooses the rule over spin directions for the GGA and
+/// meta-GGA rungs; an LDA has its closed form and ignores it. With
+/// `collinear_threshold = Some(θ)` the points with `|m| ≥ θ ρ` take the
+/// locally collinear functional. `weights` are the quadrature weights of
+/// the points, which scale the precision of an adaptive rule; `None`
+/// takes them as one.
 ///
 /// # Errors
 ///
 /// Returns [`Error::InvalidArgument`] if the components are invalid (see
 /// [`super::evaluate_functional`]), an input the rung needs is missing or
-/// not finite, the rule is empty or its weights do not sum to one, or the
-/// threshold is not positive, and [`Error::LengthMismatch`] if the arrays
-/// disagree on the number of points.
+/// not finite, a fixed rule is empty or its weights do not sum to one, an
+/// adaptive precision is not positive or its level exceeds [`MAX_LEVEL`],
+/// or the threshold is not positive, and [`Error::LengthMismatch`] if the
+/// arrays disagree on the number of points.
 pub fn evaluate_noncollinear(
     components: &[(String, f64)],
     input: &NoncollinearInput<'_>,
-    rule: &SphereRule<'_>,
+    sampling: Sampling<'_>,
     collinear_threshold: Option<f64>,
+    weights: Option<&[f64]>,
 ) -> Result<NoncollinearValues, Error> {
     let (ids, rung) = combination(components)?;
     let n = input.rho.len();
     check_input(input.rho, n, "densities")?;
     check_input(input.m, 3 * n, "magnetizations")?;
+    if let Some(weights) = weights {
+        check_input(weights, n, "point weights")?;
+    }
     if rung != Rung::Lda {
         check_input(input.grad_rho, 3 * n, "density gradients")?;
         check_input(input.grad_m, 9 * n, "magnetization gradients")?;
-        check_rule(rule)?;
+        match sampling {
+            Sampling::Fixed(rule) => check_rule(&rule)?,
+            Sampling::Adaptive {
+                precision,
+                max_level,
+            } => {
+                if !(precision.is_finite() && precision > 0.0) {
+                    return Err(Error::InvalidArgument(
+                        "the precision of the sphere is a positive number".to_string(),
+                    ));
+                }
+                if max_level > MAX_LEVEL {
+                    return Err(Error::InvalidArgument(format!(
+                        "the sphere is refined to level {MAX_LEVEL} at most"
+                    )));
+                }
+            }
+        }
     }
     if rung == Rung::MetaGga {
         check_input(input.tau, n, "kinetic energy densities")?;
@@ -155,13 +219,101 @@ pub fn evaluate_noncollinear(
                 (start..end)
                     .map(|g| {
                         let point = Point::at(input, rung, n, g);
-                        point.evaluate(functional, rung, rule, collinear_threshold)
+                        let weight = weights.map_or(1.0, |weights| weights[g]);
+                        point.evaluate(functional, rung, sampling, collinear_threshold, weight)
                     })
                     .collect::<Result<Vec<_>, _>>()
             },
         )
         .collect::<Result<_, _>>()?;
     Ok(assemble(chunks, n, rung))
+}
+
+/// Nodes and weights of the Gauss–Legendre rule with `n` points on `[−1, 1]`.
+#[expect(clippy::cast_precision_loss, reason = "small counts")]
+fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
+    let mut nodes = Vec::with_capacity(n);
+    let mut weights = Vec::with_capacity(n);
+    for k in 0..n {
+        let mut x = (PI * (k as f64 + 0.75) / (n as f64 + 0.5)).cos();
+        let mut derivative = 0.0;
+        for _ in 0..100 {
+            let (mut p0, mut p1) = (1.0, x);
+            for degree in 2..=n {
+                let d = degree as f64;
+                let p2 = ((2.0 * d - 1.0) * x * p1 - (d - 1.0) * p0) / d;
+                p0 = p1;
+                p1 = p2;
+            }
+            derivative = n as f64 * (x * p1 - p0) / (x * x - 1.0);
+            let step = p1 / derivative;
+            x -= step;
+            if step.abs() < 1e-15 {
+                break;
+            }
+        }
+        nodes.push(x);
+        weights.push(2.0 / ((1.0 - x * x) * derivative * derivative));
+    }
+    (nodes, weights)
+}
+
+/// The Gauss–Legendre rules of every level, built once.
+fn gauss_legendre_level(level: usize) -> &'static (Vec<f64>, Vec<f64>) {
+    static TABLE: OnceLock<Vec<(Vec<f64>, Vec<f64>)>> = OnceLock::new();
+    &TABLE.get_or_init(|| {
+        (0..=MAX_LEVEL)
+            .map(|level| gauss_legendre(BASE_DIRECTIONS << level))
+            .collect()
+    })[level]
+}
+
+/// The aligned product rule of `level` about `axis`: Gauss–Legendre in the
+/// cosine of the angle to the axis, uniform in the azimuth about it.
+fn aligned_rule(axis: [f64; 3], level: usize) -> (Vec<f64>, Vec<f64>) {
+    let (nodes, node_weights) = gauss_legendre_level(level);
+    let count = BASE_DIRECTIONS << level;
+    let (first, second) = transverse(axis);
+    let mut directions = Vec::with_capacity(3 * count * count);
+    let mut weights = Vec::with_capacity(count * count);
+    #[expect(clippy::cast_precision_loss, reason = "small counts")]
+    let azimuth = |k: usize| 2.0 * PI * k as f64 / count as f64;
+    #[expect(clippy::cast_precision_loss, reason = "small counts")]
+    let share = 0.5 / count as f64;
+    for (u, wu) in nodes.iter().zip(node_weights) {
+        let sine = (1.0 - u * u).max(0.0).sqrt();
+        for k in 0..count {
+            let (cos, sin) = (azimuth(k).cos(), azimuth(k).sin());
+            for i in 0..3 {
+                directions.push(axis[i] * u + sine * (first[i] * cos + second[i] * sin));
+            }
+            weights.push(wu * share);
+        }
+    }
+    (directions, weights)
+}
+
+/// Two unit vectors completing `axis` to a right-handed frame.
+fn transverse(axis: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+    let least = (0..3)
+        .min_by(|a, b| axis[*a].abs().total_cmp(&axis[*b].abs()))
+        .unwrap_or(2);
+    let mut first = [0.0; 3];
+    first[least] = 1.0;
+    let along = dot(first, axis);
+    for i in 0..3 {
+        first[i] -= along * axis[i];
+    }
+    let length = norm(first);
+    for value in &mut first {
+        *value /= length;
+    }
+    let second = [
+        axis[1] * first[2] - axis[2] * first[1],
+        axis[2] * first[0] - axis[0] * first[2],
+        axis[0] * first[1] - axis[1] * first[0],
+    ];
+    (first, second)
 }
 
 fn check_rule(rule: &SphereRule<'_>) -> Result<(), Error> {
@@ -204,6 +356,28 @@ struct Potential {
     v_m: [f64; 3],
     v_grad_m: [[f64; 3]; 3],
     v_tau_m: [f64; 3],
+    /// Whether an adaptive rule failed to converge at this point.
+    unconverged: bool,
+}
+
+impl Potential {
+    /// The change of the energy density and of the first-order energy
+    /// response `Σ_x |∂f/∂x| |x|` from `other` to `self`, both as energies.
+    fn change(&self, other: &Self, point: &Point) -> (f64, f64) {
+        let energy = (self.energy - other.energy).abs();
+        let mut response = (self.v_rho - other.v_rho).abs() * point.rho.abs()
+            + (self.v_tau - other.v_tau).abs() * point.tau.abs();
+        for a in 0..3 {
+            response += (self.v_m[a] - other.v_m[a]).abs() * point.m[a].abs()
+                + (self.v_grad_rho[a] - other.v_grad_rho[a]).abs() * point.grad_rho[a].abs()
+                + (self.v_tau_m[a] - other.v_tau_m[a]).abs() * point.tau_m[a].abs();
+            for i in 0..3 {
+                response +=
+                    (self.v_grad_m[a][i] - other.v_grad_m[a][i]).abs() * point.grad_m[a][i].abs();
+            }
+        }
+        (energy, response)
+    }
 }
 
 /// The spin variables projected onto one direction: `s = n·m`,
@@ -268,6 +442,17 @@ fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
+/// `(a + b)/2`: a total variable from the spin densities, or the
+/// derivative with respect to it.
+fn half_sum(a: f64, b: f64) -> f64 {
+    f64::midpoint(a, b)
+}
+
+/// `(a − b)/2`: a spin variable, or the derivative with respect to it.
+fn half_difference(a: f64, b: f64) -> f64 {
+    0.5 * (a - b)
+}
+
 impl Point {
     fn at(input: &NoncollinearInput<'_>, rung: Rung, n: usize, g: usize) -> Self {
         let mut point = Self {
@@ -327,8 +512,8 @@ impl Point {
 
     fn project(&self, n: [f64; 3]) -> Projection {
         let mut gs = [0.0; 3];
-        for i in 0..3 {
-            gs[i] = n[0] * self.grad_m[0][i] + n[1] * self.grad_m[1][i] + n[2] * self.grad_m[2][i];
+        for (i, value) in gs.iter_mut().enumerate() {
+            *value = n[0] * self.grad_m[0][i] + n[1] * self.grad_m[1][i] + n[2] * self.grad_m[2][i];
         }
         Projection {
             s: dot(n, self.m),
@@ -339,14 +524,14 @@ impl Point {
 
     fn collinear(&self, projection: &Projection) -> Collinear {
         let mut grad = [[0.0; 3]; 2];
-        for i in 0..3 {
-            grad[0][i] = 0.5 * (self.grad_rho[i] + projection.gs[i]);
-            grad[1][i] = 0.5 * (self.grad_rho[i] - projection.gs[i]);
+        for (i, (&total, &spin)) in self.grad_rho.iter().zip(&projection.gs).enumerate() {
+            grad[0][i] = half_sum(total, spin);
+            grad[1][i] = half_difference(total, spin);
         }
         Collinear {
             rho: [
-                0.5 * (self.rho + projection.s),
-                0.5 * (self.rho - projection.s),
+                half_sum(self.rho, projection.s),
+                half_difference(self.rho, projection.s),
             ],
             grad,
             sigma: [
@@ -355,8 +540,8 @@ impl Point {
                 dot(grad[1], grad[1]),
             ],
             tau: [
-                0.5 * (self.tau + projection.ts),
-                0.5 * (self.tau - projection.ts),
+                half_sum(self.tau, projection.ts),
+                half_difference(self.tau, projection.ts),
             ],
         }
     }
@@ -365,8 +550,9 @@ impl Point {
         &self,
         functional: &Functional,
         rung: Rung,
-        rule: &SphereRule<'_>,
+        sampling: Sampling<'_>,
         threshold: Option<f64>,
+        weight: f64,
     ) -> Result<Potential, Error> {
         match self.scheme(rung, threshold) {
             Scheme::Unpolarized => {
@@ -381,8 +567,66 @@ impl Point {
                 })
             }
             Scheme::LocallyCollinear => self.locally_collinear(functional, rung),
-            Scheme::Sphere => self.sphere(functional, rung, rule),
+            Scheme::Sphere => match sampling {
+                Sampling::Fixed(rule) => self.sphere(functional, rung, &rule),
+                Sampling::Adaptive {
+                    precision,
+                    max_level,
+                } => self.adaptive(functional, rung, precision / weight.abs(), max_level),
+            },
         }
+    }
+
+    /// The axis of the aligned rules: the magnetization, or the largest
+    /// spin gradient or spin kinetic energy density at a node of `m`.
+    fn axis(&self) -> [f64; 3] {
+        for candidate in [self.m, self.tau_m]
+            .into_iter()
+            .chain((0..3).map(|i| [self.grad_m[0][i], self.grad_m[1][i], self.grad_m[2][i]]))
+        {
+            let length = norm(candidate);
+            if length > 0.0 {
+                return [
+                    candidate[0] / length,
+                    candidate[1] / length,
+                    candidate[2] / length,
+                ];
+            }
+        }
+        [0.0, 0.0, 1.0]
+    }
+
+    /// Aligned product rules refined until two levels agree to `tolerance`.
+    fn adaptive(
+        &self,
+        functional: &Functional,
+        rung: Rung,
+        tolerance: f64,
+        max_level: usize,
+    ) -> Result<Potential, Error> {
+        let axis = self.axis();
+        let mut previous: Option<Potential> = None;
+        for level in 0..=max_level {
+            let (directions, weights) = aligned_rule(axis, level);
+            let current = self.sphere(
+                functional,
+                rung,
+                &SphereRule {
+                    directions: &directions,
+                    weights: &weights,
+                },
+            )?;
+            if let Some(previous) = previous {
+                let (energy, response) = current.change(&previous, self);
+                if energy <= tolerance && response <= tolerance {
+                    return Ok(current);
+                }
+            }
+            previous = Some(current);
+        }
+        let mut last = previous.unwrap_or_default();
+        last.unconverged = true;
+        Ok(last)
     }
 
     /// First derivatives at a single projection.
@@ -418,17 +662,16 @@ impl Point {
             v_tau: gradient.tt,
             ..Potential::default()
         };
-        for a in 0..3 {
+        for (a, &unit_a) in unit.iter().enumerate() {
             // ∂|m|/∂m_a = m̂_a; ∂(m̂·v)/∂m_a = (v_a − m̂_a m̂·v)/|m|.
-            let mut v_m = gradient.s * unit[a];
+            let mut v_m = gradient.s * unit_a;
             for i in 0..3 {
-                v_m +=
-                    gradient.gs[i] * (self.grad_m[a][i] - unit[a] * projection.gs[i]) / magnitude;
-                potential.v_grad_m[a][i] = gradient.gs[i] * unit[a];
+                v_m += gradient.gs[i] * (self.grad_m[a][i] - unit_a * projection.gs[i]) / magnitude;
+                potential.v_grad_m[a][i] = gradient.gs[i] * unit_a;
             }
-            v_m += gradient.ts * (self.tau_m[a] - unit[a] * projection.ts) / magnitude;
+            v_m += gradient.ts * (self.tau_m[a] - unit_a * projection.ts) / magnitude;
             potential.v_m[a] = v_m;
-            potential.v_tau_m[a] = gradient.ts * unit[a];
+            potential.v_tau_m[a] = gradient.ts * unit_a;
         }
         Ok(potential)
     }
@@ -472,11 +715,11 @@ impl Point {
             for i in 0..3 {
                 potential.v_grad_rho[i] += w * (g.gt[i] + h.gt[i]);
             }
-            for a in 0..3 {
-                potential.v_m[a] += w * n[a] * (2.0 * g.s + h.s);
-                potential.v_tau_m[a] += w * n[a] * (2.0 * g.ts + h.ts);
+            for (a, &n_a) in n.iter().enumerate() {
+                potential.v_m[a] += w * n_a * (2.0 * g.s + h.s);
+                potential.v_tau_m[a] += w * n_a * (2.0 * g.ts + h.ts);
                 for i in 0..3 {
-                    potential.v_grad_m[a][i] += w * n[a] * (2.0 * g.gs[i] + h.gs[i]);
+                    potential.v_grad_m[a][i] += w * n_a * (2.0 * g.gs[i] + h.gs[i]);
                 }
             }
         }
@@ -528,28 +771,28 @@ impl Packed {
 /// respect to a total variable are `(∂_α + ∂_β)/2`, to a spin variable
 /// `(∂_α − ∂_β)/2`.
 fn gradient(result: &XcResult, j: usize, rung: Rung, c: &Collinear) -> Gradient {
-    let va = result.vrho[2 * j];
-    let vb = result.vrho[2 * j + 1];
+    let v_alpha = result.vrho[2 * j];
+    let v_beta = result.vrho[2 * j + 1];
     let mut g = Gradient {
         f: result.exc[j] * (c.rho[0] + c.rho[1]),
-        t: 0.5 * (va + vb),
-        s: 0.5 * (va - vb),
+        t: half_sum(v_alpha, v_beta),
+        s: half_difference(v_alpha, v_beta),
         ..Gradient::default()
     };
     if rung != Rung::Lda {
         let vs = &result.vsigma[3 * j..3 * j + 3];
         for i in 0..3 {
-            let ha = 2.0 * vs[0] * c.grad[0][i] + vs[1] * c.grad[1][i];
-            let hb = 2.0 * vs[2] * c.grad[1][i] + vs[1] * c.grad[0][i];
-            g.gt[i] = 0.5 * (ha + hb);
-            g.gs[i] = 0.5 * (ha - hb);
+            let h_alpha = 2.0 * vs[0] * c.grad[0][i] + vs[1] * c.grad[1][i];
+            let h_beta = 2.0 * vs[2] * c.grad[1][i] + vs[1] * c.grad[0][i];
+            g.gt[i] = half_sum(h_alpha, h_beta);
+            g.gs[i] = half_difference(h_alpha, h_beta);
         }
     }
     if rung == Rung::MetaGga {
-        let ta = result.vtau[2 * j];
-        let tb = result.vtau[2 * j + 1];
-        g.tt = 0.5 * (ta + tb);
-        g.ts = 0.5 * (ta - tb);
+        let t_alpha = result.vtau[2 * j];
+        let t_beta = result.vtau[2 * j + 1];
+        g.tt = half_sum(t_alpha, t_beta);
+        g.ts = half_difference(t_alpha, t_beta);
     }
     g
 }
@@ -564,10 +807,6 @@ fn upper(a: usize, b: usize, size: usize) -> usize {
 /// The second derivatives of `f` at entry `j` applied to the spin variables
 /// of `p`, as the change of the first derivatives along
 /// `δ(ρ_α, ρ_β, ∇ρ_α, ∇ρ_β, τ_α, τ_β) = (s, −s, ∇s, −∇s, τ_s, −τ_s)/2`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the chain rule through libxc's variables is written out once"
-)]
 fn spin_hessian(
     result: &XcResult,
     j: usize,
@@ -575,22 +814,22 @@ fn spin_hessian(
     c: &Collinear,
     p: &Projection,
 ) -> SpinHessian {
-    let d_rho = [0.5 * p.s, -0.5 * p.s];
-    let mut d_grad = [[0.0; 3]; 2];
-    for i in 0..3 {
-        d_grad[0][i] = 0.5 * p.gs[i];
-        d_grad[1][i] = -0.5 * p.gs[i];
+    let delta_rho = [0.5 * p.s, -0.5 * p.s];
+    let mut delta_grad = [[0.0; 3]; 2];
+    for (i, &gs) in p.gs.iter().enumerate() {
+        delta_grad[0][i] = 0.5 * gs;
+        delta_grad[1][i] = -0.5 * gs;
     }
-    let d_tau = [0.5 * p.ts, -0.5 * p.ts];
-    let d_sigma = [
-        2.0 * dot(c.grad[0], d_grad[0]),
-        dot(c.grad[0], d_grad[1]) + dot(c.grad[1], d_grad[0]),
-        2.0 * dot(c.grad[1], d_grad[1]),
+    let delta_tau = [0.5 * p.ts, -0.5 * p.ts];
+    let delta_sigma = [
+        2.0 * dot(c.grad[0], delta_grad[0]),
+        dot(c.grad[0], delta_grad[1]) + dot(c.grad[1], delta_grad[0]),
+        2.0 * dot(c.grad[1], delta_grad[1]),
     ];
     let rr = &result.v2rho2[3 * j..3 * j + 3];
     let mut dv_rho = [
-        rr[0] * d_rho[0] + rr[1] * d_rho[1],
-        rr[1] * d_rho[0] + rr[2] * d_rho[1],
+        rr[0] * delta_rho[0] + rr[1] * delta_rho[1],
+        rr[1] * delta_rho[0] + rr[2] * delta_rho[1],
     ];
     let mut dv_sigma = [0.0; 3];
     let mut dv_tau = [0.0; 2];
@@ -599,11 +838,11 @@ fn spin_hessian(
         let ss = &result.v2sigma2[6 * j..6 * j + 6];
         for k in 0..3 {
             for spin in 0..2 {
-                dv_rho[spin] += rs[3 * spin + k] * d_sigma[k];
-                dv_sigma[k] += rs[3 * spin + k] * d_rho[spin];
+                dv_rho[spin] += rs[3 * spin + k] * delta_sigma[k];
+                dv_sigma[k] += rs[3 * spin + k] * delta_rho[spin];
             }
             for l in 0..3 {
-                dv_sigma[k] += ss[upper(k, l, 3)] * d_sigma[l];
+                dv_sigma[k] += ss[upper(k, l, 3)] * delta_sigma[l];
             }
         }
     }
@@ -613,36 +852,36 @@ fn spin_hessian(
         let tt = &result.v2tau2[3 * j..3 * j + 3];
         for spin in 0..2 {
             for other in 0..2 {
-                dv_rho[spin] += rt[2 * spin + other] * d_tau[other];
-                dv_tau[other] += rt[2 * spin + other] * d_rho[spin];
-                dv_tau[spin] += tt[upper(spin, other, 2)] * d_tau[other];
+                dv_rho[spin] += rt[2 * spin + other] * delta_tau[other];
+                dv_tau[other] += rt[2 * spin + other] * delta_rho[spin];
+                dv_tau[spin] += tt[upper(spin, other, 2)] * delta_tau[other];
             }
             for k in 0..3 {
-                dv_sigma[k] += st[2 * k + spin] * d_tau[spin];
-                dv_tau[spin] += st[2 * k + spin] * d_sigma[k];
+                dv_sigma[k] += st[2 * k + spin] * delta_tau[spin];
+                dv_tau[spin] += st[2 * k + spin] * delta_sigma[k];
             }
         }
     }
     let mut h = SpinHessian {
-        t: 0.5 * (dv_rho[0] + dv_rho[1]),
-        s: 0.5 * (dv_rho[0] - dv_rho[1]),
-        tt: 0.5 * (dv_tau[0] + dv_tau[1]),
-        ts: 0.5 * (dv_tau[0] - dv_tau[1]),
+        t: half_sum(dv_rho[0], dv_rho[1]),
+        s: half_difference(dv_rho[0], dv_rho[1]),
+        tt: half_sum(dv_tau[0], dv_tau[1]),
+        ts: half_difference(dv_tau[0], dv_tau[1]),
         ..SpinHessian::default()
     };
     if rung != Rung::Lda {
         let vs = &result.vsigma[3 * j..3 * j + 3];
-        for i in 0..3 {
-            let dha = 2.0 * dv_sigma[0] * c.grad[0][i]
-                + 2.0 * vs[0] * d_grad[0][i]
+        for (i, (gt, gs)) in h.gt.iter_mut().zip(h.gs.iter_mut()).enumerate() {
+            let dh_alpha = 2.0 * dv_sigma[0] * c.grad[0][i]
+                + 2.0 * vs[0] * delta_grad[0][i]
                 + dv_sigma[1] * c.grad[1][i]
-                + vs[1] * d_grad[1][i];
-            let dhb = 2.0 * dv_sigma[2] * c.grad[1][i]
-                + 2.0 * vs[2] * d_grad[1][i]
+                + vs[1] * delta_grad[1][i];
+            let dh_beta = 2.0 * dv_sigma[2] * c.grad[1][i]
+                + 2.0 * vs[2] * delta_grad[1][i]
                 + dv_sigma[1] * c.grad[0][i]
-                + vs[1] * d_grad[0][i];
-            h.gt[i] = 0.5 * (dha + dhb);
-            h.gs[i] = 0.5 * (dha - dhb);
+                + vs[1] * delta_grad[0][i];
+            *gt = half_sum(dh_alpha, dh_beta);
+            *gs = half_difference(dh_alpha, dh_beta);
         }
     }
     h
@@ -660,8 +899,10 @@ fn assemble(chunks: Vec<Vec<Potential>>, n: usize, rung: Rung) -> NoncollinearVa
         v_grad_m: vec![0.0; if gradients { 9 * n } else { 0 }],
         v_tau: vec![0.0; if kinetic { n } else { 0 }],
         v_tau_m: vec![0.0; if kinetic { 3 * n } else { 0 }],
+        unconverged: 0,
     };
     for (g, potential) in chunks.into_iter().flatten().enumerate() {
+        values.unconverged += usize::from(potential.unconverged);
         values.energy_density[g] = potential.energy;
         values.v_rho[g] = potential.v_rho;
         for a in 0..3 {
@@ -687,8 +928,6 @@ fn assemble(chunks: Vec<Vec<Potential>>, n: usize, rung: Rung) -> NoncollinearVa
 
 #[cfg(test)]
 mod tests {
-    use std::f64::consts::PI;
-
     use super::super::evaluate_functional;
     use super::*;
 
@@ -699,35 +938,8 @@ mod tests {
             .collect()
     }
 
-    /// Nodes and weights of the Gauss–Legendre rule with `n` points on `[−1, 1]`.
-    fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
-        let mut nodes = Vec::with_capacity(n);
-        let mut weights = Vec::with_capacity(n);
-        for k in 0..n {
-            let mut x = (PI * (k as f64 + 0.75) / (n as f64 + 0.5)).cos();
-            let mut derivative = 0.0;
-            for _ in 0..100 {
-                let (mut p0, mut p1) = (1.0, x);
-                for degree in 2..=n {
-                    let d = degree as f64;
-                    let p2 = ((2.0 * d - 1.0) * x * p1 - (d - 1.0) * p0) / d;
-                    p0 = p1;
-                    p1 = p2;
-                }
-                derivative = n as f64 * (x * p1 - p0) / (x * x - 1.0);
-                let step = p1 / derivative;
-                x -= step;
-                if step.abs() < 1e-15 {
-                    break;
-                }
-            }
-            nodes.push(x);
-            weights.push(2.0 / ((1.0 - x * x) * derivative * derivative));
-        }
-        (nodes, weights)
-    }
-
     /// A product rule on the sphere: Gauss–Legendre in `cos θ`, uniform in `φ`.
+    #[expect(clippy::cast_precision_loss, reason = "small counts")]
     fn product_rule(n_theta: usize, n_phi: usize) -> (Vec<f64>, Vec<f64>) {
         let (nodes, node_weights) = gauss_legendre(n_theta);
         let mut directions = Vec::new();
@@ -834,20 +1046,26 @@ mod tests {
         /// The same point as libxc's spin densities for a collinear `m` along `z`.
         fn spin_densities(&self) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
             let s = self.m[2];
-            let rho = vec![0.5 * (self.rho[0] + s), 0.5 * (self.rho[0] - s)];
-            let ga: Vec<f64> = (0..3)
-                .map(|i| 0.5 * (self.grad_rho[i] + self.grad_m[6 + i]))
-                .collect();
-            let gb: Vec<f64> = (0..3)
-                .map(|i| 0.5 * (self.grad_rho[i] - self.grad_m[6 + i]))
-                .collect();
+            let rho = vec![half_sum(self.rho[0], s), half_difference(self.rho[0], s)];
+            let (ga, gb) = self.spin_gradients();
             let dot = |a: &[f64], b: &[f64]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
             let sigma = vec![dot(&ga, &ga), dot(&ga, &gb), dot(&gb, &gb)];
             let tau = vec![
-                0.5 * (self.tau[0] + self.tau_m[2]),
-                0.5 * (self.tau[0] - self.tau_m[2]),
+                half_sum(self.tau[0], self.tau_m[2]),
+                half_difference(self.tau[0], self.tau_m[2]),
             ];
             (rho, sigma, tau)
+        }
+
+        /// The gradients of the spin densities for a collinear `m` along `z`.
+        fn spin_gradients(&self) -> (Vec<f64>, Vec<f64>) {
+            let ga = (0..3)
+                .map(|i| half_sum(self.grad_rho[i], self.grad_m[6 + i]))
+                .collect();
+            let gb = (0..3)
+                .map(|i| half_difference(self.grad_rho[i], self.grad_m[6 + i]))
+                .collect();
+            (ga, gb)
         }
 
         /// All variables as one flat vector, for finite differences.
@@ -884,11 +1102,31 @@ mod tests {
         evaluate_noncollinear(
             &components(names),
             &sample.input(),
-            &SphereRule {
+            Sampling::Fixed(SphereRule {
                 directions: &rule.0,
                 weights: &rule.1,
+            }),
+            threshold,
+            None,
+        )
+        .expect("valid")
+    }
+
+    fn evaluate_adaptive(
+        names: &[&str],
+        sample: &Sample,
+        precision: f64,
+        threshold: Option<f64>,
+    ) -> NoncollinearValues {
+        evaluate_noncollinear(
+            &components(names),
+            &sample.input(),
+            Sampling::Adaptive {
+                precision,
+                max_level: MAX_LEVEL,
             },
             threshold,
+            None,
         )
         .expect("valid")
     }
@@ -937,23 +1175,21 @@ mod tests {
                 .expect("valid");
                 let energy = reference.energy_per_particle[0] * (rho[0] + rho[1]);
                 assert!((values.energy_density[0] - energy).abs() < 1e-12);
-                let (va, vb) = (reference.vrho[0], reference.vrho[1]);
-                assert!((values.v_rho[0] - 0.5 * (va + vb)).abs() < 1e-12);
+                let (v_alpha, v_beta) = (reference.vrho[0], reference.vrho[1]);
+                assert!((values.v_rho[0] - half_sum(v_alpha, v_beta)).abs() < 1e-12);
                 assert!(values.v_m[0].abs() < 1e-12 && values.v_m[1].abs() < 1e-12);
-                assert!((values.v_m[2] - 0.5 * (va - vb)).abs() < 1e-12);
+                assert!((values.v_m[2] - half_difference(v_alpha, v_beta)).abs() < 1e-12);
                 if rung != Rung::Lda {
-                    let ga: Vec<f64> = (0..3)
-                        .map(|i| 0.5 * (sample.grad_rho[i] + sample.grad_m[6 + i]))
-                        .collect();
-                    let gb: Vec<f64> = (0..3)
-                        .map(|i| 0.5 * (sample.grad_rho[i] - sample.grad_m[6 + i]))
-                        .collect();
+                    let (ga, gb) = sample.spin_gradients();
                     let vs = &reference.vsigma;
                     for i in 0..3 {
-                        let ha = 2.0 * vs[0] * ga[i] + vs[1] * gb[i];
-                        let hb = 2.0 * vs[2] * gb[i] + vs[1] * ga[i];
-                        assert!((values.v_grad_rho[i] - 0.5 * (ha + hb)).abs() < 1e-12);
-                        assert!((values.v_grad_m[6 + i] - 0.5 * (ha - hb)).abs() < 1e-12);
+                        let h_alpha = 2.0 * vs[0] * ga[i] + vs[1] * gb[i];
+                        let h_beta = 2.0 * vs[2] * gb[i] + vs[1] * ga[i];
+                        assert!((values.v_grad_rho[i] - half_sum(h_alpha, h_beta)).abs() < 1e-12);
+                        assert!(
+                            (values.v_grad_m[6 + i] - half_difference(h_alpha, h_beta)).abs()
+                                < 1e-12
+                        );
                         assert!(
                             values.v_grad_m[i].abs() < 1e-12
                                 && values.v_grad_m[3 + i].abs() < 1e-12
@@ -961,9 +1197,9 @@ mod tests {
                     }
                 }
                 if rung == Rung::MetaGga {
-                    let (ta, tb) = (reference.vtau[0], reference.vtau[1]);
-                    assert!((values.v_tau[0] - 0.5 * (ta + tb)).abs() < 1e-12);
-                    assert!((values.v_tau_m[2] - 0.5 * (ta - tb)).abs() < 1e-12);
+                    let (t_alpha, t_beta) = (reference.vtau[0], reference.vtau[1]);
+                    assert!((values.v_tau[0] - half_sum(t_alpha, t_beta)).abs() < 1e-12);
+                    assert!((values.v_tau_m[2] - half_difference(t_alpha, t_beta)).abs() < 1e-12);
                 }
             }
         }
@@ -976,14 +1212,14 @@ mod tests {
         let values = evaluate(&["lda_x", "lda_c_pw"], &sample, &rule, None);
         let magnitude = norm([sample.m[0], sample.m[1], sample.m[2]]);
         let rho = [
-            0.5 * (sample.rho[0] + magnitude),
-            0.5 * (sample.rho[0] - magnitude),
+            half_sum(sample.rho[0], magnitude),
+            half_difference(sample.rho[0], magnitude),
         ];
         let reference = evaluate_functional(&components(&["lda_x", "lda_c_pw"]), &rho, &[], &[])
             .expect("valid");
         let energy = reference.energy_per_particle[0] * sample.rho[0];
         assert!((values.energy_density[0] - energy).abs() < 1e-13);
-        let spin = 0.5 * (reference.vrho[0] - reference.vrho[1]);
+        let spin = half_difference(reference.vrho[0], reference.vrho[1]);
         for a in 0..3 {
             assert!((values.v_m[a] - spin * sample.m[a] / magnitude).abs() < 1e-13);
         }
@@ -1038,6 +1274,65 @@ mod tests {
     }
 
     #[test]
+    fn adaptive_rules_reach_the_fixed_result_and_stop_refining() {
+        // A fine fixed product rule stands for the exact integral; the
+        // adaptive rule reaches it to the precision asked for and reports
+        // convergence, and a precision no rule can reach is reported.
+        let fine = product_rule(96, 64);
+        for names in [
+            vec!["gga_x_pbe", "gga_c_pbe"],
+            vec!["mgga_x_tpss", "mgga_c_tpss"],
+        ] {
+            for polarization in [0.3, 0.9] {
+                let sample = Sample::noncollinear(polarization);
+                let exact = evaluate(&names, &sample, &fine, None);
+                let values = evaluate_adaptive(&names, &sample, 1e-11, None);
+                assert_eq!(values.unconverged, 0);
+                assert!(
+                    (values.energy_density[0] - exact.energy_density[0]).abs() < 1e-10,
+                    "{names:?} at {polarization}: {} vs {}",
+                    values.energy_density[0],
+                    exact.energy_density[0]
+                );
+                for (mine, theirs) in values.v_m.iter().zip(&exact.v_m) {
+                    assert!((mine - theirs).abs() < 1e-9);
+                }
+                for (mine, theirs) in values.v_grad_m.iter().zip(&exact.v_grad_m) {
+                    assert!((mine - theirs).abs() < 1e-9);
+                }
+            }
+        }
+        let sample = Sample::noncollinear(0.5);
+        let hopeless = evaluate_noncollinear(
+            &components(&["gga_x_pbe"]),
+            &sample.input(),
+            Sampling::Adaptive {
+                precision: 1e-300,
+                max_level: 1,
+            },
+            None,
+            None,
+        )
+        .expect("valid");
+        assert_eq!(hopeless.unconverged, 1);
+        // The weight scales the tolerance: a point of tiny weight converges at once.
+        let light = evaluate_noncollinear(
+            &components(&["gga_x_pbe"]),
+            &sample.input(),
+            Sampling::Adaptive {
+                precision: 1e-300,
+                max_level: 1,
+            },
+            None,
+            Some(&[1e-300]),
+        )
+        .expect("valid");
+        assert_eq!(light.unconverged, 1);
+        let frame = transverse([0.0, 0.0, 1.0]);
+        assert!((dot(frame.0, frame.1)).abs() < 1e-15 && (norm(frame.1) - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
     fn vanishing_spin_variables_are_evaluated_unpolarized() {
         let rule = product_rule(2, 2);
         let mut sample = Sample::noncollinear(0.0);
@@ -1070,16 +1365,12 @@ mod tests {
         let rule = product_rule(2, 2);
         let sample = Sample::noncollinear(0.5);
         let names = ["gga_x_pbe"];
+        let fixed = Sampling::Fixed(SphereRule {
+            directions: &rule.0,
+            weights: &rule.1,
+        });
         assert!(matches!(
-            evaluate_noncollinear(
-                &components(&names),
-                &sample.input(),
-                &SphereRule {
-                    directions: &rule.0,
-                    weights: &rule.1
-                },
-                Some(0.0)
-            ),
+            evaluate_noncollinear(&components(&names), &sample.input(), fixed, Some(0.0), None),
             Err(Error::InvalidArgument(_))
         ));
         let mut uneven = rule.1.clone();
@@ -1088,10 +1379,11 @@ mod tests {
             evaluate_noncollinear(
                 &components(&names),
                 &sample.input(),
-                &SphereRule {
+                Sampling::Fixed(SphereRule {
                     directions: &rule.0,
                     weights: &uneven
-                },
+                }),
+                None,
                 None
             ),
             Err(Error::InvalidArgument(_))
@@ -1101,14 +1393,31 @@ mod tests {
             ..sample.input()
         };
         assert!(matches!(
+            evaluate_noncollinear(&components(&names), &short, fixed, None, None),
+            Err(Error::LengthMismatch { .. })
+        ));
+        for (precision, max_level) in [(0.0, 2), (1e-10, MAX_LEVEL + 1)] {
+            assert!(matches!(
+                evaluate_noncollinear(
+                    &components(&names),
+                    &sample.input(),
+                    Sampling::Adaptive {
+                        precision,
+                        max_level
+                    },
+                    None,
+                    None
+                ),
+                Err(Error::InvalidArgument(_))
+            ));
+        }
+        assert!(matches!(
             evaluate_noncollinear(
                 &components(&names),
-                &short,
-                &SphereRule {
-                    directions: &rule.0,
-                    weights: &rule.1
-                },
-                None
+                &sample.input(),
+                fixed,
+                None,
+                Some(&[1.0, 2.0])
             ),
             Err(Error::LengthMismatch { .. })
         ));

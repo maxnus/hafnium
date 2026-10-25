@@ -30,6 +30,7 @@ from tests.reference.pyscf_oracle import (
     ewald_reference,
     four_center_reference,
     fourier_transform_reference,
+    gks_reference,
     kdft_reference,
     kscf_reference,
     madelung_reference,
@@ -64,6 +65,7 @@ from tests.reference.test_kscf_reference import AUXILIARY as KSCF_AUXILIARY
 from tests.reference.test_kscf_reference import CELLS as KSCF_CELLS
 from tests.reference.test_kscf_reference import MESHES as KSCF_MESHES
 from tests.reference.test_kscf_reference import STORED_CASES as KSCF_CASES
+from tests.reference.test_noncollinear_reference import STORED_CASES as GKS_CASES
 from tests.reference.test_nuclear_reference import CELLS as NUCLEAR_CELLS
 from tests.reference.test_nuclear_reference import MESHES as NUCLEAR_MESHES
 from tests.reference.test_nuclear_reference import STORED_CASES as NUCLEAR_CASES
@@ -110,6 +112,7 @@ def main() -> None:
     record_molecules()
     record_cells()
     record_kohn_sham()
+    record_generalized_kohn_sham()
     record_periodic_kohn_sham()
 
 
@@ -312,6 +315,28 @@ def record_kohn_sham() -> None:
             {key: np.asarray(value) for key, value in reference.items()},
             method=kind,
             functional=code,
+            charge=molecule.charge,
+            spin=molecule.spin,
+        )
+
+
+def record_generalized_kohn_sham() -> None:
+    """Write the generalized Kohn–Sham cases with PySCF's noncollinear schemes."""
+    for name, basis_name, _, code, collinear in GKS_CASES:
+        molecule = SCF_MOLECULES[name]
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+        reference = gks_reference(molecule, basis, code, collinear=collinear)
+        record(
+            "gks",
+            molecule,
+            name,
+            basis_name,
+            f"dft.GKS with xc={code!r}, collinear={collinear!r}, nlc=0, "
+            "grids.level=3; conv_tol=1e-12, conv_tol_grad=1e-8; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method="gks",
+            functional=code,
+            collinear=collinear,
             charge=molecule.charge,
             spin=molecule.spin,
         )

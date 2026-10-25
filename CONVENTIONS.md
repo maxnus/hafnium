@@ -148,6 +148,14 @@ Spin never appears as an explicit index in method code; it is part of the
   same layout. The exact exchange of a hybrid is `a K + b K_lr(ω)` in
   libxc's range-separation convention `a + b erf(ω r)`, so
   `Functional.exact_exchange` is `a` and `long_range_exchange` is `b`.
+- Noncollinear Kohn–Sham (ADR-0029): the spin-density matrix on the grid
+  is `ρ_στ(r) = Σ_uv φ_v D[vσ, uτ] conj(φ_u)` with the spin blocks of the
+  generalized structure, the density `ρ = ρ_αα + ρ_ββ` and the
+  magnetization `m = tr(σ ρ) = (2 Re ρ_αβ, −2 Im ρ_αβ, ρ_αα − ρ_ββ)` with
+  the Pauli matrices; the gradients and kinetic energy densities follow
+  the same combinations, `grad_m [3, 3, g]` with the spin direction before
+  the spatial one. The potential enters the spinor Fock matrix as
+  `v_ρ + v_m·σ`.
   Basis values on grid points are `[g, component, ao]`, their Bloch sums
   `[kpt, g, component, ao]` complex; the density of a cell on the grid is
   `Σ_k w_k Σ_uv D[v, u](k) conj(φ_u^k) φ_v^k`, the index convention of the

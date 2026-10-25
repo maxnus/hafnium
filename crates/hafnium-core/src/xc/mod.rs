@@ -21,7 +21,8 @@ use crate::Error;
 pub mod noncollinear;
 
 pub use noncollinear::{
-    NoncollinearInput, NoncollinearValues, SPIN_NEGLECT, SphereRule, evaluate_noncollinear,
+    MAX_LEVEL, NoncollinearInput, NoncollinearValues, SPIN_NEGLECT, Sampling, SphereRule,
+    evaluate_noncollinear,
 };
 
 /// Points evaluated per parallel task.

@@ -151,3 +151,15 @@ PERIODIC_LEVEL_TOL = 1e-5
 # point against the molecular term on the same grid: the partition is shared
 # with the images only where the density has decayed.
 MOLECULAR_LIMIT_TOL = 1e-9
+
+# A GGA on the sphere of spin directions is invariant under spin rotations
+# only to the quadrature error of the Lebedev rule of 770 points, which
+# carries the octahedral group alone (ADR-0029); at a polarization of 0.5
+# the error of the energy density stays below this.
+SPIN_ROTATION_QUADRATURE_TOL = 1e-9
+
+# A generalized Kohn–Sham state with a collinear density reproduces the
+# restricted or unrestricted energy: exactly for an LDA, and for a GGA or
+# meta-GGA to the quadrature error of the sphere of spin directions at the
+# points polarized below the collinear threshold (ADR-0029).
+NONCOLLINEAR_LIMIT_TOL = 1e-8

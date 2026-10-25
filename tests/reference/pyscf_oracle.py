@@ -16,6 +16,7 @@ import pytest
 from hafnium.basis import BasisSet
 from hafnium.molecule import AtomicSystem, Cell, Molecule
 from hafnium.symmetry import KPoints
+from hafnium.xc import NoncollinearDensity
 
 pyscf = pytest.importorskip("pyscf")
 gto: Any = pyscf.gto
@@ -705,6 +706,135 @@ def kdft_reference(
         "grid_points": np.asarray(mean_field.grids.coords),
         "grid_weights": np.asarray(mean_field.grids.weights),
     }
+
+
+def gks_reference(
+    molecule: Molecule,
+    basis: BasisSet,
+    functional: str,
+    *,
+    collinear: str = "ncol",
+    collinear_threshold: float | None = 0.99,
+    spin_samples: int = 770,
+) -> dict[str, Any]:
+    """Converged GKS state with PySCF's ``functional`` and noncollinear scheme.
+
+    ``collinear`` is ``"ncol"`` (the locally collinear LDA) or ``"mcol"``
+    (the multi-collinear approach through ``mcfun`` with ``spin_samples``
+    directions and the collinear branch from ``collinear_threshold``, or
+    without it for ``None``); the grid is PySCF's default at level 3 and the
+    VV10 term is off as in :func:`dft_reference`.
+    """
+    dft: Any = pytest.importorskip("pyscf.dft")
+    if collinear == "mcol":
+        pytest.importorskip("mcfun")
+    mol = pyscf_molecule(molecule, basis)
+    mean_field = dft.GKS(mol)
+    mean_field.xc = functional
+    mean_field.nlc = 0
+    mean_field.collinear = collinear
+    mean_field._numint.collinear_thrd = collinear_threshold
+    mean_field.spin_samples = spin_samples
+    mean_field.conv_tol = 1e-12
+    mean_field.conv_tol_grad = 1e-8
+    mean_field.max_cycle = 200
+    energy = float(mean_field.kernel())
+    assert mean_field.converged
+    return {
+        "energy": energy,
+        "mo_energies": np.asarray(mean_field.mo_energy),
+        "mo_occupations": np.asarray(mean_field.mo_occ),
+        "n_grid_nonzero": int(np.count_nonzero(mean_field.grids.weights)),
+    }
+
+
+def gks_potential_reference(
+    molecule: Molecule,
+    basis: BasisSet,
+    functional: str,
+    density: np.ndarray,
+    *,
+    collinear: str = "mcol",
+    collinear_threshold: float | None = None,
+    spin_samples: int = 770,
+) -> dict[str, Any]:
+    """PySCF's exchange–correlation energy and potential of a spinor ``density``.
+
+    ``density`` is ``[2n, 2n]`` with the alpha functions first, as PySCF's
+    GHF lays it out. The term is integrated on PySCF's grid at level 3,
+    whose points and weights are returned without the zero-weight padding
+    so that Hafnium can integrate on the same grid; the noncollinear
+    scheme is as in :func:`gks_reference`.
+    """
+    dft: Any = pytest.importorskip("pyscf.dft")
+    numint2c: Any = pytest.importorskip("pyscf.dft.numint2c")
+    if collinear == "mcol":
+        pytest.importorskip("mcfun")
+    mol = pyscf_molecule(molecule, basis)
+    grids = dft.gen_grid.Grids(mol)
+    grids.level = 3
+    grids.build(sort_grids=False, with_non0tab=False)
+    integrator = numint2c.NumInt2C()
+    integrator.collinear = collinear
+    integrator.collinear_thrd = collinear_threshold
+    integrator.spin_samples = spin_samples
+    electrons, energy, potential = integrator.nr_vxc(
+        mol, grids, functional, np.asarray(density), hermi=1
+    )
+    kept = grids.weights != 0.0
+    return {
+        "energy": float(energy),
+        "electrons": float(np.real(electrons)),
+        "potential": np.asarray(potential),
+        "grid_points": np.asarray(grids.coords[kept]),
+        "grid_weights": np.asarray(grids.weights[kept]),
+    }
+
+
+def noncollinear_functional_reference(
+    functional: str, density: NoncollinearDensity, *, spin_samples: int = 770
+) -> tuple[np.ndarray, tuple[np.ndarray | None, ...]]:
+    """``mcfun``'s multi-collinear energy density and derivatives through libxc.
+
+    The sphere alone is sampled (no collinear branch). Returns the energy
+    density ``[g]`` and ``(v_rho, v_m, v_grad_rho, v_grad_m, v_tau, v_tau_m)``
+    in Hafnium's layouts, ``None`` where the rung does not read a variable.
+    """
+    numint2c: Any = pytest.importorskip("pyscf.dft.numint2c")
+    pytest.importorskip("mcfun")
+    integrator = numint2c.NumInt2C()
+    integrator.collinear = "mcol"
+    integrator.collinear_thrd = None
+    integrator.spin_samples = spin_samples
+    xctype = integrator._xc_type(functional)
+    rho = np.asarray(density.rho)
+    n = rho.shape[0]
+    if xctype == "LDA":
+        rho_tm = np.stack([rho, *np.asarray(density.m)])
+    else:
+        n_var = 5 if xctype == "MGGA" else 4
+        total = np.zeros((n_var, n))
+        spins = np.zeros((3, n_var, n))
+        total[0], total[1:4] = rho, np.asarray(density.grad_rho)
+        spins[:, 0], spins[:, 1:4] = np.asarray(density.m), np.asarray(density.grad_m)
+        if xctype == "MGGA":
+            total[4], spins[:, 4] = np.asarray(density.tau), np.asarray(density.tau_m)
+        rho_tm = np.concatenate([total[None], spins])
+    evaluate = integrator.mcfun_eval_xc_adapter(functional)
+    exc, vxc = evaluate(functional, rho_tm, deriv=1)[:2]
+    energy = np.asarray(exc) * rho
+    vxc = np.asarray(vxc)
+    if xctype == "LDA":
+        return energy, (vxc[0, 0], vxc[1:4, 0], None, None, None, None)
+    kinetic = xctype == "MGGA"
+    return energy, (
+        vxc[0, 0],
+        vxc[1:4, 0],
+        vxc[0, 1:4],
+        vxc[1:4, 1:4],
+        vxc[0, 4] if kinetic else None,
+        vxc[1:4, 4] if kinetic else None,
+    )
 
 
 def grid_reference(

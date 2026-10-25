@@ -1,5 +1,6 @@
 """Functionals: metadata, named combinations and the evaluation on densities."""
 
+import dataclasses
 import math
 
 import numpy as np
@@ -11,11 +12,18 @@ from hafnium.xc import (
     NAMED_FUNCTIONALS,
     DensityOnGrid,
     Functional,
+    NoncollinearDensity,
+    NoncollinearOptions,
     Rung,
     component_info,
     evaluate_functional,
+    evaluate_noncollinear,
 )
-from tests.tolerances import FINITE_DIFFERENCE_TOL, STRUCTURE_TOL
+from tests.tolerances import (
+    FINITE_DIFFERENCE_TOL,
+    SPIN_ROTATION_QUADRATURE_TOL,
+    STRUCTURE_TOL,
+)
 
 FINITE_DIFFERENCE_STEP = 1e-4
 """Relative step of the central differences in every variable."""
@@ -186,3 +194,264 @@ def test_evaluation_requires_the_inputs_of_the_rung() -> None:
     with pytest.raises(InputError, match="2, g"):
         DensityOnGrid(np.zeros((2, 4)), np.zeros((3, 4)), np.zeros((3, 4)))
     assert density.n_points == 4
+
+
+# ---------------------------------------------------------------- noncollinear
+
+NONCOLLINEAR_STEP = 1e-6
+"""Relative step of the central differences in the multi-collinear variables."""
+
+
+def noncollinear_at(
+    points: Array, *, polarization: float, twist: float
+) -> NoncollinearDensity:
+    """Spin densities of ``points`` as a noncollinear density.
+
+    The alpha and beta quantities of every row are scaled to the
+    ``polarization`` ``|m|/ρ`` and laid along a direction that differs per
+    point; ``twist`` adds spin components of ``m``, ``∇m`` and ``τ_m`` that
+    are not parallel to each other.
+    """
+    n = int(points.shape[0])
+    rho = points[:, 0] + points[:, 1]
+    s = polarization * rho
+    axes = np.asarray(
+        [[0.3, -0.5, 0.4], [0.0, 0.0, 1.0], [-0.6, 0.1, 0.2], [0.5, 0.5, 0.1]],
+        dtype=np.float64,
+    )[:n]
+    axes = axes / np.linalg.norm(axes, axis=1)[:, None]
+    others: Array = np.asarray(
+        [[0.8, 0.6, 0.15], [1.0, 0.0, 0.0], [0.2, 0.9, -0.3], [-0.4, 0.7, 0.6]],
+        dtype=np.float64,
+    )[:n]
+    along: Array = np.einsum("ga,ga->g", others, axes)
+    others = others - along[:, None] * axes
+    others = others / np.linalg.norm(others, axis=1)[:, None]
+    grad_rho = np.stack(
+        [
+            0.4 * np.sqrt(points[:, 2]),
+            -0.2 * np.sqrt(points[:, 3]),
+            0.3 * np.sqrt(points[:, 4]),
+        ]
+    )
+    grad_s = polarization * grad_rho * np.asarray([[0.9], [0.7], [1.1]])
+    tau = points[:, 5] + points[:, 6]
+    tau_s = polarization * tau * 0.8
+    directions: Array = axes + twist * 0.1 * others
+    directions = directions / np.linalg.norm(directions, axis=1)[:, None]
+    m: Array = s * directions.T
+    grad_m: Array = np.einsum("ga,ig->aig", axes, grad_s) + twist * 0.05 * np.einsum(
+        "ga,ig->aig", others, grad_rho
+    )
+    tau_m: Array = tau_s * axes.T + twist * 0.1 * tau * others.T
+    return NoncollinearDensity(rho, m, grad_rho, grad_m, tau, tau_m)
+
+
+def collinear_of(density: NoncollinearDensity) -> DensityOnGrid:
+    """The same density as collinear spin densities, ``m`` taken along its axis."""
+    s = np.linalg.norm(density.m, axis=0)
+    unit = density.m / s
+    assert density.grad_rho is not None
+    assert density.grad_m is not None
+    assert density.tau is not None
+    assert density.tau_m is not None
+    grad_s: Array = np.einsum("ag,aig->ig", unit, density.grad_m)
+    grad_alpha: Array = 0.5 * (density.grad_rho + grad_s)
+    grad_beta: Array = 0.5 * (density.grad_rho - grad_s)
+    tau_s: Array = np.einsum("ag,ag->g", unit, density.tau_m)
+    return DensityOnGrid(
+        np.stack([0.5 * (density.rho + s), 0.5 * (density.rho - s)]),
+        np.stack(
+            [
+                np.sum(grad_alpha * grad_alpha, axis=0),
+                np.sum(grad_alpha * grad_beta, axis=0),
+                np.sum(grad_beta * grad_beta, axis=0),
+            ]
+        ),
+        np.stack([0.5 * (density.tau + tau_s), 0.5 * (density.tau - tau_s)]),
+    )
+
+
+@pytest.mark.parametrize("name", ["svwn", "pbe", "tpss"])
+def test_collinear_densities_recover_the_spin_polarized_functional(name: str) -> None:
+    """Spin variables along one axis per point reduce the sphere to the collinear form.
+
+    An LDA is exact by its closed form; a GGA or meta-GGA at moderate
+    polarization by the quadrature, whose error is far below rounding
+    there, and at strong polarization by the collinear branch.
+    """
+    functional = Functional.named(name)
+    for polarization, options in [
+        (0.4, NoncollinearOptions()),
+        (0.995, NoncollinearOptions(collinear_threshold=0.99)),
+    ]:
+        density = noncollinear_at(POINTS, polarization=polarization, twist=0.0)
+        values = evaluate_noncollinear(functional, density, options)
+        reference = evaluate_functional(functional, collinear_of(density))
+        rho = collinear_of(density).rho
+        np.testing.assert_allclose(
+            values.energy_density,
+            (rho[0] + rho[1]) * reference.energy_per_particle,
+            atol=STRUCTURE_TOL,
+        )
+        np.testing.assert_allclose(
+            values.v_rho,
+            0.5 * (reference.vrho[0] + reference.vrho[1]),
+            atol=STRUCTURE_TOL,
+        )
+        unit = density.m / np.linalg.norm(density.m, axis=0)
+        np.testing.assert_allclose(
+            values.v_m,
+            0.5 * (reference.vrho[0] - reference.vrho[1]) * unit,
+            atol=STRUCTURE_TOL,
+        )
+        assert (values.v_grad_rho is None) is (name == "svwn")
+        assert (values.v_tau is None) is (name != "tpss")
+        if values.v_tau is not None and reference.vtau is not None:
+            np.testing.assert_allclose(
+                values.v_tau,
+                0.5 * (reference.vtau[0] + reference.vtau[1]),
+                atol=STRUCTURE_TOL,
+            )
+
+
+@pytest.mark.parametrize("name", ["svwn", "pbe", "tpss"])
+@pytest.mark.parametrize("threshold", [None, 0.3])
+def test_noncollinear_derivatives_match_finite_differences(
+    name: str, threshold: float | None
+) -> None:
+    """On the sphere, and in the collinear branch when the threshold lies below.
+
+    The spin variables are twisted out of each other's directions, so the
+    rotation of the local axis with ``m`` enters the derivatives of the
+    collinear branch.
+    """
+    functional = Functional.named(name)
+    options = NoncollinearOptions(lebedev_points=110, collinear_threshold=threshold)
+    density = noncollinear_at(POINTS, polarization=0.5, twist=1.0)
+    values = evaluate_noncollinear(functional, density, options)
+    fields = [
+        ("rho", values.v_rho),
+        ("m", values.v_m),
+        ("grad_rho", values.v_grad_rho),
+        ("grad_m", values.v_grad_m),
+        ("tau", values.v_tau),
+        ("tau_m", values.v_tau_m),
+    ]
+    for field, derivative in fields:
+        if derivative is None:
+            continue
+        array = getattr(density, field)
+        for index in np.ndindex(*array.shape[:-1]):
+            step = NONCOLLINEAR_STEP * np.maximum(np.abs(array[index]), 0.1)
+            up = dataclasses.replace(density, **{field: array.copy()})
+            down = dataclasses.replace(density, **{field: array.copy()})
+            getattr(up, field)[index] += step
+            getattr(down, field)[index] -= step
+            difference = (
+                evaluate_noncollinear(functional, up, options).energy_density
+                - evaluate_noncollinear(functional, down, options).energy_density
+            ) / (2 * step)
+            np.testing.assert_allclose(
+                difference,
+                derivative[index],
+                rtol=FINITE_DIFFERENCE_TOL,
+                atol=FINITE_DIFFERENCE_TOL,
+            )
+
+
+def test_lda_is_invariant_under_spin_rotations_and_the_sphere_nearly_so() -> None:
+    """A rotation in spin space leaves the energy density unchanged.
+
+    Exactly for an LDA, whose closed form depends on ``|m|`` alone; a GGA
+    on the sphere only to the quadrature error of the rule, which carries
+    the octahedral group alone.
+    """
+    density = noncollinear_at(POINTS, polarization=0.5, twist=1.0)
+    angle = 0.7
+    rotation = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    ) @ np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, np.cos(0.4), -np.sin(0.4)],
+            [0.0, np.sin(0.4), np.cos(0.4)],
+        ]
+    )
+    assert density.grad_m is not None
+    assert density.tau_m is not None
+    rotated = dataclasses.replace(
+        density,
+        m=rotation @ density.m,
+        grad_m=np.einsum("ab,big->aig", rotation, density.grad_m),
+        tau_m=rotation @ density.tau_m,
+    )
+    for name, tolerance in [
+        ("svwn", STRUCTURE_TOL),
+        ("pbe", SPIN_ROTATION_QUADRATURE_TOL),
+    ]:
+        functional = Functional.named(name)
+        before = evaluate_noncollinear(functional, density)
+        after = evaluate_noncollinear(functional, rotated)
+        np.testing.assert_allclose(
+            after.energy_density, before.energy_density, atol=tolerance
+        )
+        np.testing.assert_allclose(after.v_rho, before.v_rho, atol=tolerance)
+        np.testing.assert_allclose(after.v_m, rotation @ before.v_m, atol=tolerance)
+
+
+def test_vanishing_spin_variables_and_inputs_are_validated() -> None:
+    density = noncollinear_at(POINTS, polarization=0.0, twist=0.0)
+    functional = Functional.named("pbe")
+    values = evaluate_noncollinear(functional, density)
+    reference = evaluate_functional(functional, collinear_of_zero(density))
+    np.testing.assert_allclose(
+        values.energy_density,
+        density.rho * reference.energy_per_particle,
+        atol=STRUCTURE_TOL,
+    )
+    assert not np.any(values.v_m)
+    assert values.v_grad_m is not None
+    assert not np.any(values.v_grad_m)
+    zeros = evaluate_noncollinear(Functional.named("hf"), density)
+    assert not np.any(zeros.energy_density)
+    assert zeros.v_m.shape == (3, 4)
+    with pytest.raises(InputError, match="gradients"):
+        evaluate_noncollinear(functional, NoncollinearDensity(density.rho, density.m))
+    with pytest.raises(InputError, match="kinetic"):
+        evaluate_noncollinear(
+            Functional.named("tpss"),
+            NoncollinearDensity(
+                density.rho, density.m, density.grad_rho, density.grad_m
+            ),
+        )
+    with pytest.raises(InputError, match="magnetization has shape"):
+        NoncollinearDensity(density.rho, np.zeros((2, 4)))
+    with pytest.raises(InputError, match="come together"):
+        NoncollinearDensity(density.rho, density.m, density.grad_rho)
+    with pytest.raises(InputError, match="Lebedev"):
+        NoncollinearOptions(lebedev_points=100)
+    with pytest.raises(InputError, match="positive"):
+        NoncollinearOptions(collinear_threshold=0.0)
+    with pytest.raises(InputError, match="positive"):
+        NoncollinearOptions(precision=0.0)
+    with pytest.raises(InputError, match="level"):
+        NoncollinearOptions(max_level=8)
+    with pytest.raises(InputError, match="weights have shape"):
+        evaluate_noncollinear(functional, density, weights=np.ones(3))
+
+
+def collinear_of_zero(density: NoncollinearDensity) -> DensityOnGrid:
+    """The unpolarized spin densities of a density without magnetization."""
+    assert density.grad_rho is not None
+    assert density.tau is not None
+    sigma = 0.25 * np.sum(density.grad_rho * density.grad_rho, axis=0)
+    return DensityOnGrid(
+        np.stack([0.5 * density.rho, 0.5 * density.rho]),
+        np.stack([sigma, sigma, sigma]),
+        np.stack([0.5 * density.tau, 0.5 * density.tau]),
+    )

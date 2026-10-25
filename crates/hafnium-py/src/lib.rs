@@ -682,6 +682,187 @@ fn evaluate_functional<'py>(
     ))
 }
 
+/// Multi-collinear evaluation of `Σ weights[i] names[i]` for a noncollinear
+/// density (ADR-0029): the energy density and the derivatives with respect
+/// to `rho [g]`, `m [3, g]`, `grad_rho [3, g]`, `grad_m [3, 3, g]`,
+/// `tau [g]` and `tau_m [3, g]`, in the layouts of the inputs, the
+/// derivatives of the variables a rung does not read being `None`, and
+/// the number of points whose adaptive rule did not converge. The sphere
+/// is sampled at `directions [k, 3]` with `direction_weights [k]` summing
+/// to one when given, else with rules aligned with the magnetization
+/// refined to `precision` (scaled by `point_weights [g]`) up to
+/// `max_level`; points with `|m| ≥ collinear_threshold · rho` take the
+/// locally collinear functional.
+#[pyfunction]
+#[pyo3(signature = (
+    names, weights, rho, m, grad_rho=None, grad_m=None, tau=None, tau_m=None,
+    directions=None, direction_weights=None, precision=1e-14, max_level=6,
+    collinear_threshold=None, point_weights=None
+))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per density variable and rule part"
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "the binding returns the seven arrays of the kernel"
+)]
+fn evaluate_noncollinear<'py>(
+    py: Python<'py>,
+    names: Vec<String>,
+    weights: PyReadonlyArray1<'py, f64>,
+    rho: PyReadonlyArray1<'py, f64>,
+    m: PyReadonlyArray2<'py, f64>,
+    grad_rho: Option<PyReadonlyArray2<'py, f64>>,
+    grad_m: Option<PyReadonlyArray3<'py, f64>>,
+    tau: Option<PyReadonlyArray1<'py, f64>>,
+    tau_m: Option<PyReadonlyArray2<'py, f64>>,
+    directions: Option<PyReadonlyArray2<'py, f64>>,
+    direction_weights: Option<PyReadonlyArray1<'py, f64>>,
+    precision: f64,
+    max_level: usize,
+    collinear_threshold: Option<f64>,
+    point_weights: Option<PyReadonlyArray1<'py, f64>>,
+) -> PyResult<(
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    Option<Bound<'py, PyArray3<f64>>>,
+    Option<Bound<'py, PyArray1<f64>>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    usize,
+)> {
+    let weights = weights.as_slice()?;
+    if weights.len() != names.len() {
+        return Err(PyValueError::new_err("one weight per functional name"));
+    }
+    let components: Vec<(String, f64)> = names.into_iter().zip(weights.iter().copied()).collect();
+    let n = rho.shape()[0];
+    if m.shape() != [3, n] {
+        return Err(PyValueError::new_err(
+            "the magnetization has shape [3, g] over the points of the density",
+        ));
+    }
+    let grad_m = match grad_m.as_ref() {
+        None => &[][..],
+        Some(array) => {
+            if array.shape() != [3, 3, n] {
+                return Err(PyValueError::new_err(
+                    "magnetization gradients have shape [3, 3, g] over the points of the density",
+                ));
+            }
+            array.as_slice()?
+        }
+    };
+    let tau = match tau.as_ref() {
+        None => &[][..],
+        Some(array) => {
+            if array.shape() != [n] {
+                return Err(PyValueError::new_err(
+                    "kinetic energy densities have shape [g] over the points of the density",
+                ));
+            }
+            array.as_slice()?
+        }
+    };
+    let sampling = sampling_from(
+        directions.as_ref(),
+        direction_weights.as_ref(),
+        precision,
+        max_level,
+    )?;
+    let point_weights = match point_weights.as_ref() {
+        None => None,
+        Some(array) => {
+            if array.shape() != [n] {
+                return Err(PyValueError::new_err(
+                    "point weights have shape [g] over the points of the density",
+                ));
+            }
+            Some(array.as_slice()?)
+        }
+    };
+    let input = xc::NoncollinearInput {
+        rho: rho.as_slice()?,
+        m: m.as_slice()?,
+        grad_rho: to_rows(grad_rho.as_ref(), 3, n, "density gradients")?,
+        grad_m,
+        tau,
+        tau_m: to_rows(tau_m.as_ref(), 3, n, "spin kinetic energy densities")?,
+    };
+    let values = xc::evaluate_noncollinear(
+        &components,
+        &input,
+        sampling,
+        collinear_threshold,
+        point_weights,
+    )
+    .map_err(|error| value_error(&error))?;
+    let rows = |data: Vec<f64>, parts: usize| -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
+        if data.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(data.into_pyarray(py).reshape([parts, n])?))
+        }
+    };
+    let v_grad_m = if values.v_grad_m.is_empty() {
+        None
+    } else {
+        Some(values.v_grad_m.into_pyarray(py).reshape([3, 3, n])?)
+    };
+    let v_tau = if values.v_tau.is_empty() {
+        None
+    } else {
+        Some(values.v_tau.into_pyarray(py))
+    };
+    Ok((
+        values.energy_density.into_pyarray(py),
+        values.v_rho.into_pyarray(py),
+        values.v_m.into_pyarray(py).reshape([3, n])?,
+        rows(values.v_grad_rho, 3)?,
+        v_grad_m,
+        v_tau,
+        rows(values.v_tau_m, 3)?,
+        values.unconverged,
+    ))
+}
+
+/// The sampling of the sphere: a fixed rule when its directions and
+/// weights are given, else the adaptive aligned rules.
+fn sampling_from<'a>(
+    directions: Option<&'a PyReadonlyArray2<'a, f64>>,
+    direction_weights: Option<&'a PyReadonlyArray1<'a, f64>>,
+    precision: f64,
+    max_level: usize,
+) -> PyResult<xc::Sampling<'a>> {
+    match (directions, direction_weights) {
+        (None, None) => Ok(xc::Sampling::Adaptive {
+            precision,
+            max_level,
+        }),
+        (Some(directions), Some(direction_weights)) => {
+            let direction_weights = direction_weights.as_slice()?;
+            if directions.shape() != [direction_weights.len(), 3] {
+                return Err(PyValueError::new_err(
+                    "directions have shape [k, 3] with one weight per direction",
+                ));
+            }
+            Ok(xc::Sampling::Fixed(xc::SphereRule {
+                directions: directions.as_slice()?,
+                weights: direction_weights,
+            }))
+        }
+        _ => Err(PyValueError::new_err(
+            "a fixed rule gives its directions and their weights together",
+        )),
+    }
+}
+
 /// The contiguous data of an optional `[parts, n]` array, empty for `None`.
 fn to_rows<'a>(
     array: Option<&'a PyReadonlyArray2<'a, f64>>,
@@ -805,6 +986,7 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(partition_weights, module)?)?;
     module.add_function(wrap_pyfunction!(functional_info, module)?)?;
     module.add_function(wrap_pyfunction!(evaluate_functional, module)?)?;
+    module.add_function(wrap_pyfunction!(evaluate_noncollinear, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())
 }
