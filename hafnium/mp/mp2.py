@@ -27,7 +27,6 @@ from hafnium.correlated import (
     energy_denominators,
     transform_df_tensor,
 )
-from hafnium.errors import InputError
 from hafnium.integrals import DensityFitting, IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.molecule import Molecule
@@ -103,8 +102,6 @@ def mp2_from_df_tensor(
     ``auxiliary`` holds the irrep sectors of the auxiliary basis when the
     reference is blocked over a point group; see :func:`transform_df_tensor`.
     """
-    if reference.structure.k_axis is not None:
-        raise InputError("MP2 of a cell comes with M8, part two")
     spaces = OrbitalSpaces.from_scf(reference)
     occupied_virtual = transform_df_tensor(
         df_tensor, spaces, Space.OCCUPIED, Space.VIRTUAL, auxiliary=auxiliary

@@ -79,7 +79,9 @@ def transform_df_tensor(
         spaces.axis(ket, conjugated=False),
     )
     tensor_structure = TensorStructure(axes, ring=spaces.ring)
-    adapted = xp.astype(df_tensor, dtype_for(xp, spaces.ring))
+    # The real fitted tensor is not copied: a complex orbital block promotes
+    # the products, and from_blocks casts real blocks of a complex ring.
+    adapted = df_tensor
     if auxiliary is not None:
         salcs = xp.concat(auxiliary.coefficients, axis=1)
         adapted = xp.tensordot(xp.linalg.matrix_transpose(salcs), adapted, axes=1)
@@ -92,6 +94,11 @@ def transform_df_tensor(
         if block.is_stored
     }
     width = len(base.blocks)
+    offsets = (
+        _spin_offsets(axes[0], 1),
+        _spin_offsets(axes[1], width),
+        _spin_offsets(axes[2], width),
+    )
     blocks: dict[Key, Array] = {}
     for key in tensor_structure.stored_keys:
         p_aux, p_bra, p_ket = key
@@ -101,17 +108,27 @@ def transform_df_tensor(
                 "orbital transformation does not provide"
             )
         blocks[key] = dense[p_bra % width][
-            _range(axes[0], p_aux, 1),
-            _range(axes[1], p_bra, width),
-            _range(axes[2], p_ket, width),
+            offsets[0][p_aux],
+            offsets[1][p_bra],
+            offsets[2][p_ket],
         ]
     return BlockTensor.from_blocks(tensor_structure, blocks, xp=xp)
 
 
-def _range(axis: TensorAxis, sector: int, width: int) -> slice:
-    """Columns of ``sector`` among the orbitals of its spin block, sectors in order."""
-    start = sum(axis.sizes[s] for s in range(sector % width, sector, width))
-    return slice(start, start + axis.sizes[sector])
+def _spin_offsets(axis: TensorAxis, width: int) -> tuple[slice, ...]:
+    """Columns of every sector among the orbitals of its spin block.
+
+    The blocks of a structure repeat a spin pattern of ``width`` blocks per
+    irrep sector, and the orbitals of a spin block run over its sectors in
+    order; with ``width`` one the slices are those of the dense axis.
+    """
+    starts = [0] * width
+    slices: list[slice] = []
+    for sector, size in enumerate(axis.sizes):
+        start = starts[sector % width]
+        slices.append(slice(start, start + size))
+        starts[sector % width] = start + size
+    return tuple(slices)
 
 
 def _transform(df_tensor: Array, bra: Array, ket: Array, spin: Spin) -> Array:
@@ -136,11 +153,8 @@ def energy_denominators(
     plus, those of virtual indices with a minus, so that for the axes
     ``[i, j, a, b]`` the result is ``ε_i + ε_j − ε_a − ε_b``.
     """
-    signs = [
-        1.0 if spaces.space_of(axis) is Space.OCCUPIED else -1.0
-        for axis in structure.axes
-    ]
     spaces_of_axes = [spaces.space_of(axis) for axis in structure.axes]
+    signs = [1.0 if space is Space.OCCUPIED else -1.0 for space in spaces_of_axes]
     xp = array_namespace(*spaces.occupied_energies.blocks)
     dtype = dtype_for(xp, structure.ring)
 

@@ -221,6 +221,10 @@ def test_blocks_are_validated_and_filled() -> None:
     with pytest.raises(StructureError, match=r"ring=Ring\.COMPLEX"):
         BlockTensor.from_blocks(structure, {(0, 0): np.zeros((2, 2), dtype=complex)})
     partial = BlockTensor.from_blocks(structure, {(1, 1): np.ones((1, 1))})
+    complex_structure = TensorStructure(structure.axes, ring=Ring.COMPLEX)
+    upcast = BlockTensor.from_blocks(complex_structure, {(1, 1): np.ones((1, 1))})
+    assert upcast.block((1, 1)).dtype == np.complex128
+    assert upcast.block((0, 0)).dtype == np.complex128
     np.testing.assert_array_equal(partial.block((0, 0)), np.zeros((2, 2)))
     assert BlockTensor.zeros(structure).sum() == 0.0
     counted = BlockTensor.from_function(
@@ -266,6 +270,13 @@ def test_contraction_matches_the_dense_einsum(name: str, with_sectors: bool) -> 
     np.testing.assert_allclose(
         folded.to_dense(),
         np.einsum("iajb,jb->ia", expected, field.to_dense()),
+        atol=STRUCTURE_TOL,
+    )
+    # An outer product sums over nothing.
+    outer = contract("ia,jb->iajb", field.conj(), field)
+    np.testing.assert_allclose(
+        outer.to_dense(),
+        np.einsum("ia,jb->iajb", field.to_dense().conj(), field.to_dense()),
         atol=STRUCTURE_TOL,
     )
     # The full contraction is a scalar over every block, derived ones included.

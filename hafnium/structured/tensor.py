@@ -45,6 +45,9 @@ Key: TypeAlias = tuple[int, ...]
 
 Scalar: TypeAlias = int | float | complex
 
+_Charge: TypeAlias = tuple[int, Characters | None]
+"""The signed spin charge of a sector and the characters of its irrep."""
+
 SPIN_CHARGE: dict[Spin, int] = {
     Spin.ALPHA: 1,
     Spin.BETA: -1,
@@ -187,16 +190,7 @@ class TensorStructure:
         axes = tuple(self.axes)
         object.__setattr__(self, "axes", axes)
         object.__setattr__(self, "_partner", _check_axes(axes, self.ring))
-        keys = tuple(
-            key
-            for key in itertools.product(
-                *[
-                    [s for s in range(axis.n_sectors) if axis.sizes[s] > 0]
-                    for axis in axes
-                ]
-            )
-            if self.is_allowed(key)
-        )
+        keys = _allowed_keys(axes)
         stored = tuple(key for key in keys if self.derivation(key)[0] == key)
         object.__setattr__(self, "_keys", keys)
         object.__setattr__(self, "_stored", stored)
@@ -286,6 +280,49 @@ class TensorStructure:
         return f"{self.n_axes}-index tensor over " + (
             ", ".join(names) if names else "no axes"
         )
+
+
+def _allowed_keys(axes: tuple[TensorAxis, ...]) -> tuple[Key, ...]:
+    """Enumerate the keys whose charges cancel, with no empty sector, in order.
+
+    The sectors of the last axis are looked up by the charge the other
+    sectors leave to cancel, so the cost is that of the product over the
+    other axes times the matches rather than of the full product.
+    """
+    if not axes:
+        return ((),)
+    last = axes[-1]
+    by_charge: dict[_Charge, list[int]] = {}
+    for s in range(last.n_sectors):
+        if last.sizes[s] > 0:
+            by_charge.setdefault(_charge(last, s), []).append(s)
+    identity: Characters | None = (
+        None
+        if last.characters(0) is None
+        else tuple([1] * last.structure.irreps.n_operations)
+        if last.structure.irreps is not None
+        else None
+    )
+    keys: list[Key] = []
+    for prefix in itertools.product(
+        *[[s for s in range(axis.n_sectors) if axis.sizes[s] > 0] for axis in axes[:-1]]
+    ):
+        spin, characters = 0, identity
+        for axis, s in zip(axes[:-1], prefix, strict=True):
+            spin_part, row = _charge(axis, s)
+            spin += spin_part
+            if row is not None and characters is not None:
+                characters = product_characters([characters, row])
+        # The last sector cancels the spin charge and, every character being
+        # its own inverse, repeats the characters of the others.
+        keys.extend((*prefix, s) for s in by_charge.get((-spin, characters), []))
+    return tuple(keys)
+
+
+def _charge(axis: TensorAxis, sector: int) -> _Charge:
+    """Return the signed spin charge and the characters of ``sector`` on ``axis``."""
+    spin = axis.spin_charge(sector)
+    return (-spin if axis.conjugated else spin, axis.characters(sector))
 
 
 def _check_axes(axes: tuple[TensorAxis, ...], ring: Ring) -> Partner | None:
@@ -455,7 +492,12 @@ class BlockTensor:
                 f"block {key} vanishes by symmetry or has an empty sector"
             )
         source, conjugate = self.structure.derivation(key)
-        array = self.blocks[self.structure.position(source) or 0]
+        position = self.structure.position(source)
+        if position is None:
+            raise StructureError(
+                f"block {key} derives from {source}, which is not stored"
+            )
+        array = self.blocks[position]
         if not conjugate:
             return array
         xp = array_namespace(array)
@@ -678,9 +720,13 @@ def contract(subscripts: str, first: BlockTensor, second: BlockTensor) -> BlockT
         else Ring.REAL
     )
     structure = TensorStructure(axes, ring=ring)
+    positions = (
+        [letters_first.index(letter) for letter in contracted],
+        [letters_second.index(letter) for letter in contracted],
+    )
     return BlockTensor.from_blocks(
         structure,
-        _accumulate(subscripts, first, second, contracted, sources, structure),
+        _accumulate(subscripts, first, second, positions, sources, structure),
         xp=array_namespace(*first.blocks, *second.blocks)
         if first.blocks or second.blocks
         else None,
@@ -691,16 +737,15 @@ def _accumulate(
     subscripts: str,
     first: BlockTensor,
     second: BlockTensor,
-    contracted: list[str],
+    positions: tuple[list[int], list[int]],
     sources: list[tuple[int, int]],
     structure: TensorStructure,
 ) -> dict[Key, Array]:
-    """Sum the block products of a contraction into the stored result keys."""
-    letters_first, letters_second, _ = _parse_contraction(
-        subscripts, first.n_axes, second.n_axes
-    )
-    positions_first = [letters_first.index(letter) for letter in contracted]
-    positions_second = [letters_second.index(letter) for letter in contracted]
+    """Sum the block products of a contraction into the stored result keys.
+
+    ``positions`` holds the axes of the contracted letters in each operand.
+    """
+    positions_first, positions_second = positions
     by_contracted: dict[Key, list[Key]] = {}
     for key in second.structure.keys:
         by_contracted.setdefault(tuple(key[p] for p in positions_second), []).append(
