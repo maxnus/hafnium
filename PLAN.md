@@ -179,6 +179,7 @@ hafnium/                   Python package
   grid/                  DFT grids (Python orchestration of Rust kernels)
   xc/                    functional registry, libxc binding
   scf/                   SCF driver, hf, ks, guesses, convergence, stability
+  correlated/            orbital spaces, integrals in the orbital basis, shared by mp and cc
   mp/                    DF-MP2
   cc/                    CCSD, (T); generated contraction code + generator
   properties/            dipoles, population analysis, gradients
@@ -332,6 +333,10 @@ whose blocks are labelled by tuples of sectors obeying a conservation rule
 crystal momentum is conserved modulo a reciprocal lattice vector).
 Contraction is an `einsum`-like operation over matching blocks. This is
 the approach of symmetric tensor libraries (TensorKit, Cyclops, Psi4's DPD).
+ADR-0030 fixes the sectors as the blocks of a `BlockStructure`, the
+charges as the spin and the characters of the irrep, the derived blocks
+by the simultaneous partner map of all indices, and the contraction as a
+pairing of conjugated with unconjugated indices.
 
 Coupled-cluster equations are written once in spin-orbital form. The
 collinear structure gives UCCSD (blocks αα, αβ, ββ), the generalized
@@ -1056,7 +1061,17 @@ multi-collinear functional for response theory.
 **M8 Correlated methods.** DF MO transformation, DF-MP2, `BlockTensor`
 with structured einsum over irreps and crystal momentum, equation
 generator, CCSD, (T); k-point MP2 and CCSD from the same code. Exit:
-matches PySCF UCCSD/GCCSD/RCCSD and `pbc` KMP2/KCCSD energies.
+matches PySCF UCCSD/GCCSD/RCCSD and `pbc` KMP2/KCCSD energies. Status:
+part one done 2026-10-28 (ADR-0030): `BlockTensor` over the blocks of a
+`BlockStructure` with the conservation of spin and irrep charges, derived
+blocks by the simultaneous partner map, the dense form and a two-operand
+contraction in einsum notation; the orbital spaces of a converged state,
+the fitted tensor in the orbital basis with the auxiliary basis
+symmetry-adapted, and the orbital energy denominators; DF-MP2 written
+once in spin-orbital form for all eight classes with point-group sectors,
+matching PySCF's DF-MP2 to 1e-11 Hartree. Next: k-point MP2 from the
+same code with the crystal momentum as a charge (part two), then the
+equation generator and CCSD.
 
 **M9 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
 `custom_vjp` from derivative integrals, libxc `custom_jvp`, implicit

@@ -229,6 +229,36 @@ def scf_reference(
     }
 
 
+def mp2_reference(
+    molecule: Molecule, basis: BasisSet, auxiliary: BasisSet, kind: str
+) -> dict[str, float]:
+    """Density-fitted ``kind`` Hartree–Fock and DF-MP2 energies in one auxiliary basis.
+
+    The reference is converged to a gradient of 1e-10, since the
+    second-order energy is first order in the orbital error.
+    """
+    scf: Any = pytest.importorskip("pyscf.scf")
+    dfmp2: Any = pytest.importorskip("pyscf.mp.dfmp2")
+    dfump2: Any = pytest.importorskip("pyscf.mp.dfump2")
+    dfgmp2: Any = pytest.importorskip("pyscf.mp.dfgmp2")
+    mol = pyscf_molecule(molecule, basis)
+    mean_field = {"rhf": scf.RHF, "uhf": scf.UHF, "ghf": scf.GHF}[kind](mol)
+    mean_field = mean_field.density_fit(auxbasis=basis_input(molecule, auxiliary))
+    mean_field.conv_tol = 1e-13
+    mean_field.conv_tol_grad = 1e-10
+    mean_field.max_cycle = 300
+    reference_energy = float(mean_field.kernel())
+    assert mean_field.converged
+    perturbation = {"rhf": dfmp2.DFMP2, "uhf": dfump2.DFUMP2, "ghf": dfgmp2.DFGMP2}[
+        kind
+    ](mean_field)
+    correlation_energy = float(perturbation.kernel()[0])
+    return {
+        "reference_energy": reference_energy,
+        "correlation_energy": correlation_energy,
+    }
+
+
 def padded_lattice_vectors(cell: Cell, vacuum: float) -> np.ndarray:
     """Three lattice vectors ``[3, 3]`` for PySCF, padded orthogonally.
 

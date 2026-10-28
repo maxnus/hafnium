@@ -13,6 +13,10 @@ from hafnium.structured import (
     Ring,
     Spin,
 )
+from hafnium.symmetry import PointGroup
+
+C2V = PointGroup.named("C2v").characters()
+CS = PointGroup.named("Cs").characters()
 
 
 def test_constructors_describe_themselves() -> None:
@@ -100,7 +104,11 @@ def sectors(dimensions: tuple[int, ...]) -> IrrepSectors:
     for dimension in dimensions:
         blocks.append(eye[:, start : start + dimension])
         start += dimension
-    return IrrepSectors("C2v", ("A1", "B1", "B2")[: len(dimensions)], tuple(blocks))
+    labels = ("A1", "B1", "B2")[: len(dimensions)]
+    characters = {"A1": C2V[0], "B1": C2V[2], "B2": C2V[3]}
+    return IrrepSectors(
+        "C2v", labels, tuple(blocks), tuple(characters[label] for label in labels)
+    )
 
 
 def test_irrep_sectors_repeat_the_spin_pattern() -> None:
@@ -140,15 +148,39 @@ def test_irrep_sectors_compare_by_value() -> None:
         sectors((2, 1))
     ) == BlockStructure.restricted().with_irreps(sectors((2, 1)))
     with pytest.raises(StructureError, match="orthogonal"):
-        IrrepSectors("Cs", ("A'", "A''"), (np.ones((2, 1)), np.ones((2, 1))))
+        IrrepSectors("Cs", ("A'", "A''"), (np.ones((2, 1)), np.ones((2, 1))), CS)
     with pytest.raises(StructureError, match="at least one column"):
-        IrrepSectors("Cs", ("A'", "A''"), (np.eye(2), np.zeros((2, 0))))
+        IrrepSectors("Cs", ("A'", "A''"), (np.eye(2), np.zeros((2, 0))), CS)
     with pytest.raises(StructureError, match="every spanned irrep"):
-        IrrepSectors("Cs", ("A'",), (np.eye(3)[:, :2],))
+        IrrepSectors("Cs", ("A'",), (np.eye(3)[:, :2],), CS[:1])
     with pytest.raises(StructureError, match="distinct"):
-        IrrepSectors("Cs", ("A'", "A'"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]))
+        IrrepSectors("Cs", ("A'", "A'"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]), CS)
     with pytest.raises(StructureError, match="labelled"):
         sectors((2, 1)).index("A2")
+
+
+def test_irrep_sectors_know_their_characters() -> None:
+    three = sectors((2, 1, 1))
+    assert three.n_operations == 4
+    assert three.sector_of(C2V[0]) == 0
+    assert three.sector_of(C2V[1]) is None
+    assert three.sector_of(C2V[3]) == 2
+    other = (C2V[0], C2V[1], C2V[2])
+    assert three != IrrepSectors("C2v", three.labels, three.coefficients, other)
+    with pytest.raises(StructureError, match="character rows"):
+        IrrepSectors("Cs", ("A'", "A''"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]), CS[:1])
+    with pytest.raises(StructureError, match="±1"):
+        IrrepSectors(
+            "Cs", ("A'", "A''"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]), ((1, 1), (1, 0))
+        )
+    with pytest.raises(StructureError, match="distinct characters"):
+        IrrepSectors(
+            "Cs", ("A'", "A''"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]), (CS[0], CS[0])
+        )
+    with pytest.raises(StructureError, match="one character per operation"):
+        IrrepSectors(
+            "Cs", ("A'", "A''"), (np.eye(2)[:, :1], np.eye(2)[:, 1:]), ((1, 1), (1,))
+        )
 
 
 def test_irrep_sectors_are_validated() -> None:

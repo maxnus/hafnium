@@ -278,4 +278,22 @@ uses [Semantic Versioning](https://semver.org/).
   term PySCF's energy and potential of a noncollinear density, the
   generalized classes reproduce RKS and UKS to 1e-13 in the collinear
   limit, and `mcfun` joins the development dependencies as a test oracle.
+- Block tensors and DF-MP2 (M8, part one): `BlockTensor` over the blocks
+  of a `BlockStructure`, each axis with a size per sector and a
+  conjugation flag, storing the blocks whose spin charges cancel and
+  whose irrep characters multiply to the totally symmetric irrep, with
+  the blocks of the partner sectors derived by the simultaneous partner
+  map, the dense form, elementwise algebra, permutation and a
+  two-operand `contract` in einsum notation (ADR-0030); `IrrepSectors`
+  carries the characters of its irreps, and a spinor block of a
+  `BlockMatrix` needs an even number of rows only, so orbital
+  coefficients with an odd column count are valid. The `correlated`
+  package splits a converged state into its orbital spaces
+  (`OrbitalSpaces`), brings the fitted tensor to the orbital basis with
+  the auxiliary basis symmetry-adapted (`transform_df_tensor`) and forms
+  the orbital energy denominators (`energy_denominators`); the `mp`
+  package evaluates DF-MP2 in spin-orbital form for every Fukutome class
+  with point-group sectors (`df_mp2`, `mp2_from_df_tensor`, `Mp2Result`
+  with the amplitudes), matching PySCF's density-fitted RMP2, UMP2 and
+  GMP2 to 1e-11 Hartree.
 

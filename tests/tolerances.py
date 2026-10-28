@@ -163,3 +163,7 @@ SPIN_ROTATION_QUADRATURE_TOL = 1e-9
 # meta-GGA to the quadrature error of the sphere of spin directions at the
 # points polarized below the collinear threshold (ADR-0029).
 NONCOLLINEAR_LIMIT_TOL = 1e-8
+# Second-order energies against PySCF and across the Fukutome classes: the
+# correlation energy is first order in the orbital error, so the references
+# are converged to a gradient of 1e-9 on both sides before comparing.
+MP2_ENERGY_TOL = 1e-10

@@ -56,6 +56,7 @@ nav:
       - adr/0027-periodic-kohn-sham-on-local-partition-grids.md
       - adr/0028-folded-phases-and-coulomb-only-fitting.md
       - adr/0029-noncollinear-functionals-by-the-multi-collinear-approach.md
+      - adr/0030-block-tensors-with-a-conservation-rule.md
   - API reference: api.md
 
 markdown_extensions:
