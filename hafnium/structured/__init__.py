@@ -31,7 +31,13 @@ from hafnium.structured.kramers import (
 from hafnium.structured.matrix import BlockMatrix
 from hafnium.structured.sectors import IrrepSectors
 from hafnium.structured.structure import Block, BlockStructure, Partner, Ring, Spin
-from hafnium.structured.tensor import BlockTensor, TensorAxis, TensorStructure, contract
+from hafnium.structured.tensor import (
+    BlockTensor,
+    Symmetry,
+    TensorAxis,
+    TensorStructure,
+    contract,
+)
 from hafnium.structured.vector import BlockVector
 
 __all__ = [
@@ -47,6 +53,7 @@ __all__ = [
     "Partner",
     "Ring",
     "Spin",
+    "Symmetry",
     "TensorAxis",
     "TensorStructure",
     "contract",

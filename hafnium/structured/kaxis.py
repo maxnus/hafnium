@@ -241,11 +241,23 @@ class KAxis:
     operations
         The point operations of the space group on the set (ADR-0024);
         ``None`` reduces the set by time reversal alone.
+    momenta
+        The exact fractional coordinates of every point as integers over
+        the common denominators ``modulus``, ``k_i = momenta[k][i] /
+        modulus[i]``, in ``[0, modulus[i])``, for a uniform mesh: a block
+        tensor conserves the crystal momentum of its indices modulo the
+        modulus (ADR-0031). ``None`` when the set is not a uniform mesh;
+        tensors then cannot be formed over the axis.
+    modulus
+        The denominators of ``momenta``, twice the mesh sizes so that a
+        shift of one half is an integer; given with ``momenta``.
     """
 
     partners: tuple[int, ...]
     weights: tuple[float, ...]
     operations: KPointOperations | None = field(default=None, kw_only=True)
+    momenta: tuple[tuple[int, ...], ...] | None = field(default=None, kw_only=True)
+    modulus: tuple[int, ...] | None = field(default=None, kw_only=True)
     _orbit: tuple[KDerivation, ...] = field(init=False, repr=False, compare=False)
     _full: tuple[KDerivation, ...] = field(init=False, repr=False, compare=False)
 
@@ -283,6 +295,9 @@ class KAxis:
             )
         object.__setattr__(self, "partners", partners)
         object.__setattr__(self, "weights", weights)
+        momenta, modulus = _check_momenta(self.momenta, self.modulus, partners)
+        object.__setattr__(self, "momenta", momenta)
+        object.__setattr__(self, "modulus", modulus)
         object.__setattr__(self, "_orbit", _derivations(images, None))
         object.__setattr__(self, "_full", _derivations(images, partners))
         for table in (self._orbit, self._full):
@@ -297,9 +312,9 @@ class KAxis:
                 )
 
     @classmethod
-    def gamma(cls) -> KAxis:
-        """Build the axis holding the Γ point alone."""
-        return cls((0,), (1.0,))
+    def gamma(cls, dimension: int = 3) -> KAxis:
+        """Build the axis of the Γ point alone, with its momentum in ``dimension``."""
+        return cls((0,), (1.0,), momenta=((0,) * dimension,), modulus=(2,) * dimension)
 
     @property
     def n_kpt(self) -> int:
@@ -393,6 +408,40 @@ class KAxis:
             and self.partners == other.partners
             and self.weights == other.weights
         )
+
+
+def _check_momenta(
+    momenta: tuple[tuple[int, ...], ...] | None,
+    modulus: tuple[int, ...] | None,
+    partners: tuple[int, ...],
+) -> tuple[tuple[tuple[int, ...], ...] | None, tuple[int, ...] | None]:
+    """Normalize the momenta, which label every point and negate across partners."""
+    if (momenta is None) != (modulus is None):
+        raise StructureError("the momenta of a k axis come with their modulus")
+    if momenta is None or modulus is None:
+        return None, None
+    rows = tuple(tuple(int(m) for m in row) for row in momenta)
+    sizes = tuple(int(n) for n in modulus)
+    if len(rows) != len(partners):
+        raise StructureError("a k axis has one momentum per point")
+    if not sizes or any(n < 1 for n in sizes):
+        raise StructureError("the modulus of the momenta is positive")
+    for row in rows:
+        if len(row) != len(sizes) or any(
+            not 0 <= m < n for m, n in zip(row, sizes, strict=True)
+        ):
+            raise StructureError(
+                "every momentum has one coordinate per direction below the modulus"
+            )
+    for k, partner in enumerate(partners):
+        if any(
+            (a + b) % n for a, b, n in zip(rows[k], rows[partner], sizes, strict=True)
+        ):
+            raise StructureError(
+                "the momentum of a time-reversal partner is the negative modulo "
+                "the modulus"
+            )
+    return rows, sizes
 
 
 def _derivations(

@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+
 from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.correlated.orbitals import OrbitalSpaces, Space
 from hafnium.errors import InputError, StructureError
+from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
+from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
 from hafnium.structured import (
     BlockStructure,
     BlockTensor,
     IrrepSectors,
+    Ring,
     Spin,
     TensorAxis,
     TensorStructure,
@@ -18,21 +24,45 @@ from hafnium.structured.validation import dtype_for
 
 
 def auxiliary_axis(n_aux: int, sectors: IrrepSectors | None = None) -> TensorAxis:
-    """Build the tensor axis of the auxiliary functions, unconjugated.
+    """Build the tensor axis of the auxiliary functions of a molecule, conjugated.
 
     With ``sectors``, the irrep sectors of the auxiliary basis, the axis
     runs over the symmetry-adapted auxiliary functions sector by sector;
     without, over the ``n_aux`` functions as one sector. The axis is a
-    spatial, real structure: an auxiliary function carries no spin.
+    spatial, real structure: an auxiliary function carries no spin. It
+    enters conjugated, as the auxiliary function of ``(P|uv)`` does.
     """
     if sectors is None:
-        return TensorAxis(BlockStructure.spatial(), (n_aux,))
+        return TensorAxis(BlockStructure.spatial(), (n_aux,), conjugated=True)
     if sectors.n_functions != n_aux:
         raise InputError(
             f"the auxiliary sectors cover {sectors.n_functions} functions, the "
             f"fitted tensor {n_aux}"
         )
-    return TensorAxis(BlockStructure.spatial().with_irreps(sectors), sectors.dimensions)
+    return TensorAxis(
+        BlockStructure.spatial().with_irreps(sectors),
+        sectors.dimensions,
+        conjugated=True,
+    )
+
+
+def transfer_axis(fitting: PeriodicDensityFitting) -> TensorAxis:
+    """Build the tensor axis of the auxiliary functions of a cell, conjugated.
+
+    The sectors are the momentum transfers of the mesh, each holding the
+    auxiliary functions in the eigenbasis of the metric at that transfer
+    (ADR-0019). The axis is a spatial complex structure over the transfer
+    mesh: the eigenvectors at ``q`` and ``−q`` carry independent phases,
+    so no block derives from another along it. The auxiliary function of
+    ``(P^q | u k1 v k2)`` enters conjugated and carries the transfer
+    ``q = k2 − k1`` of the pair.
+    """
+    structure = BlockStructure.spatial(Ring.COMPLEX).with_k_axis(
+        fitting.transfers.axis()
+    )
+    return TensorAxis(
+        structure, (fitting.n_aux,) * fitting.transfers.n_kpt, conjugated=True
+    )
 
 
 def transform_df_tensor(
@@ -60,6 +90,11 @@ def transform_df_tensor(
         :meth:`hafnium.integrals.DensityFitting.df_tensor`.
     """
     structure = spaces.structure
+    if structure.k_axis is not None:
+        raise InputError(
+            "the orbitals belong to a cell; transform its periodic fitting with "
+            "transform_periodic_fitting"
+        )
     if (structure.irreps is None) != (auxiliary is None):
         raise InputError(
             "a state over irrep sectors needs the auxiliary basis adapted to the "
@@ -86,8 +121,8 @@ def transform_df_tensor(
         salcs = xp.concat(auxiliary.coefficients, axis=1)
         adapted = xp.tensordot(xp.linalg.matrix_transpose(salcs), adapted, axes=1)
     base = structure.sector_structure
-    bra_dense = spaces.coefficients(bra).materialized(orbitals=True)
-    ket_dense = spaces.coefficients(ket).materialized(orbitals=True)
+    bra_dense = spaces.materialized(bra)
+    ket_dense = spaces.materialized(ket)
     dense: dict[int, Array] = {
         index: _transform(adapted, bra_dense[index], ket_dense[index], block.spin)
         for index, block in enumerate(base.blocks)
@@ -112,6 +147,138 @@ def transform_df_tensor(
             offsets[1][p_bra],
             offsets[2][p_ket],
         ]
+    return BlockTensor.from_blocks(tensor_structure, blocks, xp=xp)
+
+
+def transform_periodic_fitting(
+    fitting: PeriodicDensityFitting,
+    spaces: OrbitalSpaces,
+    bra: Space,
+    ket: Space,
+    *,
+    signed: bool = False,
+    threshold: float = DEFAULT_METRIC_THRESHOLD,
+) -> BlockTensor:
+    """Bring the fitted tensor of a cell to the Bloch orbital basis, block by block.
+
+    ``B[P^q, p k1, q k2] = Σ_uv conj(C[u, p](k1)) B[k1, k2, P, u, v] C[v, q](k2)
+    / √N_k`` for the pairs of points whose transfer is ``q``, with ``p``
+    in the ``bra`` space, conjugated, and ``q`` in the ``ket`` space; the
+    factor ``1/√N_k`` puts the orbital-basis integrals in the supercell
+    normalization, so that the correlated equations of the supercell
+    apply as they stand and its energies divide by ``N_k`` per cell
+    (ADR-0031). With ``signed`` the signature of the metric eigenvalues
+    multiplies the auxiliary index, so that the product of a signed and an
+    unsigned tensor, ``Σ_P B conj(B')``, is a fitted integral. The
+    orbitals at a derived point are the time-reversed orbitals of its
+    stored partner, as the tensor's derived blocks assume. To transform
+    one fitting several times, form its tensors once with
+    :func:`fitted_periodic_tensors` and call :func:`transform_fitted_tensors`.
+
+    Parameters
+    ----------
+    fitting
+        The periodic fitting of the cell over the mesh of the state.
+    threshold
+        Eigenvalues of the metric dropped, see
+        :meth:`PeriodicDensityFitting.df_tensor`.
+    """
+    return transform_fitted_tensors(
+        fitted_periodic_tensors(fitting, threshold), spaces, bra, ket, signed=signed
+    )
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class FittedPeriodicTensors:
+    """The fitted tensor of a cell with its signature, formed once.
+
+    Parameters
+    ----------
+    fitting
+        The periodic fitting the tensors come from.
+    df_tensor : Array[kpt, kpt, aux, ao, ao]
+        :meth:`PeriodicDensityFitting.df_tensor`.
+    signature : Array[kpt, kpt, aux]
+        :meth:`PeriodicDensityFitting.signature` at the same threshold.
+    """
+
+    fitting: PeriodicDensityFitting
+    df_tensor: Array
+    signature: Array
+
+
+def fitted_periodic_tensors(
+    fitting: PeriodicDensityFitting, threshold: float = DEFAULT_METRIC_THRESHOLD
+) -> FittedPeriodicTensors:
+    """Form the fitted tensor and the signature of ``fitting`` once."""
+    return FittedPeriodicTensors(
+        fitting,
+        fitting.df_tensor(threshold=threshold),
+        fitting.signature(threshold=threshold),
+    )
+
+
+def transform_fitted_tensors(
+    tensors: FittedPeriodicTensors,
+    spaces: OrbitalSpaces,
+    bra: Space,
+    ket: Space,
+    *,
+    signed: bool = False,
+) -> BlockTensor:
+    """Transform formed tensors of a cell, see :func:`transform_periodic_fitting`."""
+    fitting = tensors.fitting
+    structure = spaces.structure
+    axis = structure.k_axis
+    if axis is None:
+        raise InputError(
+            "the orbitals are molecular; transform the fitted tensor of a molecule "
+            "with transform_df_tensor"
+        )
+    if not axis.same_points(fitting.kpoints.axis()):
+        raise InputError(
+            "the orbitals and the periodic fitting run over different k-point sets"
+        )
+    if fitting.n_ao != spaces.n_ao:
+        raise InputError(
+            f"the fitted tensor covers {fitting.n_ao} atomic orbitals, the orbitals "
+            f"{spaces.n_ao}"
+        )
+    df_tensor, signature = tensors.df_tensor, tensors.signature
+    xp = array_namespace(df_tensor)
+    axes = (
+        transfer_axis(fitting),
+        spaces.axis(bra, conjugated=True),
+        spaces.axis(ket, conjugated=False),
+    )
+    tensor_structure = TensorStructure(axes, ring=Ring.COMPLEX)
+    base = structure.sector_structure
+    bra_dense = spaces.materialized(bra)
+    ket_dense = spaces.materialized(ket)
+    n_kpt = fitting.kpoints.n_kpt
+    scale = 1.0 / math.sqrt(n_kpt)
+    blocks: dict[Key, Array] = {}
+    for key in tensor_structure.stored_keys:
+        transfer, p_bra, p_ket = key
+        spin_bra, k_bra = divmod(p_bra, n_kpt)
+        spin_ket, k_ket = divmod(p_ket, n_kpt)
+        if (
+            spin_bra != spin_ket
+            or int(fitting.transfer_index[k_bra, k_ket]) != transfer
+        ):
+            raise StructureError(
+                "a stored block of the fitted tensor does not match a pair of "
+                "k-points of one spin block"
+            )
+        block = _transform(
+            df_tensor[k_bra, k_ket],
+            bra_dense[spin_bra][k_bra],
+            ket_dense[spin_ket][k_ket],
+            base.blocks[spin_bra].spin,
+        )
+        if signed:
+            block = block * signature[k_bra, k_ket][:, None, None]
+        blocks[key] = block * scale
     return BlockTensor.from_blocks(tensor_structure, blocks, xp=xp)
 
 

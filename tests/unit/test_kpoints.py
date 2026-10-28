@@ -9,6 +9,20 @@ from hafnium.symmetry import KPoints
 from tests.tolerances import STRUCTURE_TOL
 
 
+def test_momenta_are_exact_coordinates_over_twice_the_mesh() -> None:
+    momenta, modulus = KPoints.mesh((2, 3)).momenta()
+    assert modulus == (4, 6)
+    assert momenta == ((0, 0), (0, 2), (0, 4), (2, 0), (2, 2), (2, 4))
+    shifted, modulus = KPoints.monkhorst_pack((2, 2)).momenta()
+    assert modulus == (4, 4)
+    assert shifted == ((1, 1), (1, 3), (3, 1), (3, 3))
+    # The transfers of a shifted mesh are the Γ-centred mesh, with even momenta.
+    transfers, _ = KPoints.monkhorst_pack((2, 2)).momentum_transfers()
+    assert transfers.momenta()[0] == ((0, 0), (0, 2), (2, 0), (2, 2))
+    with pytest.raises(InputError, match="uniform mesh"):
+        KPoints.from_fractional([(0.0,), (0.3,), (0.7,)]).momenta()
+
+
 def test_gamma_centred_mesh_follows_the_convention() -> None:
     mesh = KPoints.mesh((2, 3))
     assert mesh.n_kpt == 6

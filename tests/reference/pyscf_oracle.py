@@ -259,6 +259,38 @@ def mp2_reference(
     }
 
 
+def kmp2_reference(
+    cell: Cell, basis: BasisSet, auxiliary: BasisSet, kpoints: KPoints, kind: str
+) -> dict[str, float]:
+    """Density-fitted ``kind`` (``"krhf"``) k-point HF and MP2 energies per cell.
+
+    PySCF's ``KMP2`` with Gaussian density fitting in the same auxiliary
+    basis; the reference is converged to a gradient of 1e-10, since the
+    second-order energy is first order in the orbital error. PySCF's
+    ``KUMP2`` raises ``NotImplementedError`` and no generalized k-point
+    MP2 exists, so only the restricted class is served.
+    """
+    pbc_scf: Any = pytest.importorskip("pyscf.pbc.scf")
+    kmp2: Any = pytest.importorskip("pyscf.pbc.mp.kmp2")
+    if kind != "krhf":
+        raise ValueError("PySCF implements k-point MP2 for KRHF only")
+    reference = pyscf_cell(cell, basis)
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    mean_field = pbc_scf.KRHF(reference, kpts=kpts).density_fit(
+        auxbasis=basis_input(cell, auxiliary)
+    )
+    mean_field.conv_tol = 1e-13
+    mean_field.conv_tol_grad = 1e-10
+    mean_field.max_cycle = 300
+    reference_energy = float(mean_field.kernel())
+    assert mean_field.converged
+    correlation_energy = float(kmp2.KMP2(mean_field).kernel()[0])
+    return {
+        "reference_energy": reference_energy,
+        "correlation_energy": correlation_energy,
+    }
+
+
 def padded_lattice_vectors(cell: Cell, vacuum: float) -> np.ndarray:
     """Three lattice vectors ``[3, 3]`` for PySCF, padded orthogonally.
 

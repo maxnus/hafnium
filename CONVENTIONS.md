@@ -180,7 +180,17 @@ Spin never appears as an explicit index in method code; it is part of the
   `b`, the index character of the excitation `a†_a a†_b a_j a_i`. A
   contraction sums a conjugated against an unconjugated index, so the
   conjugate of an operand is taken explicitly, and the auxiliary index
-  of the fitted tensor is paired as `Σ_P B[P, i, a] conj(B[P, b, j])`.
+  of the fitted tensor, itself conjugated, is paired as
+  `Σ_P B[P, i, a] conj(B[P, b, j])`. Over a k axis (ADR-0031) a sector is
+  a block at a point of the full set, the points of a block adjacent;
+  the crystal momentum is an integer charge over twice the mesh size per
+  direction, conserved modulo that denominator; the auxiliary index of a
+  cell runs over the momentum transfers and carries the transfer
+  `k2 − k1` of its pair; the fitted tensor enters the orbital basis
+  divided by `√N_k`, the supercell normalization, and correlation
+  energies per cell are those of the supercell divided by `N_k`. The
+  symmetries of the state derive blocks: the spin flip of a restricted
+  state copies, time reversal conjugates and maps every point to `−k`.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
   `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`. Over k-points the tensor lives in
   the eigenbasis of the metric of each momentum transfer and carries the

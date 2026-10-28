@@ -260,13 +260,19 @@ def test_orbital_spaces_reject_what_perturbation_theory_cannot_use(
             Space.VIRTUAL,
             auxiliary=sectors((2, 1)),
         )
-    periodic = BlockStructure.restricted().with_k_axis(KAxis.gamma())
-    with pytest.raises(InputError, match="part two"):
-        OrbitalSpaces(
-            BlockMatrix(periodic, (np.zeros((1, 2, 1)),)),
-            BlockMatrix(periodic, (np.zeros((1, 2, 1)),)),
-            BlockVector(periodic, (np.zeros((1, 1)),)),
-            BlockVector(periodic, (np.zeros((1, 1)),)),
+    # A k axis without the momenta of a uniform mesh gives no tensor axis.
+    periodic = BlockStructure.restricted().with_k_axis(KAxis((0,), (1.0,)))
+    unlabelled = OrbitalSpaces(
+        BlockMatrix(periodic, (np.zeros((1, 2, 1)),)),
+        BlockMatrix(periodic, (np.zeros((1, 2, 1)),)),
+        BlockVector(periodic, (np.zeros((1, 1)),)),
+        BlockVector(periodic, (np.zeros((1, 1)),)),
+    )
+    with pytest.raises(StructureError, match="uniform mesh"):
+        unlabelled.axis(Space.OCCUPIED, conjugated=True)
+    with pytest.raises(InputError, match="transform_periodic_fitting"):
+        transform_df_tensor(
+            np.zeros((3, 2, 2)), unlabelled, Space.OCCUPIED, Space.VIRTUAL
         )
     with pytest.raises(StructureError, match="coefficient column and an energy"):
         OrbitalSpaces(

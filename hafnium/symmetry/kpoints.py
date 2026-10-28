@@ -165,6 +165,36 @@ class KPoints:
         InputError
             If the set is not a uniform mesh with equal weights.
         """
+        return self._mesh()[0]
+
+    def momenta(self) -> tuple[tuple[tuple[int, ...], ...], tuple[int, ...]]:
+        """Return the exact coordinates of a uniform mesh over a common denominator.
+
+        ``(momenta, modulus)`` with ``k_i = momenta[k][i] / modulus[i]``:
+        the denominators are twice the mesh sizes, so that the half shift
+        of a Monkhorst–Pack mesh is an integer, and the differences of two
+        points, the momentum transfers, are even. The block tensors of
+        ADR-0031 conserve these modulo the modulus.
+
+        Raises
+        ------
+        InputError
+            If the set is not a uniform mesh with equal weights.
+        """
+        sizes, shifts, indices = self._mesh()
+        modulus = tuple(2 * n for n in sizes)
+        momenta = tuple(
+            tuple(
+                (2 * m + s) % n for m, s, n in zip(index, shifts, modulus, strict=True)
+            )
+            for index in indices
+        )
+        return momenta, modulus
+
+    def _mesh(
+        self,
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[tuple[int, ...], ...]]:
+        """Return the sizes, the doubled shifts and the integer index of every point."""
         sizes: list[int] = []
         shifts: list[float] = []
         for axis in range(self.dimension):
@@ -178,7 +208,7 @@ class KPoints:
             shifts.append(values[0] * distinct)
         if any(min(abs(s), abs(s - 0.5)) > PARTNER_TOLERANCE for s in shifts):
             raise InputError("the k-point set is not a uniform mesh")
-        indices: set[tuple[int, ...]] = set()
+        indices: list[tuple[int, ...]] = []
         for point in self.fractional:
             index = tuple(
                 round(k * n - s) for k, n, s in zip(point, sizes, shifts, strict=True)
@@ -188,12 +218,13 @@ class KPoints:
                 for k, m, n, s in zip(point, index, sizes, shifts, strict=True)
             ):
                 raise InputError("the k-point set is not a uniform mesh")
-            indices.add(index)
-        if len(indices) != self.n_kpt or math.prod(sizes) != self.n_kpt:
+            indices.append(index)
+        if len(set(indices)) != self.n_kpt or math.prod(sizes) != self.n_kpt:
             raise InputError("the k-point set is not a uniform mesh")
         if any(abs(w - 1.0 / self.n_kpt) > WEIGHT_TOLERANCE for w in self.weights):
             raise InputError("a uniform mesh has equal weights")
-        return tuple(sizes)
+        doubled = tuple(1 if abs(s - 0.5) <= PARTNER_TOLERANCE else 0 for s in shifts)
+        return tuple(sizes), doubled, tuple(indices)
 
     def momentum_transfers(self) -> tuple[KPoints, Array]:
         """Return the differences ``k2 − k1`` of a uniform mesh and their table.
@@ -244,12 +275,25 @@ class KPoints:
         set from :meth:`hafnium.symmetry.SpaceGroupAdaptation.operations`,
         the axis stores the irreducible wedge (ADR-0024).
 
+        A uniform mesh carries its :meth:`momenta` on the axis, which the
+        block tensors of ADR-0031 conserve; another set carries none.
+
         Raises
         ------
         InputError
             If the set is not closed under time reversal.
         """
-        return KAxis(self.time_reversal_partners(), self.weights, operations=operations)
+        try:
+            momenta, modulus = self.momenta()
+        except InputError:
+            momenta, modulus = None, None
+        return KAxis(
+            self.time_reversal_partners(),
+            self.weights,
+            operations=operations,
+            momenta=momenta,
+            modulus=modulus,
+        )
 
     def time_reversal_partners(self) -> tuple[int, ...]:
         """Index of the partner ``(1 − k) mod 1`` of every point.
