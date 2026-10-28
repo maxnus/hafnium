@@ -30,7 +30,7 @@ from hafnium.structured import (
     is_kramers_symmetric,
     time_reverse,
 )
-from hafnium.symmetry import KPoints
+from hafnium.symmetry import KPoints, PointGroup
 from tests.random_matrices import random_hermitian, random_positive_definite
 from tests.tolerances import EIGEN_TOL, STRUCTURE_TOL
 from tests.unit.test_kaxis import SWAP, involution
@@ -585,7 +585,13 @@ def random_sectors(rng: np.random.Generator, n: int) -> IrrepSectors:
     q, _ = np.linalg.qr(rng.standard_normal((n, n)))
     splits = sorted(rng.choice(n - 1, size=min(2, n - 1), replace=False) + 1)
     blocks = tuple(np.ascontiguousarray(part) for part in np.split(q, splits, axis=1))
-    return IrrepSectors("D2", ("A", "B1", "B2")[: len(blocks)], blocks)
+    group = PointGroup.named("D2")
+    return IrrepSectors(
+        "D2",
+        group.labels[: len(blocks)],
+        blocks,
+        group.characters()[: len(blocks)],
+    )
 
 
 def sectored(name: str, n: int, rng: np.random.Generator) -> BlockMatrix:

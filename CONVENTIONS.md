@@ -169,6 +169,18 @@ Spin never appears as an explicit index in method code; it is part of the
   `(uv|wx)` stored as `eri[u, v, w, x]`. Correlated-method code uses
   antisymmetrized physicists' integrals `<pq||rs>` stored as
   `eri_antisym[p, q, r, s]`. The name says which.
+- Block tensors (ADR-0030): every axis of a `BlockTensor` runs over the
+  blocks of a `BlockStructure`, stored and derived, with a size per
+  sector and a flag marking a conjugated (bra) index; a block is stored
+  when the spin charges of its sectors, `+1` alpha, `−1` beta, counted
+  negatively on conjugated axes, sum to zero and the characters of its
+  irreps multiply to the totally symmetric irrep. `(ia|jb)` conjugates
+  `i` and `j`; `<ij||ab>` conjugates `i` and `j`; the amplitudes
+  `t2[i, j, a, b] = <ab||ij> / (ε_i + ε_j − ε_a − ε_b)` conjugate `a` and
+  `b`, the index character of the excitation `a†_a a†_b a_j a_i`. A
+  contraction sums a conjugated against an unconjugated index, so the
+  conjugate of an operand is taken explicitly, and the auxiliary index
+  of the fitted tensor is paired as `Σ_P B[P, i, a] conj(B[P, b, j])`.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
   `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`. Over k-points the tensor lives in
   the eigenbasis of the metric of each momentum transfer and carries the

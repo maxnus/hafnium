@@ -51,7 +51,8 @@ class BlockMatrix:
 
     ``blocks`` holds one array per stored block of ``structure``, in order.
     Spatial and collinear blocks have shape ``[n, m]``; spinor blocks have
-    shape ``[2n, 2m]`` with alpha components first. With a k axis every
+    shape ``[2n, m]`` with alpha components first, ``m = 2n`` for an
+    operator and any count of columns for orbital coefficients. With a k axis every
     block carries a leading axis over the k-points it stores,
     ``[kpt, n, m]`` (ADR-0015). With irrep sectors the blocks of a sector
     act on its SALCs, ``[salc, m]`` with as many rows as the sector has
@@ -86,10 +87,8 @@ class BlockMatrix:
                     else "matrix blocks with a k axis are [kpt, n, m]"
                 )
             check_k_count(self.structure, block, array)
-            if block.spin is Spin.SPINOR and (
-                array.shape[-2] % 2 or array.shape[-1] % 2
-            ):
-                raise StructureError("spinor blocks have even dimensions")
+            if block.spin is Spin.SPINOR and array.shape[-2] % 2:
+                raise StructureError("spinor blocks have an even number of rows")
             check_ring(xp, array, self.structure, block)
         sectors = self.structure.irreps
         for sector in range(self.structure.n_sectors):

@@ -39,6 +39,14 @@ Until then the packages are documented directly.
 
 ::: hafnium.scf
 
+## hafnium.correlated
+
+::: hafnium.correlated
+
+## hafnium.mp
+
+::: hafnium.mp
+
 ## hafnium.backend
 
 ::: hafnium.backend

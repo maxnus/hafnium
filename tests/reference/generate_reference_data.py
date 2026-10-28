@@ -7,8 +7,9 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``four_center_<molecule>_<basis>.json``, ``fourier_<molecule>_<basis>.json``,
 ``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json``,
 ``bloch_<cell>_<basis>.json``, ``nuclear_<cell>_<basis>.json``,
-``fitting_<cell>_<basis>.json``, ``kscf_<cell>_<basis>.json`` and
-``dft_<molecule>_<basis>.json`` with the PySCF values and their provenance.
+``fitting_<cell>_<basis>.json``, ``kscf_<cell>_<basis>.json``,
+``dft_<molecule>_<basis>.json`` and ``mp2_<molecule>_<basis>.json`` with the
+PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from tests.reference.pyscf_oracle import (
     kdft_reference,
     kscf_reference,
     madelung_reference,
+    mp2_reference,
     one_electron_reference,
     periodic_fitted_eri_reference,
     periodic_nuclear_attraction_reference,
@@ -65,6 +67,8 @@ from tests.reference.test_kscf_reference import AUXILIARY as KSCF_AUXILIARY
 from tests.reference.test_kscf_reference import CELLS as KSCF_CELLS
 from tests.reference.test_kscf_reference import MESHES as KSCF_MESHES
 from tests.reference.test_kscf_reference import STORED_CASES as KSCF_CASES
+from tests.reference.test_mp2_reference import AUXILIARY as MP2_AUXILIARY
+from tests.reference.test_mp2_reference import STORED_CASES as MP2_CASES
 from tests.reference.test_noncollinear_reference import STORED_CASES as GKS_CASES
 from tests.reference.test_nuclear_reference import CELLS as NUCLEAR_CELLS
 from tests.reference.test_nuclear_reference import MESHES as NUCLEAR_MESHES
@@ -114,6 +118,7 @@ def main() -> None:
     record_kohn_sham()
     record_generalized_kohn_sham()
     record_periodic_kohn_sham()
+    record_mp2()
 
 
 def record_molecules() -> None:
@@ -370,4 +375,34 @@ def record_periodic_kohn_sham() -> None:
             dimension=cell.dimension,
             lattice_vectors_bohr=[list(vector) for vector in cell.lattice.vectors],
             kpoints_fractional=[list(point) for point in mesh.fractional],
+        )
+
+
+MP2_CLASSES = {
+    "rhf": "mp.dfmp2.DFMP2",
+    "uhf": "mp.dfump2.DFUMP2",
+    "ghf": "mp.dfgmp2.DFGMP2",
+}
+
+
+def record_mp2() -> None:
+    """Write the density-fitted MP2 cases."""
+    for name, basis_name, kind in MP2_CASES:
+        molecule = SCF_MOLECULES[name]
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(molecule, MP2_AUXILIARY, library=LIBRARY)
+        reference = mp2_reference(molecule, basis, auxiliary, kind)
+        record(
+            "mp2",
+            molecule,
+            name,
+            basis_name,
+            f"scf.{kind.upper()}.density_fit with conv_tol=1e-13, "
+            f"conv_tol_grad=1e-10, then {MP2_CLASSES[kind]} in the same auxiliary "
+            "basis; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            auxiliary=MP2_AUXILIARY,
+            charge=molecule.charge,
+            spin=molecule.spin,
         )

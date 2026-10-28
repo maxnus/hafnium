@@ -71,14 +71,17 @@ class SymmetryAdaptation:
 
     def __post_init__(self) -> None:
         spanned = [
-            (label, block)
-            for label, block in zip(self.labels, self.coefficients, strict=True)
+            (label, block, characters)
+            for label, block, characters in zip(
+                self.labels, self.coefficients, self.group.characters(), strict=True
+            )
             if int(block.shape[1]) > 0
         ]
         sectors = IrrepSectors(
             self.group.name,
-            tuple(label for label, _ in spanned),
-            tuple(block for _, block in spanned),
+            tuple(label for label, _, _ in spanned),
+            tuple(block for _, block, _ in spanned),
+            tuple(characters for _, _, characters in spanned),
         )
         object.__setattr__(self, "_sectors", sectors)
 

@@ -12,7 +12,8 @@ coefficients ``C_Γ [salc, mo]`` of a sector are ``U_Γ C_Γ`` in the atomic
 basis. Irreps the basis does not span have no sector.
 
 :class:`IrrepSectors` knows nothing about point groups beyond the name of
-the group and the labels of its irreps. It is built by
+the group, the labels of its irreps and their characters, which fix the
+direct products the block tensors of ADR-0030 conserve. It is built by
 :meth:`hafnium.symmetry.SymmetryAdaptation.irreps`, so that ``symmetry``
 depends on ``structured`` and not the other way round.
 """
@@ -28,13 +29,17 @@ from hafnium.errors import StructureError
 ORTHONORMALITY_TOLERANCE = 1e-10
 """Largest deviation of the SALC coefficients from an orthogonal matrix."""
 
+Characters = tuple[int, ...]
+"""The character ``±1`` of an irrep under every operation of an Abelian group."""
+
 
 @dataclass(frozen=True, slots=True, eq=False)
 class IrrepSectors:
     """The irreps a basis spans, with the SALC coefficients of each.
 
-    Two sector sets are equal when they carry the same group, labels and
-    coefficients, so structures built from equal adaptations compare equal.
+    Two sector sets are equal when they carry the same group, labels,
+    characters and coefficients, so structures built from equal
+    adaptations compare equal.
 
     Parameters
     ----------
@@ -45,17 +50,26 @@ class IrrepSectors:
     coefficients
         One ``[ao, salc]`` array per sector with at least one column; the
         columns of all sectors together form an orthogonal matrix.
+    characters
+        The characters ``±1`` of every sector's irrep under the operations
+        of the group, in one order for all sectors. The characters of a
+        direct product of irreps are the products of the characters, so
+        they decide which blocks of a tensor over the sectors vanish
+        (ADR-0030); the totally symmetric irrep has every character one.
     """
 
     group: str
     labels: tuple[str, ...]
     coefficients: tuple[Array, ...]
+    characters: tuple[Characters, ...]
 
     def __post_init__(self) -> None:
         labels = tuple(str(label) for label in self.labels)
         coefficients = tuple(self.coefficients)
+        characters = tuple(tuple(int(c) for c in row) for row in self.characters)
         object.__setattr__(self, "labels", labels)
         object.__setattr__(self, "coefficients", coefficients)
+        object.__setattr__(self, "characters", characters)
         if not labels:
             raise StructureError("irrep sectors need at least one irrep")
         if len(set(labels)) != len(labels):
@@ -64,6 +78,7 @@ class IrrepSectors:
             raise StructureError(
                 f"{len(labels)} irrep labels need {len(labels)} coefficient arrays"
             )
+        _check_characters(labels, characters)
         xp = array_namespace(*coefficients)
         for label, block in zip(labels, coefficients, strict=True):
             if block.ndim != 2 or int(block.shape[1]) < 1:
@@ -100,6 +115,8 @@ class IrrepSectors:
             return NotImplemented
         if self.group != other.group or self.labels != other.labels:
             return False
+        if self.characters != other.characters:
+            return False
         if self.dimensions != other.dimensions or self.n_functions != other.n_functions:
             return False
         xp = array_namespace(*self.coefficients)
@@ -109,7 +126,7 @@ class IrrepSectors:
         )
 
     def __hash__(self) -> int:
-        return hash((self.group, self.labels, self.dimensions))
+        return hash((self.group, self.labels, self.characters, self.dimensions))
 
     @property
     def n_irreps(self) -> int:
@@ -125,6 +142,21 @@ class IrrepSectors:
     def dimensions(self) -> tuple[int, ...]:
         """Number of SALCs of each sector."""
         return tuple(int(block.shape[1]) for block in self.coefficients)
+
+    @property
+    def n_operations(self) -> int:
+        """Number of operations of the group, the length of a character row."""
+        return len(self.characters[0])
+
+    def sector_of(self, characters: Characters) -> int | None:
+        """Position of the sector whose irrep has ``characters``.
+
+        ``None`` when the basis spans no such irrep.
+        """
+        try:
+            return self.characters.index(tuple(characters))
+        except ValueError:
+            return None
 
     def index(self, label: str) -> int:
         """Position of the sector with Mulliken label ``label``.
@@ -211,3 +243,43 @@ class IrrepSectors:
             basis = self.basis(irrep, spinor=spinor)
             parts.append(xp.linalg.matrix_transpose(basis) @ matrix @ basis)
         return tuple(parts)
+
+
+def _check_characters(
+    labels: tuple[str, ...], characters: tuple[Characters, ...]
+) -> None:
+    """Raise unless ``characters`` is one distinct row of ``±1`` per sector."""
+    if len(characters) != len(labels):
+        raise StructureError(
+            f"{len(labels)} irrep labels need {len(labels)} character rows"
+        )
+    length = len(characters[0])
+    if length < 1 or any(len(row) != length for row in characters):
+        raise StructureError(
+            "every sector carries one character per operation of the group"
+        )
+    if any(c not in (1, -1) for row in characters for c in row):
+        raise StructureError("the characters of an Abelian group are ±1")
+    if len(set(characters)) != len(characters):
+        raise StructureError("the irreps of distinct sectors have distinct characters")
+
+
+def product_characters(rows: Sequence[Characters]) -> Characters:
+    """Return the characters of the direct product of the irreps with ``rows``.
+
+    Characters multiply operation by operation; the empty product is the
+    totally symmetric irrep, every character one.
+    """
+    if not rows:
+        raise StructureError("the product of no irreps needs the group's order")
+    result = [1] * len(rows[0])
+    for row in rows:
+        if len(row) != len(result):
+            raise StructureError("irreps of different groups do not multiply")
+        result = [a * b for a, b in zip(result, row, strict=True)]
+    return tuple(result)
+
+
+def is_totally_symmetric(characters: Characters) -> bool:
+    """Whether ``characters`` are those of the totally symmetric irrep."""
+    return all(c == 1 for c in characters)

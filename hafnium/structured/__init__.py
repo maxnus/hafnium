@@ -13,7 +13,10 @@ The irrep sectors of an Abelian point group, :class:`IrrepSectors`,
 multiply the spin blocks of a molecular structure, each copy acting on
 the SALCs of its irrep (ADR-0023). :class:`BlockStructure` describes that decomposition,
 :class:`BlockMatrix` and :class:`BlockVector` hold data in it, and
-algorithms are written once against their operations.
+algorithms are written once against their operations. Quantities with
+several orbital indices are :class:`BlockTensor` objects over the sectors
+of a structure, whose blocks are selected by the conservation of spin and
+irrep charges and contracted with :func:`contract` (ADR-0030).
 """
 
 from hafnium.structured.density import density_matrix
@@ -28,12 +31,14 @@ from hafnium.structured.kramers import (
 from hafnium.structured.matrix import BlockMatrix
 from hafnium.structured.sectors import IrrepSectors
 from hafnium.structured.structure import Block, BlockStructure, Partner, Ring, Spin
+from hafnium.structured.tensor import BlockTensor, TensorAxis, TensorStructure, contract
 from hafnium.structured.vector import BlockVector
 
 __all__ = [
     "Block",
     "BlockMatrix",
     "BlockStructure",
+    "BlockTensor",
     "BlockVector",
     "IrrepSectors",
     "KAxis",
@@ -42,6 +47,9 @@ __all__ = [
     "Partner",
     "Ring",
     "Spin",
+    "TensorAxis",
+    "TensorStructure",
+    "contract",
     "density_matrix",
     "is_kramers_symmetric",
     "kramers_adapt_eigenvectors",

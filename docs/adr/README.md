@@ -36,3 +36,4 @@ ADR that supersedes it.
 | [0027](0027-periodic-kohn-sham-on-local-partition-grids.md) | Periodic Kohn–Sham integrates on atom-centred grids with a local partition | accepted 2026-10-24 |
 | [0028](0028-folded-phases-and-coulomb-only-fitting.md) | The Bloch three-centre kernel folds both phases, and pure functionals fit the Coulomb term alone | accepted 2026-10-24 |
 | [0029](0029-noncollinear-functionals-by-the-multi-collinear-approach.md) | The generalized classes take the multi-collinear form of a collinear functional | accepted 2026-10-25 |
+| [0030](0030-block-tensors-with-a-conservation-rule.md) | Block tensors conserve spin and irrep charges, and DF-MP2 is written once over them | accepted 2026-10-28 |
