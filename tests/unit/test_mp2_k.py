@@ -8,24 +8,15 @@ import pytest
 from hafnium.basis import BasisSet
 from hafnium.correlated import OrbitalSpaces, Space, transform_periodic_fitting
 from hafnium.errors import InputError, StructureError
-from hafnium.integrals import (
-    PeriodicDensityFitting,
-    density_fitting_k,
-    madelung_constant,
-    overlap_k,
-)
+from hafnium.integrals import PeriodicDensityFitting, density_fitting_k
 from hafnium.molecule import Cell, Molecule
 from hafnium.mp import df_mp2, mp2_from_df_tensor, mp2_from_periodic_fitting
-from hafnium.scf import (
-    Hamiltonian,
-    KPointDensityFittedCoulombExchange,
-    ScfResult,
-    solve_scf,
-)
-from hafnium.structured import BlockVector, Symmetry
+from hafnium.scf import ExactCoulombExchange, Hamiltonian, ScfResult, solve_scf
+from hafnium.structured import BlockMatrix, BlockVector, Symmetry
 from hafnium.symmetry import KPoints, SymmetrySpec
 from tests.cells import box, helium
 from tests.hamiltonians import ENGINE
+from tests.integrals_k import fitting_and_two_body
 from tests.molecules import water
 from tests.shell_tables import LIBRARY
 from tests.tolerances import MP2_ENERGY_TOL, STRUCTURE_TOL
@@ -39,12 +30,7 @@ Setup = tuple[Cell, BasisSet, BasisSet, KPoints, PeriodicDensityFitting, Hamilto
 def setup(cell: Cell, mesh: KPoints, basis_name: str = "cc-pvdz") -> Setup:
     basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
     auxiliary = BasisSet.for_atoms(cell, AUXILIARY, library=LIBRARY)
-    fitting = density_fitting_k(ENGINE, basis, auxiliary, cell, mesh)
-    two_body = KPointDensityFittedCoulombExchange.from_fitting(
-        fitting,
-        overlap_k(ENGINE, basis, cell, mesh),
-        madelung_constant(cell.lattice, mesh),
-    )
+    fitting, two_body = fitting_and_two_body(ENGINE, basis, auxiliary, cell, mesh)
     hamiltonian = Hamiltonian.from_cell(ENGINE, basis, cell, mesh, two_body)
     return cell, basis, auxiliary, mesh, fitting, hamiltonian
 
@@ -231,6 +217,34 @@ def test_periodic_inputs_are_validated(helium_pair: Setup) -> None:
         )
     with pytest.raises(InputError, match="belong to a cell"):
         mp2_from_df_tensor(reference, fitting.df_tensor()[0, 0])
+    molecular = solve_scf(
+        Hamiltonian.from_molecule(
+            ENGINE,
+            molecular_basis,
+            molecule,
+            ExactCoulombExchange.from_molecule(ENGINE, molecular_basis, molecule),
+        ),
+        SymmetrySpec.from_name("RHF"),
+    )
+    with pytest.raises(InputError, match="orbitals are molecular"):
+        mp2_from_periodic_fitting(molecular, fitting)
+
+
+def test_orbitals_at_invariant_points_must_be_real(helium_pair: Setup) -> None:
+    """Two columns at Γ mixed with a complex coefficient are not real up to a phase."""
+    _, _, _, mesh, fitting, hamiltonian = helium_pair
+    reference = solve_scf(hamiltonian, SymmetrySpec.from_name("RHF").with_kpoints(mesh))
+    coefficients = [np.array(block) for block in reference.mo_coefficients.blocks]
+    gamma = coefficients[0][0]
+    first, second = gamma[:, 0].copy(), gamma[:, 1].copy()
+    gamma[:, 0] = (first + 1j * second) / np.sqrt(2)
+    gamma[:, 1] = (first - 1j * second) / np.sqrt(2)
+    mixed = dataclasses.replace(
+        reference,
+        mo_coefficients=BlockMatrix(reference.structure, tuple(coefficients)),
+    )
+    with pytest.raises(InputError, match="not real up to a phase"):
+        OrbitalSpaces.from_scf(mixed)
     # Occupations that differ between the points of a block are a metal.
     occupations = reference.mo_occupations
     changed = [np.array(block) for block in occupations.blocks]

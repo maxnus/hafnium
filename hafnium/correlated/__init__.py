@@ -11,21 +11,27 @@ perturbation theory are block tensors over the same axes
 """
 
 from hafnium.correlated.integrals import (
+    FittedPeriodicTensors,
     auxiliary_axis,
     energy_denominators,
+    fitted_periodic_tensors,
     transfer_axis,
     transform_df_tensor,
+    transform_fitted_tensors,
     transform_periodic_fitting,
 )
 from hafnium.correlated.orbitals import OCCUPATION_TOLERANCE, OrbitalSpaces, Space
 
 __all__ = [
     "OCCUPATION_TOLERANCE",
+    "FittedPeriodicTensors",
     "OrbitalSpaces",
     "Space",
     "auxiliary_axis",
     "energy_denominators",
+    "fitted_periodic_tensors",
     "transfer_axis",
     "transform_df_tensor",
+    "transform_fitted_tensors",
     "transform_periodic_fitting",
 ]

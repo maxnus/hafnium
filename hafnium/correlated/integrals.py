@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.correlated.orbitals import OrbitalSpaces, Space
 from hafnium.errors import InputError, StructureError
+from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
 from hafnium.structured import (
     BlockStructure,
@@ -155,7 +157,7 @@ def transform_periodic_fitting(
     ket: Space,
     *,
     signed: bool = False,
-    threshold: float | None = None,
+    threshold: float = DEFAULT_METRIC_THRESHOLD,
 ) -> BlockTensor:
     """Bring the fitted tensor of a cell to the Bloch orbital basis, block by block.
 
@@ -169,7 +171,9 @@ def transform_periodic_fitting(
     multiplies the auxiliary index, so that the product of a signed and an
     unsigned tensor, ``Σ_P B conj(B')``, is a fitted integral. The
     orbitals at a derived point are the time-reversed orbitals of its
-    stored partner, as the tensor's derived blocks assume.
+    stored partner, as the tensor's derived blocks assume. To transform
+    one fitting several times, form its tensors once with
+    :func:`fitted_periodic_tensors` and call :func:`transform_fitted_tensors`.
 
     Parameters
     ----------
@@ -177,12 +181,61 @@ def transform_periodic_fitting(
         The periodic fitting of the cell over the mesh of the state.
     threshold
         Eigenvalues of the metric dropped, see
-        :meth:`PeriodicDensityFitting.df_tensor`; its default when
-        ``None``.
+        :meth:`PeriodicDensityFitting.df_tensor`.
     """
+    return transform_fitted_tensors(
+        fitted_periodic_tensors(fitting, threshold), spaces, bra, ket, signed=signed
+    )
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class FittedPeriodicTensors:
+    """The fitted tensor of a cell with its signature, formed once.
+
+    Parameters
+    ----------
+    fitting
+        The periodic fitting the tensors come from.
+    df_tensor : Array[kpt, kpt, aux, ao, ao]
+        :meth:`PeriodicDensityFitting.df_tensor`.
+    signature : Array[kpt, kpt, aux]
+        :meth:`PeriodicDensityFitting.signature` at the same threshold.
+    """
+
+    fitting: PeriodicDensityFitting
+    df_tensor: Array
+    signature: Array
+
+
+def fitted_periodic_tensors(
+    fitting: PeriodicDensityFitting, threshold: float = DEFAULT_METRIC_THRESHOLD
+) -> FittedPeriodicTensors:
+    """Form the fitted tensor and the signature of ``fitting`` once."""
+    return FittedPeriodicTensors(
+        fitting,
+        fitting.df_tensor(threshold=threshold),
+        fitting.signature(threshold=threshold),
+    )
+
+
+def transform_fitted_tensors(
+    tensors: FittedPeriodicTensors,
+    spaces: OrbitalSpaces,
+    bra: Space,
+    ket: Space,
+    *,
+    signed: bool = False,
+) -> BlockTensor:
+    """Transform formed tensors of a cell, see :func:`transform_periodic_fitting`."""
+    fitting = tensors.fitting
     structure = spaces.structure
     axis = structure.k_axis
-    if axis is None or not axis.same_points(fitting.kpoints.axis()):
+    if axis is None:
+        raise InputError(
+            "the orbitals are molecular; transform the fitted tensor of a molecule "
+            "with transform_df_tensor"
+        )
+    if not axis.same_points(fitting.kpoints.axis()):
         raise InputError(
             "the orbitals and the periodic fitting run over different k-point sets"
         )
@@ -191,9 +244,7 @@ def transform_periodic_fitting(
             f"the fitted tensor covers {fitting.n_ao} atomic orbitals, the orbitals "
             f"{spaces.n_ao}"
         )
-    options = {} if threshold is None else {"threshold": threshold}
-    df_tensor = fitting.df_tensor(**options)
-    signature = fitting.signature(**options)
+    df_tensor, signature = tensors.df_tensor, tensors.signature
     xp = array_namespace(df_tensor)
     axes = (
         transfer_axis(fitting),

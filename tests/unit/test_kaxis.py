@@ -48,6 +48,25 @@ def test_axis_metadata_follows_the_partner_map() -> None:
     assert KAxis.gamma() == KPoints.gamma().axis()
 
 
+def test_momenta_label_the_points_of_a_mesh() -> None:
+    assert CHAIN.momenta == ((0,), (2,), (4,))
+    assert CHAIN.modulus == (6,)
+    assert SHIFTED.momenta == ((1, 1), (1, 3), (3, 1), (3, 3))
+    assert SHIFTED.modulus == (4, 4)
+    assert KAxis.gamma(2).momenta == ((0, 0),)
+    assert KPoints.from_fractional([(0.0,), (0.3,), (0.7,)]).axis().momenta is None
+    with pytest.raises(StructureError, match="come with their modulus"):
+        KAxis((0,), (1.0,), momenta=((0,),))
+    with pytest.raises(StructureError, match="one momentum per point"):
+        KAxis((0, 2, 1), (1 / 3,) * 3, momenta=((0,), (2,)), modulus=(6,))
+    with pytest.raises(StructureError, match="positive"):
+        KAxis((0,), (1.0,), momenta=((0,),), modulus=(0,))
+    with pytest.raises(StructureError, match="below the modulus"):
+        KAxis((0,), (1.0,), momenta=((7,),), modulus=(6,))
+    with pytest.raises(StructureError, match="negative modulo"):
+        KAxis((0, 2, 1), (1 / 3,) * 3, momenta=((0,), (2,), (3,)), modulus=(6,))
+
+
 def test_malformed_axes_are_rejected() -> None:
     with pytest.raises(StructureError, match="at least one"):
         KAxis((), ())

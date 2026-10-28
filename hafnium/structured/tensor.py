@@ -288,6 +288,7 @@ class TensorStructure:
     axes: tuple[TensorAxis, ...]
     ring: Ring = field(default=Ring.REAL, kw_only=True)
     _generators: tuple[_Generator, ...] = field(init=False, repr=False, compare=False)
+    _modulus: Momentum | None = field(init=False, repr=False, compare=False)
     _keys: tuple[Key, ...] = field(init=False, repr=False, compare=False)
     _stored: tuple[Key, ...] = field(init=False, repr=False, compare=False)
     _positions: dict[Key, int] = field(init=False, repr=False, compare=False)
@@ -297,6 +298,11 @@ class TensorStructure:
         object.__setattr__(self, "axes", axes)
         _check_axes(axes, self.ring)
         object.__setattr__(self, "_generators", _generators(axes))
+        object.__setattr__(
+            self,
+            "_modulus",
+            next((axis.modulus for axis in axes if axis.modulus is not None), None),
+        )
         keys = _allowed_keys(axes)
         stored = tuple(key for key in keys if self.derivation(key)[0] == key)
         object.__setattr__(self, "_keys", keys)
@@ -349,13 +355,6 @@ class TensorStructure:
         for axis, s in zip(self.axes, key, strict=True):
             total = _combine(total, _charge(axis, s), self._modulus)
         return _is_neutral(total)
-
-    @property
-    def _modulus(self) -> Momentum | None:
-        for axis in self.axes:
-            if axis.modulus is not None:
-                return axis.modulus
-        return None
 
     def is_self_conjugate(self, key: Key) -> bool:
         """Whether a symmetry maps ``key`` onto its own conjugate, so its block is real.

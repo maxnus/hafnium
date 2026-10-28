@@ -28,8 +28,9 @@ from hafnium.correlated import (
     OrbitalSpaces,
     Space,
     energy_denominators,
+    fitted_periodic_tensors,
     transform_df_tensor,
-    transform_periodic_fitting,
+    transform_fitted_tensors,
 )
 from hafnium.errors import InputError
 from hafnium.integrals import DensityFitting, IntegralEngine, density_fitting_k
@@ -149,13 +150,12 @@ def mp2_from_periodic_fitting(
     that divided by the number of k-points.
     """
     spaces = OrbitalSpaces.from_scf(reference)
-    if spaces.structure.k_axis is None:
-        raise InputError("the reference is molecular; use mp2_from_df_tensor")
-    occupied_virtual = transform_periodic_fitting(
-        fitting, spaces, Space.OCCUPIED, Space.VIRTUAL, threshold=threshold
+    tensors = fitted_periodic_tensors(fitting, threshold)
+    occupied_virtual = transform_fitted_tensors(
+        tensors, spaces, Space.OCCUPIED, Space.VIRTUAL
     )
-    virtual_occupied = transform_periodic_fitting(
-        fitting, spaces, Space.VIRTUAL, Space.OCCUPIED, signed=True, threshold=threshold
+    virtual_occupied = transform_fitted_tensors(
+        tensors, spaces, Space.VIRTUAL, Space.OCCUPIED, signed=True
     )
     return _second_order(
         reference,
