@@ -311,6 +311,9 @@ uses [Semantic Versioning](https://semver.org/).
   normalization, with the signature of the metric on request
   (`transfer_axis`); `mp2_from_periodic_fitting` and `df_mp2` of a `Cell`
   give the DF-MP2 energy per cell from the molecular code for all eight
-  classes, folding onto the supercell at Γ and matching PySCF's KMP2 and
-  KUMP2 to 1e-14 Hartree.
+  classes, folding onto the supercell at Γ and matching PySCF's KMP2 to
+  1e-14 Hartree. The block contraction of `contract` lets `einsum`
+  optimize its path, so the products of blocks run through BLAS: the
+  DF-MP2 step of benzene in def2-SVP takes 0.11 s for RHF and 0.44 s for
+  GHF on 16 cores, against 0.02 s and 0.54 s in PySCF.
 

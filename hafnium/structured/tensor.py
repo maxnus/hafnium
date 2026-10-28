@@ -971,7 +971,7 @@ def _accumulate(
             block_second = second_blocks.get(key_second)
             if block_second is None:
                 block_second = second_blocks[key_second] = second.block(key_second)
-            value = xp.einsum(subscripts, block_first, block_second)
+            value = xp.einsum(subscripts, block_first, block_second, optimize=True)
             previous = accumulated.get(result_key)
             accumulated[result_key] = value if previous is None else previous + value
     return accumulated
