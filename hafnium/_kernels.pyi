@@ -252,6 +252,48 @@ def evaluate_functional(
     follow the input layouts, ``None`` below the rung that needs them.
     """
 
+def evaluate_noncollinear(
+    names: list[str],
+    weights: NDArray[np.float64],
+    rho: NDArray[np.float64],
+    m: NDArray[np.float64],
+    grad_rho: NDArray[np.float64] | None = None,
+    grad_m: NDArray[np.float64] | None = None,
+    tau: NDArray[np.float64] | None = None,
+    tau_m: NDArray[np.float64] | None = None,
+    directions: NDArray[np.float64] | None = None,
+    direction_weights: NDArray[np.float64] | None = None,
+    precision: float = 1e-14,
+    max_level: int = 6,
+    collinear_threshold: float | None = None,
+    point_weights: NDArray[np.float64] | None = None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    int,
+]:
+    """Multi-collinear evaluation of ``Σ weights[i] names[i]`` (ADR-0029).
+
+    ``rho`` is ``[g]``, ``m`` ``[3, g]``, ``grad_rho`` ``[3, g]``, ``grad_m``
+    ``[3, 3, g]`` (spin direction before spatial direction), ``tau`` ``[g]``
+    and ``tau_m`` ``[3, g]``. The sphere is sampled at ``directions [k, 3]``
+    with ``direction_weights [k]`` summing to one when both are given, else
+    with product rules aligned with the magnetization and refined until the
+    energy density and the first-order energy response change by less than
+    ``precision`` divided by the point's weight (``point_weights [g]``, one
+    without), up to ``max_level``; an LDA samples nothing. Points with
+    ``|m| ≥ collinear_threshold · rho`` take the locally collinear
+    functional. Returns the energy density ``[g]``, the derivatives with
+    respect to ``rho, m, grad_rho, grad_m, tau, tau_m`` in the input
+    layouts, ``None`` below the rung that reads a variable, and the number
+    of points whose rule did not converge.
+    """
+
 def configure_threads(n_threads: int) -> None:
     """Set the size of the kernel thread pool once per process.
 

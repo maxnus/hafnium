@@ -374,6 +374,7 @@ jax = [
 dev = [
     { name = "hypothesis" },
     { name = "maturin" },
+    { name = "mcfun" },
     { name = "mpmath" },
     { name = "pre-commit" },
     { name = "pyright" },
@@ -404,6 +405,7 @@ provides-extras = ["jax", "cuda"]
 dev = [
     { name = "hypothesis", specifier = ">=6" },
     { name = "maturin", specifier = ">=1.15,<2" },
+    { name = "mcfun", specifier = ">=0.2.6" },
     { name = "mpmath", specifier = ">=1.3" },
     { name = "pre-commit", specifier = ">=4" },
     { name = "pyright", specifier = ">=1.1.400" },
@@ -817,6 +819,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/40/dc/4e90da594986ba78dd3bc8a5921ecdcdb11085b22b02a412caab3b225601/maturin-1.15.0-py3-none-win_amd64.whl", hash = "sha256:552c2be4afd43fe8d5c9f3ec8d4c4756d973b8dcbe94c14084390301f50243e1", size = 10335085, upload-time = "2026-08-24T12:11:18.326Z" },
     { url = "https://files.pythonhosted.org/packages/8b/10/15d4314edf130955edf2dc237aa393a8a7c10f2b9b57b89fa2f61f915659/maturin-1.15.0-py3-none-win_arm64.whl", hash = "sha256:c7dc0c66c78d3debdd9c5aa807e861fbcbf07f3505d34b125df74c03986b0f48", size = 9713795, upload-time = "2026-08-24T12:11:20.83Z" },
 ]
+
+[[package]]
+name = "mcfun"
+version = "0.2.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/e3/f59f9a4e5575e7bd9b216e5d9e63e5761a719d95bee86cb2d512350345e4/mcfun-0.2.6.tar.gz", hash = "sha256:d3064537c2967f4018a125a399584071f2aad7aea2a01523c459a859d0611d1c", size = 48979, upload-time = "2026-02-12T21:37:24.224Z" }
 
 [[package]]
 name = "mergedeep"

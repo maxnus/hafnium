@@ -261,4 +261,21 @@ uses [Semantic Versioning](https://semver.org/).
   into the kernel's tensor in place (ADR-0028). The silicon 3×3×3 LDA
   build falls from 78 s to 9.7 s, the full tensor to
   38 s.
+- Kohn–Sham for the generalized classes (M7, part three): the
+  multi-collinear form of a collinear functional (ADR-0029), evaluated in
+  the compiled layer with the closed form `f(ρ, |m|)` for an LDA and, for
+  GGA and meta-GGA, a quadrature over spin directions with the second
+  derivatives of `xcx` on product rules aligned with the magnetization of
+  each point and refined to a precision, or on one Lebedev rule as PySCF
+  does; the locally collinear branch with its exact derivatives for points
+  polarized beyond a threshold, and the unpolarized evaluation where the
+  spin variables vanish (`evaluate_noncollinear`, `NoncollinearDensity`,
+  `NoncollinearOptions`, `KohnShamOptions.noncollinear`); the
+  exchange–correlation term reads a spinor density, forms the density and
+  magnetization with their gradients and kinetic energy densities on the
+  grid and assembles the potential `v_ρ + v_m·σ`, for molecules and cells.
+  The kernel reproduces PySCF's `mcfun` to 1e-14 on the same rule, the
+  term PySCF's energy and potential of a noncollinear density, the
+  generalized classes reproduce RKS and UKS to 1e-13 in the collinear
+  limit, and `mcfun` joins the development dependencies as a test oracle.
 

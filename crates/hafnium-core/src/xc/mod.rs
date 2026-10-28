@@ -18,6 +18,13 @@ use xcx::{Family, Functional, FunctionalId, Spin, XcInput};
 
 use crate::Error;
 
+pub mod noncollinear;
+
+pub use noncollinear::{
+    MAX_LEVEL, NoncollinearInput, NoncollinearValues, SPIN_NEGLECT, Sampling, SphereRule,
+    evaluate_noncollinear,
+};
+
 /// Points evaluated per parallel task.
 const POINTS_PER_TASK: usize = 256;
 
@@ -143,6 +150,48 @@ pub fn evaluate_functional(
     sigma: &[f64],
     tau: &[f64],
 ) -> Result<XcValues, Error> {
+    let (ids, rung) = combination(components)?;
+    if rho.len() % 2 != 0 {
+        return Err(Error::InvalidArgument(
+            "the densities are laid out [2][g]".to_string(),
+        ));
+    }
+    let n = rho.len() / 2;
+    check_input(rho, 2 * n, "densities")?;
+    if rung != Rung::Lda {
+        check_input(sigma, 3 * n, "contracted gradients")?;
+    }
+    if rung == Rung::MetaGga {
+        check_input(tau, 2 * n, "kinetic energy densities")?;
+    }
+    // Built once here to validate the combination, and once per worker
+    // below: the evaluator is not `Sync`, so it cannot be shared.
+    build(&ids)?;
+    let chunks: Vec<XcValues> = (0..n.div_ceil(POINTS_PER_TASK).max(1))
+        .into_par_iter()
+        .map_init(
+            || build(&ids).ok(),
+            |functional, task| {
+                let functional = functional.as_ref().ok_or_else(|| {
+                    Error::InvalidArgument("the functional could not be built".to_string())
+                })?;
+                let start = task * POINTS_PER_TASK;
+                let end = (start + POINTS_PER_TASK).min(n);
+                evaluate_chunk(functional, rung, n, start..end, rho, sigma, tau)
+            },
+        )
+        .collect::<Result<_, _>>()?;
+    Ok(concatenate(chunks, n, rung))
+}
+
+/// Resolve the named components to `xcx` ids and the rung of the combination.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidArgument`] if no component is given, a name is
+/// unknown, a weight is not finite, or a component needs the Laplacian of
+/// the density.
+fn combination(components: &[(String, f64)]) -> Result<(Vec<(FunctionalId, f64)>, Rung), Error> {
     if components.is_empty() {
         return Err(Error::InvalidArgument(
             "a functional needs at least one component".to_string(),
@@ -176,37 +225,7 @@ pub fn evaluate_functional(
             "functionals of the Laplacian of the density are not supported".to_string(),
         ));
     }
-    if rho.len() % 2 != 0 {
-        return Err(Error::InvalidArgument(
-            "the densities are laid out [2][g]".to_string(),
-        ));
-    }
-    let n = rho.len() / 2;
-    check_input(rho, 2 * n, "densities")?;
-    if rung != Rung::Lda {
-        check_input(sigma, 3 * n, "contracted gradients")?;
-    }
-    if rung == Rung::MetaGga {
-        check_input(tau, 2 * n, "kinetic energy densities")?;
-    }
-    // Built once here to validate the combination, and once per worker
-    // below: the evaluator is not `Sync`, so it cannot be shared.
-    build(&ids)?;
-    let chunks: Vec<XcValues> = (0..n.div_ceil(POINTS_PER_TASK).max(1))
-        .into_par_iter()
-        .map_init(
-            || build(&ids).ok(),
-            |functional, task| {
-                let functional = functional.as_ref().ok_or_else(|| {
-                    Error::InvalidArgument("the functional could not be built".to_string())
-                })?;
-                let start = task * POINTS_PER_TASK;
-                let end = (start + POINTS_PER_TASK).min(n);
-                evaluate_chunk(functional, rung, n, start..end, rho, sigma, tau)
-            },
-        )
-        .collect::<Result<_, _>>()?;
-    Ok(concatenate(chunks, n, rung))
+    Ok((ids, rung))
 }
 
 fn check_input(values: &[f64], expected: usize, name: &str) -> Result<(), Error> {

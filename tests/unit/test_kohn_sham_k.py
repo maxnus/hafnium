@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from hafnium.backend import Array
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.grid import GridSpec
@@ -22,12 +23,15 @@ from hafnium.xc import Functional
 from tests.cells import box, diamond_helium, helium
 from tests.hamiltonians import ENGINE
 from tests.molecules import water
+from tests.reference.test_kscf_reference import helium_hydride_box
 from tests.shell_tables import LIBRARY
 from tests.tolerances import (
     ENERGY_TOL,
     MOLECULAR_LIMIT_TOL,
+    NONCOLLINEAR_LIMIT_TOL,
     PERIODIC_LEVEL_TOL,
     REFERENCE_GRADIENT_TOL,
+    SPIN_TOL,
     STRUCTURE_TOL,
 )
 
@@ -100,19 +104,66 @@ def test_collinear_classes_recover_the_restricted_energy(
     assert result.energies.exchange_correlation < 0.0
 
 
-def test_spinor_classes_are_rejected(
-    helium_cell: tuple[Cell, BasisSet, BasisSet, KPoints],
+@pytest.mark.parametrize("name", ["GHF", "paired GHF"])
+def test_spinor_classes_recover_the_restricted_energy(
+    helium_cell: tuple[Cell, BasisSet, BasisSet, KPoints], name: str
 ) -> None:
     cell, basis, auxiliary, mesh = helium_cell
-    with pytest.raises(InputError, match="collinear"):
-        kohn_sham(
-            ENGINE,
-            basis,
-            cell,
-            "pbe",
-            symmetry=SymmetrySpec.from_name("GHF").with_kpoints(mesh),
-            auxiliary=auxiliary,
-        )
+    restricted = converge(
+        cell, basis, auxiliary, "pbe", SymmetrySpec.from_name("RHF").with_kpoints(mesh)
+    )
+    result = converge(
+        cell, basis, auxiliary, "pbe", SymmetrySpec.from_name(name).with_kpoints(mesh)
+    )
+    assert result.energy == pytest.approx(restricted.energy, abs=ENERGY_TOL)
+    assert result.spin.vector == pytest.approx((0.0, 0.0, 0.0), abs=SPIN_TOL)
+
+
+def test_rotated_spin_state_of_a_cell_is_degenerate() -> None:
+    """The k-point spinor term follows a rotation in spin space (ADR-0029)."""
+    cell = helium_hydride_box()
+    basis, auxiliary = bases(cell, "sto-3g")
+    mesh = KPoints.mesh((2, 1, 1))
+    unrestricted = converge(
+        cell, basis, auxiliary, "pbe", SymmetrySpec.from_name("UHF").with_kpoints(mesh)
+    )
+    exchange_correlation = ExchangeCorrelation.from_cell(
+        ENGINE, basis, cell, mesh, Functional.named("pbe")
+    )
+    hamiltonian = Hamiltonian.from_cell(
+        ENGINE,
+        basis,
+        cell,
+        mesh,
+        KPointDensityFittedCoulombExchange.from_cell(
+            ENGINE, basis, auxiliary, cell, mesh
+        ),
+        exchange_correlation=exchange_correlation,
+    )
+    n = hamiltonian.n_ao
+    theta = 0.9
+    rotation: Array = np.kron(
+        np.array(
+            [
+                [np.cos(theta / 2), -1j * np.sin(theta / 2)],
+                [-1j * np.sin(theta / 2), np.cos(theta / 2)],
+            ]
+        ),
+        np.eye(n),
+    )
+    structure = hamiltonian.structure(
+        SymmetrySpec.from_name("complex GHF").with_kpoints(mesh)
+    )
+    rotated = unrestricted.density.embed(structure).map_blocks(
+        lambda block: rotation @ block @ rotation.conj().T
+    )
+    _, energies = hamiltonian.fock(rotated)
+    assert energies.total == pytest.approx(
+        unrestricted.energy, abs=NONCOLLINEAR_LIMIT_TOL
+    )
+    assert energies.exchange_correlation == pytest.approx(
+        unrestricted.energies.exchange_correlation, abs=NONCOLLINEAR_LIMIT_TOL
+    )
 
 
 def test_supercell_at_gamma_folds_the_mesh(
