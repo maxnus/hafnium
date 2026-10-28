@@ -4,7 +4,8 @@ A converged mean-field state is split into its occupied and virtual
 canonical orbitals per stored block (:class:`OrbitalSpaces`), which define
 the axes of the block tensors of ADR-0030; the fitted integrals are
 brought to the orbital basis as a three-index block tensor
-(:func:`transform_df_tensor`), and the orbital energy denominators of
+(:func:`transform_df_tensor` for a molecule, :func:`transform_periodic_fitting`
+for a cell over its k-points), and the orbital energy denominators of
 perturbation theory are block tensors over the same axes
 (:func:`energy_denominators`).
 """
@@ -12,7 +13,9 @@ perturbation theory are block tensors over the same axes
 from hafnium.correlated.integrals import (
     auxiliary_axis,
     energy_denominators,
+    transfer_axis,
     transform_df_tensor,
+    transform_periodic_fitting,
 )
 from hafnium.correlated.orbitals import OCCUPATION_TOLERANCE, OrbitalSpaces, Space
 
@@ -22,5 +25,7 @@ __all__ = [
     "Space",
     "auxiliary_axis",
     "energy_denominators",
+    "transfer_axis",
     "transform_df_tensor",
+    "transform_periodic_fitting",
 ]

@@ -296,4 +296,21 @@ uses [Semantic Versioning](https://semver.org/).
   with point-group sectors (`df_mp2`, `mp2_from_df_tensor`, `Mp2Result`
   with the amplitudes), matching PySCF's density-fitted RMP2, UMP2 and
   GMP2 to 1e-11 Hartree.
+- Block tensors and DF-MP2 over k-points (M8, part two, ADR-0031): the
+  sectors of a tensor axis over a k axis are the blocks at every point of
+  the full set, `KAxis` carries the exact momenta of a uniform mesh
+  (`KPoints.momenta`), the crystal momentum joins the conserved charges,
+  the symmetries of the state (`Symmetry.SPIN_FLIP`,
+  `Symmetry.TIME_REVERSAL`) replace the single partner rule as the
+  generators of derived blocks with one block stored per orbit
+  (`TensorStructure.symmetries`, `orbit`, `TensorAxis.image`), and the
+  auxiliary axis enters conjugated. `OrbitalSpaces` serves periodic
+  references with the same occupied bands at every point;
+  `transform_periodic_fitting` brings the periodic fitting to the Bloch
+  orbital basis over the momentum transfers in the supercell
+  normalization, with the signature of the metric on request
+  (`transfer_axis`); `mp2_from_periodic_fitting` and `df_mp2` of a `Cell`
+  give the DF-MP2 energy per cell from the molecular code for all eight
+  classes, folding onto the supercell at Γ and matching PySCF's KMP2 and
+  KUMP2 to 1e-14 Hartree.
 

@@ -10,15 +10,19 @@ labelled by the spin and the irrep of its block. A block of the tensor is
 labelled by one sector per axis and is allowed when the charges of its
 sectors cancel: the spin charges, ``+1`` for alpha, ``−1`` for beta and
 zero for spinor and spatial sectors, counted negatively on a conjugated
-index, sum to zero, and the characters of the irreps multiply to the
-totally symmetric irrep. Blocks that vanish by this rule, and blocks with
-an empty sector, are never stored.
+index, sum to zero, the characters of the irreps multiply to the totally
+symmetric irrep, and over a k axis the crystal momenta sum to zero modulo
+the reciprocal lattice (ADR-0031): the sectors of an axis over a k axis
+are the pairs of a block and a point of the full set. Blocks that vanish
+by this rule, and blocks with an empty sector, are never stored.
 
-The partner rules of the structures derive the remaining blocks: mapping
-every index to its partner block at once, alpha to beta and back, is a
-symmetry of the state, so a block and its image are copies or complex
-conjugates of each other, and the tensor stores the lexicographically
-smaller key of every pair. A contraction pairs a conjugated with an
+The symmetries of the state derive the remaining blocks. Mapping every
+index to its partner block at once, alpha to beta and back, is a symmetry
+of a restricted state, and time reversal, every index to the partner
+point ``−k`` with the conjugate block where the ring asks for it, is a
+symmetry of a real or paired state; each maps a block onto a copy or the
+complex conjugate of another, and the tensor stores the lexicographically
+smallest key of every orbit. A contraction pairs a conjugated with an
 unconjugated index, as a sum over a complete set of orbitals does, and
 the charge rule of its result follows from those of its operands.
 """
@@ -28,6 +32,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TypeAlias
 
 from hafnium.backend import Array, Namespace, array_namespace, default_namespace
@@ -45,8 +50,21 @@ Key: TypeAlias = tuple[int, ...]
 
 Scalar: TypeAlias = int | float | complex
 
-_Charge: TypeAlias = tuple[int, Characters | None]
-"""The signed spin charge of a sector and the characters of its irrep."""
+Momentum: TypeAlias = tuple[int, ...]
+"""The crystal momentum of a sector, integers over the modulus of its k axis."""
+
+_Charge: TypeAlias = tuple[int, Characters | None, Momentum | None]
+"""The signed spin charge of a sector, the characters of its irrep, its momentum."""
+
+
+class Symmetry(Enum):
+    """A symmetry of the state that derives blocks of a tensor from others."""
+
+    SPIN_FLIP = "spin flip"
+    """Alpha to beta and back on every index: the blocks are copies."""
+    TIME_REVERSAL = "time reversal"
+    """Every index to its time-reversal partner: the blocks are conjugates."""
+
 
 SPIN_CHARGE: dict[Spin, int] = {
     Spin.ALPHA: 1,
@@ -69,13 +87,14 @@ class TensorAxis:
     structure
         The structure whose blocks, stored and derived, are the sectors of
         the axis: the structure of the state for an orbital index, a
-        spatial structure over the irrep sectors of the auxiliary basis for
-        a density-fitting index. Structures over a k axis wait for the
-        periodic correlated methods.
+        spatial structure over the irrep sectors of the auxiliary basis or
+        over the momentum transfers for a density-fitting index. Over a k
+        axis the sectors are the pairs of a block and a point of the full
+        set, the points of a block adjacent, and the axis must carry the
+        momenta of a uniform mesh without point operations.
     sizes
-        Number of functions in every sector, one per block of the
-        structure in its order; a derived block holds as many as its
-        source.
+        Number of functions in every sector, in the order of the sectors;
+        a derived block holds as many as its source at every point.
     conjugated
         Whether the index enters conjugated, as the bra index of an
         integral does; the charge of its sector then counts negatively.
@@ -84,44 +103,50 @@ class TensorAxis:
     structure: BlockStructure
     sizes: tuple[int, ...]
     conjugated: bool = False
-    _partners: tuple[int, ...] = field(init=False, repr=False, compare=False)
     _offsets: tuple[int, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         sizes = tuple(int(size) for size in self.sizes)
         object.__setattr__(self, "sizes", sizes)
+        _check_k_axis(self.structure)
+        n_kpt = self.n_kpt
         blocks = self.structure.blocks
-        if self.structure.k_axis is not None:
-            raise StructureError(
-                "tensors over k-points come with the periodic correlated methods "
-                "(M8, part two)"
-            )
-        if len(sizes) != len(blocks):
+        if len(sizes) != len(blocks) * n_kpt:
             raise StructureError(
                 f"an axis over the {self.structure.describe()} structure has "
-                f"{len(blocks)} sectors, got {len(sizes)} sizes"
+                f"{len(blocks) * n_kpt} sectors, got {len(sizes)} sizes"
             )
         if any(size < 0 for size in sizes):
             raise StructureError("sector sizes are non-negative")
-        partners = list(range(len(blocks)))
         for index, block in enumerate(blocks):
-            if block.derived_from is None:
-                continue
-            if sizes[index] != sizes[block.derived_from]:
+            if block.derived_from is not None and any(
+                sizes[index * n_kpt + k] != sizes[block.derived_from * n_kpt + k]
+                for k in range(n_kpt)
+            ):
                 raise StructureError(
                     "a derived sector holds as many functions as its source"
                 )
-            partners[index] = block.derived_from
-            partners[block.derived_from] = index
         offsets = [0]
         for size in sizes:
             offsets.append(offsets[-1] + size)
-        object.__setattr__(self, "_partners", tuple(partners))
         object.__setattr__(self, "_offsets", tuple(offsets))
+        for sector in range(len(sizes)):
+            image = self.image(Symmetry.TIME_REVERSAL, sector)
+            if image is not None and sizes[image] != sizes[sector]:
+                raise StructureError(
+                    "time reversal relates sectors that hold different numbers of "
+                    "functions"
+                )
+
+    @property
+    def n_kpt(self) -> int:
+        """Number of k-points of the full set, one without a k axis."""
+        axis = self.structure.k_axis
+        return 1 if axis is None else axis.n_kpt
 
     @property
     def n_sectors(self) -> int:
-        """Number of sectors, the number of blocks of the structure."""
+        """Number of sectors: the blocks of the structure times the k-points."""
         return len(self.sizes)
 
     @property
@@ -129,29 +154,94 @@ class TensorAxis:
         """Number of functions over all sectors, the length of the dense axis."""
         return self._offsets[-1]
 
+    @property
+    def modulus(self) -> Momentum | None:
+        """The modulus of the momenta of the k axis; ``None`` without one."""
+        axis = self.structure.k_axis
+        return None if axis is None else axis.modulus
+
     def offset(self, sector: int) -> int:
         """Position of the first function of ``sector`` in the dense axis."""
         return self._offsets[sector]
 
-    def partner(self, sector: int) -> int:
-        """Return the sector the partner rule of the structure maps ``sector`` to.
+    def block_index(self, sector: int) -> int:
+        """Index in the structure's blocks of the block of ``sector``."""
+        return sector // self.n_kpt
 
-        A stored block maps to the block derived from it and back; a block
-        without a partner maps to itself.
-        """
-        return self._partners[sector]
+    def kpoint(self, sector: int) -> int:
+        """Index in the full k set of the point of ``sector``, zero without a k axis."""
+        return sector % self.n_kpt
+
+    def sector(self, block: int, kpoint: int = 0) -> int:
+        """Return the sector of ``block`` at ``kpoint``."""
+        return block * self.n_kpt + kpoint
 
     def spin_charge(self, sector: int) -> int:
         """Return the ``S_z`` charge of ``sector``, positive for a ket index."""
-        return SPIN_CHARGE[self.structure.blocks[sector].spin]
+        return SPIN_CHARGE[self.structure.blocks[self.block_index(sector)].spin]
 
     def characters(self, sector: int) -> Characters | None:
         """Return the characters of the irrep of ``sector``, ``None`` without any."""
         irreps = self.structure.irreps
-        irrep = self.structure.blocks[sector].irrep
+        irrep = self.structure.blocks[self.block_index(sector)].irrep
         if irreps is None or irrep is None:
             return None
         return irreps.characters[irrep]
+
+    def momentum(self, sector: int) -> Momentum | None:
+        """Return the crystal momentum of ``sector``, ``None`` without a k axis."""
+        axis = self.structure.k_axis
+        if axis is None or axis.momenta is None:
+            return None
+        return axis.momenta[self.kpoint(sector)]
+
+    def image(self, symmetry: Symmetry, sector: int) -> int | None:
+        """Return the sector ``symmetry`` maps ``sector`` to, ``None`` for no symmetry.
+
+        The spin flip maps a sector of a restricted structure to its copy
+        and leaves a spatial sector alone; it is no symmetry of an
+        unrestricted, paired or generalized structure. Time reversal maps a
+        sector to its partner point ``−k`` in the block the structure
+        derives there, a real or quaternionic block itself and a paired
+        block its conjugate partner; without a k axis it is the conjugate
+        partner map of a paired structure, the identity on a real
+        structure, and no symmetry of a complex one.
+        """
+        blocks = self.structure.blocks
+        block, kpoint = self.block_index(sector), self.kpoint(sector)
+        partner = self._partner(block)
+        if symmetry is Symmetry.SPIN_FLIP:
+            if blocks[block].spin is Spin.NONE:
+                return sector
+            if self.structure.derived_partner is Partner.COPY:
+                return self.sector(partner, kpoint)
+            return None
+        axis = self.structure.k_axis
+        reversed_point = kpoint if axis is None else axis.partners[kpoint]
+        if self.structure.derived_partner is Partner.CONJUGATE:
+            return self.sector(partner, reversed_point)
+        if blocks[block].ring is Ring.REAL:
+            return self.sector(block, reversed_point)
+        # Time reversal maps the orbitals of a quaternionic block at an
+        # invariant point onto their Kramers partners, within the block,
+        # which a map of sectors cannot express.
+        if (
+            blocks[block].ring is Ring.QUATERNION
+            and axis is not None
+            and not axis.invariant[kpoint]
+        ):
+            return self.sector(block, reversed_point)
+        return None
+
+    def _partner(self, block: int) -> int:
+        """Return the block derived from ``block`` or deriving it, else ``block``."""
+        derived_from = self.structure.blocks[block].derived_from
+        if derived_from is not None:
+            return derived_from
+        for index, other in enumerate(self.structure.blocks):
+            if other.derived_from == block:
+                return index
+        return block
 
     def conjugate(self) -> TensorAxis:
         """Return the same axis with the opposite conjugation."""
@@ -162,6 +252,20 @@ class TensorAxis:
         return self.structure == other.structure and self.sizes == other.sizes
 
 
+def _check_k_axis(structure: BlockStructure) -> None:
+    """Raise unless the k axis of ``structure``, if any, admits tensors."""
+    axis = structure.k_axis
+    if axis is None:
+        return
+    if axis.operations is not None:
+        raise StructureError(
+            "tensors over the irreducible wedge of a space group are a later "
+            "extension; build the state over the full k-point set"
+        )
+    if axis.momenta is None:
+        raise StructureError("tensors conserve crystal momentum on a uniform mesh only")
+
+
 @dataclass(frozen=True, slots=True)
 class TensorStructure:
     """The axes of a block tensor and the blocks they allow.
@@ -170,18 +274,20 @@ class TensorStructure:
     ----------
     axes
         One :class:`TensorAxis` per index, in order; a tensor without axes
-        holds one scalar block. The axes share the partner rule of their
-        structures, so that the simultaneous map to the partner sectors is
-        a symmetry of every block, and carry irrep sectors of one group
-        either all or none.
+        holds one scalar block. The axes carry irrep sectors of one group
+        either all or none, and k axes of one mesh either all or none; a
+        symmetry of the state derives blocks when every axis has an image
+        under it.
     ring
         Ring the blocks are stored over, ``float64`` or ``complex128``;
-        it must be complex when any axis holds complex blocks.
+        it must be complex when any axis holds complex blocks, which the
+        blocks over a k axis are away from the time-reversal invariant
+        points.
     """
 
     axes: tuple[TensorAxis, ...]
     ring: Ring = field(default=Ring.REAL, kw_only=True)
-    _partner: Partner | None = field(init=False, repr=False, compare=False)
+    _generators: tuple[_Generator, ...] = field(init=False, repr=False, compare=False)
     _keys: tuple[Key, ...] = field(init=False, repr=False, compare=False)
     _stored: tuple[Key, ...] = field(init=False, repr=False, compare=False)
     _positions: dict[Key, int] = field(init=False, repr=False, compare=False)
@@ -189,7 +295,8 @@ class TensorStructure:
     def __post_init__(self) -> None:
         axes = tuple(self.axes)
         object.__setattr__(self, "axes", axes)
-        object.__setattr__(self, "_partner", _check_axes(axes, self.ring))
+        _check_axes(axes, self.ring)
+        object.__setattr__(self, "_generators", _generators(axes))
         keys = _allowed_keys(axes)
         stored = tuple(key for key in keys if self.derivation(key)[0] == key)
         object.__setattr__(self, "_keys", keys)
@@ -204,9 +311,9 @@ class TensorStructure:
         return len(self.axes)
 
     @property
-    def partner(self) -> Partner | None:
-        """How a derived block follows from its source; ``None`` without partners."""
-        return self._partner
+    def symmetries(self) -> tuple[Symmetry, ...]:
+        """The symmetries that derive blocks of the tensor from others."""
+        return tuple(generator.symmetry for generator in self._generators)
 
     @property
     def keys(self) -> tuple[Key, ...]:
@@ -238,31 +345,59 @@ class TensorStructure:
                 f"a key of a {len(self.axes)}-index tensor has {len(self.axes)} "
                 f"sectors, got {len(key)}"
             )
-        spin = 0
-        rows: list[Characters] = []
+        total: _Charge = (0, None, None)
         for axis, s in zip(self.axes, key, strict=True):
-            spin += -axis.spin_charge(s) if axis.conjugated else axis.spin_charge(s)
-            characters = axis.characters(s)
-            if characters is not None:
-                rows.append(characters)
-        if spin != 0:
-            return False
-        return not rows or is_totally_symmetric(product_characters(rows))
+            total = _combine(total, _charge(axis, s), self._modulus)
+        return _is_neutral(total)
 
-    def flip(self, key: Key) -> Key:
-        """Map every sector of ``key`` to its partner at once."""
-        return tuple(axis.partner(s) for axis, s in zip(self.axes, key, strict=True))
+    @property
+    def _modulus(self) -> Momentum | None:
+        for axis in self.axes:
+            if axis.modulus is not None:
+                return axis.modulus
+        return None
+
+    def is_self_conjugate(self, key: Key) -> bool:
+        """Whether a symmetry maps ``key`` onto its own conjugate, so its block is real.
+
+        A real state's blocks at the time-reversal invariant points are
+        such blocks; the orbitals there must be real for the derived blocks
+        to follow (ADR-0031).
+        """
+        return any(
+            generator.conjugates
+            and all(generator.maps[axis][s] == s for axis, s in enumerate(key))
+            for generator in self._generators
+        )
+
+    def orbit(self, key: Key) -> tuple[tuple[Key, bool], ...]:
+        """Return the images of ``key`` under the symmetries, each with its conjugation.
+
+        The key itself comes first, unconjugated; the other entries are
+        distinct keys with whether their block is the conjugate of the
+        block ``key``. A symmetry that maps ``key`` onto itself adds nothing.
+        """
+        images: dict[Key, bool] = {key: False}
+        for generator in self._generators:
+            for current, conjugated in list(images.items()):
+                moved = tuple(generator.maps[axis][s] for axis, s in enumerate(current))
+                images.setdefault(moved, conjugated != generator.conjugates)
+        return tuple(images.items())
 
     def derivation(self, key: Key) -> tuple[Key, bool]:
         """Return the stored key the block ``key`` follows from, and whether conjugated.
 
-        The stored member of a pair is the lexicographically smaller key;
-        a block whose image is itself is stored.
+        The stored member of an orbit is the lexicographically smallest
+        key; a block mapped onto itself by a symmetry is its own source.
         """
-        image = self.flip(key)
-        if image < key:
-            return image, self._partner is Partner.CONJUGATE
-        return key, False
+        orbit = self.orbit(key)
+        source = min(image for image, _ in orbit)
+        if source == key:
+            return key, False
+        for image, conjugated in orbit:
+            if image == source:
+                return source, conjugated
+        raise AssertionError("the source is in the orbit")
 
     def conjugated(self) -> TensorStructure:
         """Return the structure of the complex conjugate: every axis conjugated."""
@@ -282,6 +417,79 @@ class TensorStructure:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _Generator:
+    """A symmetry acting on the keys: the image of every sector of every axis."""
+
+    symmetry: Symmetry
+    maps: tuple[tuple[int, ...], ...]
+    conjugates: bool
+
+
+def _generators(axes: tuple[TensorAxis, ...]) -> tuple[_Generator, ...]:
+    """Collect the symmetries every axis has an image under that move some sector."""
+    generators: list[_Generator] = []
+    for symmetry, conjugates in (
+        (Symmetry.SPIN_FLIP, False),
+        (Symmetry.TIME_REVERSAL, True),
+    ):
+        maps: list[tuple[int, ...]] = []
+        for axis in axes:
+            images = [axis.image(symmetry, s) for s in range(axis.n_sectors)]
+            if any(image is None for image in images):
+                break
+            maps.append(tuple(image for image in images if image is not None))
+        else:
+            if any(image != s for row in maps for s, image in enumerate(row)):
+                generators.append(_Generator(symmetry, tuple(maps), conjugates))
+    return tuple(generators)
+
+
+def _charge(axis: TensorAxis, sector: int) -> _Charge:
+    """Return the signed charges of ``sector`` on ``axis``."""
+    sign = -1 if axis.conjugated else 1
+    momentum, modulus = axis.momentum(sector), axis.modulus
+    if momentum is not None and modulus is not None:
+        momentum = tuple((sign * m) % n for m, n in zip(momentum, modulus, strict=True))
+    return (sign * axis.spin_charge(sector), axis.characters(sector), momentum)
+
+
+def _combine(a: _Charge, b: _Charge, modulus: Momentum | None) -> _Charge:
+    """Add two charges: spins add, characters multiply, momenta add modulo."""
+    characters = (
+        a[1]
+        if b[1] is None
+        else b[1]
+        if a[1] is None
+        else product_characters([a[1], b[1]])
+    )
+    if a[2] is None or b[2] is None:
+        momentum = a[2] if b[2] is None else b[2]
+    else:
+        assert modulus is not None
+        momentum = tuple(
+            (x + y) % n for x, y, n in zip(a[2], b[2], modulus, strict=True)
+        )
+    return (a[0] + b[0], characters, momentum)
+
+
+def _negated(charge: _Charge, modulus: Momentum | None) -> _Charge:
+    """Return the charge that cancels ``charge``; characters are their own inverse."""
+    momentum = charge[2]
+    if momentum is not None:
+        assert modulus is not None
+        momentum = tuple((-m) % n for m, n in zip(momentum, modulus, strict=True))
+    return (-charge[0], charge[1], momentum)
+
+
+def _is_neutral(charge: _Charge) -> bool:
+    return (
+        charge[0] == 0
+        and (charge[1] is None or is_totally_symmetric(charge[1]))
+        and (charge[2] is None or not any(charge[2]))
+    )
+
+
 def _allowed_keys(axes: tuple[TensorAxis, ...]) -> tuple[Key, ...]:
     """Enumerate the keys whose charges cancel, with no empty sector, in order.
 
@@ -291,66 +499,39 @@ def _allowed_keys(axes: tuple[TensorAxis, ...]) -> tuple[Key, ...]:
     """
     if not axes:
         return ((),)
+    modulus = next((axis.modulus for axis in axes if axis.modulus is not None), None)
     last = axes[-1]
     by_charge: dict[_Charge, list[int]] = {}
     for s in range(last.n_sectors):
         if last.sizes[s] > 0:
             by_charge.setdefault(_charge(last, s), []).append(s)
-    identity: Characters | None = (
+    # The charges of the other axes may lack a component the last axis
+    # carries; the neutral element of that component fills it in.
+    neutral: _Charge = (
+        0,
         None
         if last.characters(0) is None
-        else tuple([1] * last.structure.irreps.n_operations)
-        if last.structure.irreps is not None
-        else None
+        else tuple([1] * len(last.characters(0) or ())),
+        None if modulus is None else tuple([0] * len(modulus)),
     )
     keys: list[Key] = []
     for prefix in itertools.product(
         *[[s for s in range(axis.n_sectors) if axis.sizes[s] > 0] for axis in axes[:-1]]
     ):
-        spin, characters = 0, identity
+        total = neutral
         for axis, s in zip(axes[:-1], prefix, strict=True):
-            spin_part, row = _charge(axis, s)
-            spin += spin_part
-            if row is not None and characters is not None:
-                characters = product_characters([characters, row])
-        # The last sector cancels the spin charge and, every character being
-        # its own inverse, repeats the characters of the others.
-        keys.extend((*prefix, s) for s in by_charge.get((-spin, characters), []))
+            total = _combine(total, _charge(axis, s), modulus)
+        keys.extend((*prefix, s) for s in by_charge.get(_negated(total, modulus), []))
     return tuple(keys)
 
 
-def _charge(axis: TensorAxis, sector: int) -> _Charge:
-    """Return the signed spin charge and the characters of ``sector`` on ``axis``."""
-    spin = axis.spin_charge(sector)
-    return (-spin if axis.conjugated else spin, axis.characters(sector))
-
-
-def _check_axes(axes: tuple[TensorAxis, ...], ring: Ring) -> Partner | None:
-    """Validate the axes of a structure and return their shared partner rule."""
+def _check_axes(axes: tuple[TensorAxis, ...], ring: Ring) -> None:
+    """Validate the axes of a structure against each other and the ring."""
     if ring is Ring.QUATERNION:
         raise StructureError("tensors are stored over the real or the complex ring")
-    if ring is Ring.REAL and any(axis.structure.is_complex for axis in axes):
+    if ring is Ring.REAL and not all(_is_real(axis) for axis in axes):
         raise StructureError(
             "an axis holds complex blocks; build the structure with ring=Ring.COMPLEX"
-        )
-    rules = {
-        axis.structure.derived_partner
-        for axis in axes
-        if axis.structure.derived_partner is not None
-    }
-    if len(rules) > 1:
-        raise StructureError(
-            "the axes of a tensor share one partner rule; copies and conjugates "
-            "cannot be mixed"
-        )
-    partner = rules.pop() if rules else None
-    if partner is Partner.CONJUGATE and any(
-        axis.structure.derived_partner is None and axis.structure.is_complex
-        for axis in axes
-    ):
-        raise StructureError(
-            "a conjugate partner rule derives blocks by complex conjugation, so "
-            "every axis without partners must hold real blocks"
         )
     sectors = [axis.structure.irreps for axis in axes]
     present = [s for s in sectors if s is not None]
@@ -361,7 +542,19 @@ def _check_axes(axes: tuple[TensorAxis, ...], ring: Ring) -> Partner | None:
         for s in present
     ):
         raise StructureError("the irrep sectors of every axis belong to one group")
-    return partner
+    moduli = [axis.modulus for axis in axes]
+    meshes = [m for m in moduli if m is not None]
+    if meshes and len(meshes) != len(moduli):
+        raise StructureError("every axis runs over k-points, or none does")
+    if meshes and any(m != meshes[0] for m in meshes):
+        raise StructureError("the k axes of every axis belong to one mesh")
+
+
+def _is_real(axis: TensorAxis) -> bool:
+    """Whether every block of the axis is stored as real."""
+    structure = axis.structure
+    k_axis = structure.k_axis
+    return not structure.is_complex and (k_axis is None or k_axis.all_invariant)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -587,12 +780,10 @@ class BlockTensor:
         """
         xp = array_namespace(*self.blocks) if self.blocks else default_namespace()
         total = xp.zeros((), dtype=dtype_for(xp, self.structure.ring))
-        conjugate = self.structure.partner is Partner.CONJUGATE
         for key, block in zip(self.structure.stored_keys, self.blocks, strict=True):
             part = xp.sum(block)
-            total = total + part
-            if self.structure.flip(key) != key:
-                total = total + (xp.conj(part) if conjugate else part)
+            for _, conjugated in self.structure.orbit(key):
+                total = total + (xp.conj(part) if conjugated else part)
         return total
 
     # ------------------------------------------------------------------ dense form
@@ -627,8 +818,10 @@ class BlockTensor:
 
         With ``check`` the array must be a member of the structure to
         within ``tolerance`` relative to its largest entry: the blocks the
-        rule forbids vanish and the derived blocks follow from their
-        sources. Without it the other blocks are dropped.
+        rule forbids vanish, the derived blocks follow from their sources,
+        and the blocks a symmetry maps onto their own conjugate are real.
+        Without it the other blocks are dropped and those blocks keep
+        their imaginary parts.
         """
         shape = tuple(axis.extent for axis in structure.axes)
         if tuple(int(n) for n in dense.shape) != shape:
@@ -654,6 +847,14 @@ class BlockTensor:
                     "the rule forbids is nonzero or a derived block does not follow "
                     f"from its source (deviation {deviation:.2e})"
                 )
+            for key, block in zip(structure.stored_keys, result.blocks, strict=True):
+                if structure.is_self_conjugate(key) and (
+                    float(xp.max(xp.abs(xp.imag(block)))) > tolerance * scale
+                ):
+                    raise StructureError(
+                        f"block {key} is mapped onto its own conjugate by a symmetry "
+                        "of the structure and must be real"
+                    )
         return result
 
 

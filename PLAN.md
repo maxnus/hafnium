@@ -1069,9 +1069,18 @@ contraction in einsum notation; the orbital spaces of a converged state,
 the fitted tensor in the orbital basis with the auxiliary basis
 symmetry-adapted, and the orbital energy denominators; DF-MP2 written
 once in spin-orbital form for all eight classes with point-group sectors,
-matching PySCF's DF-MP2 to 1e-11 Hartree. Next: k-point MP2 from the
-same code with the crystal momentum as a charge (part two), then the
-equation generator and CCSD.
+matching PySCF's DF-MP2 to 1e-11 Hartree. Part two done 2026-10-28
+(ADR-0031): the sectors of a tensor axis over a k axis are the blocks at
+every point of the full set, the crystal momentum an exact integer charge
+on the k axis, the auxiliary index of a cell the momentum transfers in
+the eigenbasis of the metric without derivation, the symmetries of the
+state (the spin flip and time reversal) generators of the derived blocks
+with one block stored per orbit, and the orbital-basis integrals in the
+supercell normalization; k-point DF-MP2 from the molecular code for all
+eight classes, folding exactly onto the supercell at Γ and matching
+PySCF's KMP2 and KUMP2. Next: the equation generator and CCSD, molecular
+and over k-points from the same tensors; later the point operations of a
+space group as further generators over the wedge.
 
 **M9 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
 `custom_vjp` from derivative integrals, libxc `custom_jvp`, implicit

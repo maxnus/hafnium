@@ -8,8 +8,8 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``scf_<molecule>_<basis>.json``, ``ewald_<cell>_nuclei.json``,
 ``bloch_<cell>_<basis>.json``, ``nuclear_<cell>_<basis>.json``,
 ``fitting_<cell>_<basis>.json``, ``kscf_<cell>_<basis>.json``,
-``dft_<molecule>_<basis>.json`` and ``mp2_<molecule>_<basis>.json`` with the
-PySCF values and their provenance.
+``dft_<molecule>_<basis>.json``, ``mp2_<molecule>_<basis>.json`` and
+``kmp2_<cell>_<basis>.json`` with the PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from tests.reference.pyscf_oracle import (
     fourier_transform_reference,
     gks_reference,
     kdft_reference,
+    kmp2_reference,
     kscf_reference,
     madelung_reference,
     mp2_reference,
@@ -63,6 +64,7 @@ from tests.reference.test_four_center_reference import (
 from tests.reference.test_fourier_reference import STORED_CASES as FOURIER_CASES
 from tests.reference.test_kdft_reference import STORED_CASES as KDFT_CASES
 from tests.reference.test_kdft_reference import STORED_LEVEL as KDFT_LEVEL
+from tests.reference.test_kmp2_reference import STORED_CASES as KMP2_CASES
 from tests.reference.test_kscf_reference import AUXILIARY as KSCF_AUXILIARY
 from tests.reference.test_kscf_reference import CELLS as KSCF_CELLS
 from tests.reference.test_kscf_reference import MESHES as KSCF_MESHES
@@ -119,6 +121,7 @@ def main() -> None:
     record_generalized_kohn_sham()
     record_periodic_kohn_sham()
     record_mp2()
+    record_k_point_mp2()
 
 
 def record_molecules() -> None:
@@ -405,4 +408,28 @@ def record_mp2() -> None:
             auxiliary=MP2_AUXILIARY,
             charge=molecule.charge,
             spin=molecule.spin,
+        )
+
+
+def record_k_point_mp2() -> None:
+    """Write the k-point density-fitted MP2 cases."""
+    for name, basis_name, kind in KMP2_CASES:
+        cell = KSCF_CELLS[name]()
+        basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(cell, KSCF_AUXILIARY, library=LIBRARY)
+        mesh = KSCF_MESHES[name]
+        reference = kmp2_reference(cell, basis, auxiliary, mesh, kind)
+        record(
+            "kmp2",
+            cell,
+            name,
+            basis_name,
+            f"pbc.scf.{kind.upper()}.density_fit with conv_tol=1e-13, "
+            "conv_tol_grad=1e-10, then pbc.mp.KMP2 in the same auxiliary basis; Bohr",
+            {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            auxiliary=KSCF_AUXILIARY,
+            mesh=list(mesh.mesh_size()),
+            charge=cell.charge,
+            spin=cell.spin,
         )

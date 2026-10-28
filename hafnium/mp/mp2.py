@@ -10,7 +10,10 @@ fitted tensor in the orbital basis. The sums run over the blocks the
 symmetry of the reference allows: for a restricted reference the spin
 blocks of one spin follow from the other, for an unrestricted one the
 same-spin and opposite-spin blocks are the familiar UMP2 terms, and a
-generalized reference has one spinor block. The amplitudes
+generalized reference has one spinor block. Over the k-points of a cell
+the orbital indices carry a crystal momentum, the blocks that conserve it
+are summed, and the energy of the supercell of the mesh divides by the
+number of points per cell (ADR-0031). The amplitudes
 ``t2[i, j, a, b] = <ab||ij> / (ε_i + ε_j − ε_a − ε_b)`` of the first-order
 wavefunction are kept.
 """
@@ -26,13 +29,16 @@ from hafnium.correlated import (
     Space,
     energy_denominators,
     transform_df_tensor,
+    transform_periodic_fitting,
 )
-from hafnium.integrals import DensityFitting, IntegralEngine
+from hafnium.errors import InputError
+from hafnium.integrals import DensityFitting, IntegralEngine, density_fitting_k
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
-from hafnium.molecule import Molecule
+from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
+from hafnium.molecule import Cell, Molecule
 from hafnium.scf import ScfResult
 from hafnium.structured import BlockTensor, IrrepSectors, contract
-from hafnium.symmetry import PointGroup, SymmetryAdaptation
+from hafnium.symmetry import KPoints, PointGroup, SymmetryAdaptation
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -42,14 +48,18 @@ class Mp2Result:
     Parameters
     ----------
     reference_energy
-        Total energy of the reference state in Hartree.
+        Total energy of the reference state in Hartree, per cell for a
+        periodic system.
     correlation_energy
-        The second-order correction in Hartree.
+        The second-order correction in Hartree, per cell for a periodic
+        system.
     amplitudes
         ``t2[i, j, a, b] = <ab||ij> / (ε_i + ε_j − ε_a − ε_b)`` as a block
         tensor over the occupied and virtual orbitals of the reference,
         with the index character of the excitation ``a†_a a†_b a_j a_i``:
-        the virtual indices conjugated, the occupied ones not.
+        the virtual indices conjugated, the occupied ones not. Over
+        k-points the orbitals carry their crystal momentum and the
+        amplitudes are those of the supercell of the mesh.
     """
 
     reference_energy: float
@@ -65,10 +75,11 @@ class Mp2Result:
 def df_mp2(
     engine: IntegralEngine,
     basis: BasisSet,
-    molecule: Molecule,
+    system: Molecule | Cell,
     auxiliary: BasisSet,
     reference: ScfResult,
     *,
+    kpoints: KPoints | None = None,
     threshold: float = DEFAULT_METRIC_THRESHOLD,
 ) -> Mp2Result:
     """Compute the DF-MP2 energy of a converged Hartree–Fock ``reference``.
@@ -76,28 +87,39 @@ def df_mp2(
     The two-electron integrals are fitted in the ``auxiliary`` basis with
     the Coulomb metric, whose eigenvalues below ``threshold`` of the
     largest are dropped (:meth:`~hafnium.integrals.DensityFitting.df_tensor`).
-    A reference over irrep sectors adapts the auxiliary basis to its group,
-    in whose standard frame the molecule is. Any Fukutome class serves as
-    the reference; its orbitals must be occupied by whole electrons.
+    A molecular reference over irrep sectors adapts the auxiliary basis to
+    its group, in whose standard frame the molecule is. A cell takes the
+    ``kpoints`` of the reference and fits with momentum transfer
+    (ADR-0019). Any Fukutome class serves as the reference; its orbitals
+    must be occupied by whole electrons.
     """
-    fitting = DensityFitting.build(engine, basis, auxiliary, molecule)
+    if isinstance(system, Cell):
+        if kpoints is None:
+            raise InputError(
+                "the MP2 energy of a cell needs the k-points of the reference"
+            )
+        fitting = density_fitting_k(engine, basis, auxiliary, system, kpoints)
+        return mp2_from_periodic_fitting(reference, fitting, threshold=threshold)
+    if kpoints is not None:
+        raise InputError("a molecule has no k-points; drop them")
     sectors = reference.structure.irreps
     adapted = (
         None
         if sectors is None
         else SymmetryAdaptation.from_basis(
-            auxiliary, molecule, PointGroup.named(sectors.group)
+            auxiliary, system, PointGroup.named(sectors.group)
         ).irreps()
     )
+    molecular = DensityFitting.build(engine, basis, auxiliary, system)
     return mp2_from_df_tensor(
-        reference, fitting.df_tensor(threshold=threshold), auxiliary=adapted
+        reference, molecular.df_tensor(threshold=threshold), auxiliary=adapted
     )
 
 
 def mp2_from_df_tensor(
     reference: ScfResult, df_tensor: Array, *, auxiliary: IrrepSectors | None = None
 ) -> Mp2Result:
-    """Compute the DF-MP2 energy of ``reference`` from the fitted tensor.
+    """Compute the DF-MP2 energy of a molecular ``reference`` from its fitted tensor.
 
     ``auxiliary`` holds the irrep sectors of the auxiliary basis when the
     reference is blocked over a point group; see :func:`transform_df_tensor`.
@@ -109,13 +131,58 @@ def mp2_from_df_tensor(
     virtual_occupied = transform_df_tensor(
         df_tensor, spaces, Space.VIRTUAL, Space.OCCUPIED, auxiliary=auxiliary
     )
+    return _second_order(reference, spaces, occupied_virtual, virtual_occupied, 1.0)
+
+
+def mp2_from_periodic_fitting(
+    reference: ScfResult,
+    fitting: PeriodicDensityFitting,
+    *,
+    threshold: float = DEFAULT_METRIC_THRESHOLD,
+) -> Mp2Result:
+    """Compute the DF-MP2 energy per cell of a periodic ``reference``.
+
+    The fitted tensor of ``fitting`` enters the Bloch orbital basis in the
+    supercell normalization (:func:`transform_periodic_fitting`), the
+    second-order energy of the supercell of the mesh is summed over the
+    blocks that conserve crystal momentum, and the energy per cell is
+    that divided by the number of k-points.
+    """
+    spaces = OrbitalSpaces.from_scf(reference)
+    if spaces.structure.k_axis is None:
+        raise InputError("the reference is molecular; use mp2_from_df_tensor")
+    occupied_virtual = transform_periodic_fitting(
+        fitting, spaces, Space.OCCUPIED, Space.VIRTUAL, threshold=threshold
+    )
+    virtual_occupied = transform_periodic_fitting(
+        fitting, spaces, Space.VIRTUAL, Space.OCCUPIED, signed=True, threshold=threshold
+    )
+    return _second_order(
+        reference,
+        spaces,
+        occupied_virtual,
+        virtual_occupied,
+        1.0 / fitting.kpoints.n_kpt,
+    )
+
+
+def _second_order(
+    reference: ScfResult,
+    spaces: OrbitalSpaces,
+    occupied_virtual: BlockTensor,
+    virtual_occupied: BlockTensor,
+    per_cell: float,
+) -> Mp2Result:
+    """Form the second-order energy and amplitudes from the two fitted tensors."""
     integrals = antisymmetrized_integrals(occupied_virtual, virtual_occupied)
     # t2 = <ab||ij> / Δ, the conjugate of <ij||ab> over Δ; E₂ = ¼ Σ <ij||ab> t2.
     excitations = integrals.conj()
     amplitudes = excitations / energy_denominators(spaces, excitations.structure)
     pairing = contract("ijab,ijab->", integrals, amplitudes).scalar
     xp = array_namespace(pairing)
-    return Mp2Result(reference.energy, float(xp.real(pairing)) / 4, amplitudes)
+    return Mp2Result(
+        reference.energy, per_cell * float(xp.real(pairing)) / 4, amplitudes
+    )
 
 
 def antisymmetrized_integrals(
@@ -126,8 +193,10 @@ def antisymmetrized_integrals(
     ``(ia|jb) = Σ_P B[P, i, a] conj(B[P, b, j])`` pairs the fitted tensor
     between occupied and virtual orbitals with the conjugate of the one
     between virtual and occupied orbitals, ``B[P, j, b] = conj(B[P, b, j])``
-    for the real auxiliary functions of a molecule, so that the sum over
-    the auxiliary index pairs an unconjugated with a conjugated axis.
+    for the real auxiliary functions of a molecule and, with the signature
+    of the metric carried by the second tensor, for the Bloch functions of
+    a cell; the sum over the auxiliary index then pairs an unconjugated
+    with a conjugated axis.
     """
     coulomb = contract("Pia,Pbj->iajb", occupied_virtual, virtual_occupied.conj())
     return coulomb.permute("iajb->ijab") - coulomb.permute("iajb->ijba")
