@@ -145,8 +145,16 @@ class OrbitalSpaces:
 
     @property
     def ring(self) -> Ring:
-        """Ring the tensors over these orbitals are stored over."""
-        return Ring.COMPLEX if self.structure.is_complex else Ring.REAL
+        """Ring the tensors over these orbitals are stored over.
+
+        Complex for a complex state, and over a k axis with points that
+        time reversal does not leave invariant, where the Bloch orbitals
+        are complex.
+        """
+        axis = self.structure.k_axis
+        if self.structure.is_complex or (axis is not None and not axis.all_invariant):
+            return Ring.COMPLEX
+        return Ring.REAL
 
     @property
     def n_ao(self) -> int:

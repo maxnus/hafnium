@@ -8,16 +8,16 @@ spin-orbital form over the block tensors of ADR-0030 and ADR-0031
 
 from hafnium.mp.mp2 import (
     Mp2Result,
-    antisymmetrized_integrals,
     df_mp2,
     mp2_from_df_tensor,
     mp2_from_periodic_fitting,
+    second_order,
 )
 
 __all__ = [
     "Mp2Result",
-    "antisymmetrized_integrals",
     "df_mp2",
     "mp2_from_df_tensor",
     "mp2_from_periodic_fitting",
+    "second_order",
 ]

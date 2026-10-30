@@ -38,3 +38,4 @@ ADR that supersedes it.
 | [0029](0029-noncollinear-functionals-by-the-multi-collinear-approach.md) | The generalized classes take the multi-collinear form of a collinear functional | accepted 2026-10-25 |
 | [0030](0030-block-tensors-with-a-conservation-rule.md) | Block tensors conserve spin and irrep charges, and DF-MP2 is written once over them | accepted 2026-10-28 |
 | [0031](0031-correlated-tensors-over-k-points.md) | Correlated tensors over k-points conserve crystal momentum and store one block per orbit of time reversal | accepted 2026-10-28 |
+| [0032](0032-coupled-cluster-equations-from-an-in-house-generator.md) | Coupled-cluster equations come from an in-house Wick generator and run as one program over block tensors | accepted 2026-10-30 |

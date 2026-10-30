@@ -291,6 +291,94 @@ def kmp2_reference(
     }
 
 
+def ccsd_reference(
+    molecule: Molecule, basis: BasisSet, auxiliary: BasisSet, kind: str
+) -> dict[str, float]:
+    """Density-fitted ``kind`` Hartree–Fock and DF-CCSD energies in one auxiliary basis.
+
+    The reference is converged to a gradient of 1e-10 and the amplitudes
+    to a norm of 1e-10. PySCF has DF-CCSD for RHF (``cc.dfccsd``) and UHF
+    (``cc.dfuccsd``) references; a GHF reference runs ``cc.gccsd`` on the
+    four-centre integrals assembled from the same fitted tensor
+    (``with_df.get_eri``), which is the same approximation.
+    """
+    scf: Any = pytest.importorskip("pyscf.scf")
+    dfccsd: Any = pytest.importorskip("pyscf.cc.dfccsd")
+    dfuccsd: Any = pytest.importorskip("pyscf.cc.dfuccsd")
+    gccsd: Any = pytest.importorskip("pyscf.cc.gccsd")
+    mol = pyscf_molecule(molecule, basis)
+    mean_field = {"rhf": scf.RHF, "uhf": scf.UHF, "ghf": scf.GHF}[kind](mol)
+    mean_field = mean_field.density_fit(auxbasis=basis_input(molecule, auxiliary))
+    mean_field.conv_tol = 1e-13
+    mean_field.conv_tol_grad = 1e-10
+    mean_field.max_cycle = 300
+    reference_energy = float(mean_field.kernel())
+    assert mean_field.converged
+    if kind == "rhf":
+        coupled_cluster = dfccsd.RCCSD(mean_field)
+    elif kind == "uhf":
+        coupled_cluster = dfuccsd.UCCSD(mean_field)
+    else:
+        mean_field._eri = mean_field.with_df.get_eri()
+        coupled_cluster = gccsd.GCCSD(mean_field)
+    coupled_cluster.conv_tol = 1e-12
+    coupled_cluster.conv_tol_normt = 1e-10
+    coupled_cluster.max_cycle = 200
+    correlation_energy = float(coupled_cluster.kernel()[0])
+    assert coupled_cluster.converged
+    return {
+        "reference_energy": reference_energy,
+        "correlation_energy": correlation_energy,
+    }
+
+
+def kccsd_reference(
+    cell: Cell, basis: BasisSet, auxiliary: BasisSet, kpoints: KPoints, kind: str
+) -> dict[str, float]:
+    """Density-fitted ``kind`` (``"krhf"``) k-point HF and CCSD energies per cell.
+
+    PySCF's ``KRCCSD`` with Gaussian density fitting in the same auxiliary
+    basis, the reference converged to a gradient of 1e-10 and the
+    amplitudes to a norm of 1e-10. By default PySCF's k-point CCSD
+    classes rebuild the Fock matrix without the Ewald exchange correction
+    of the mean field (``exxdiv=None``) and only shift the orbital
+    energies of the denominators by the Madelung constant for
+    convergence, so their energy is that of a Hamiltonian whose occupied
+    orbital energies differ from the reference's, 5 mHartree per cell
+    here, while ``KMP2`` keeps the corrected energies; ``keep_exxdiv``
+    makes ``KRCCSD`` use the mean field's Fock matrix as Hafnium does.
+    ``KUCCSD`` and ``KGCCSD`` have no such option, so only the restricted
+    class is served.
+    """
+    pbc_scf: Any = pytest.importorskip("pyscf.pbc.scf")
+    pbc_cc: Any = pytest.importorskip("pyscf.pbc.cc")
+    if kind != "krhf":
+        raise ValueError(
+            "PySCF keeps the exchange correction in the Fock matrix of KRCCSD only"
+        )
+    reference = pyscf_cell(cell, basis)
+    kpts = np.asarray(kpoints.cartesian(cell.lattice))
+    mean_field = pbc_scf.KRHF(reference, kpts=kpts).density_fit(
+        auxbasis=basis_input(cell, auxiliary)
+    )
+    mean_field.conv_tol = 1e-13
+    mean_field.conv_tol_grad = 1e-10
+    mean_field.max_cycle = 300
+    reference_energy = float(mean_field.kernel())
+    assert mean_field.converged
+    coupled_cluster = pbc_cc.KRCCSD(mean_field)
+    coupled_cluster.keep_exxdiv = True
+    coupled_cluster.conv_tol = 1e-12
+    coupled_cluster.conv_tol_normt = 1e-10
+    coupled_cluster.max_cycle = 200
+    correlation_energy = float(coupled_cluster.kernel()[0])
+    assert coupled_cluster.converged
+    return {
+        "reference_energy": reference_energy,
+        "correlation_energy": correlation_energy,
+    }
+
+
 def padded_lattice_vectors(cell: Cell, vacuum: float) -> np.ndarray:
     """Three lattice vectors ``[3, 3]`` for PySCF, padded orthogonally.
 

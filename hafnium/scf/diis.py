@@ -68,20 +68,27 @@ class Diis:
 
 
 def _coefficients(errors: tuple[BlockMatrix, ...]) -> Array:
-    """Solve the DIIS equations for the real overlap of the error vectors.
-
-    The system ``[[B, -1], [-1ᵀ, 0]] [c, λ] = [0, -1]`` is solved through
-    its eigendecomposition, dropping the null space (see
-    :data:`NULL_SPACE_TOLERANCE`).
-    """
+    """Solve the DIIS equations for the real overlap of the error vectors."""
     xp = array_namespace(*errors[0].blocks)
-    m = len(errors)
     overlaps = xp.stack(
         [
             xp.stack([xp.real(a.adjoint().trace_product(b)) for b in errors])
             for a in errors
         ]
     )
+    return solve_diis(overlaps)
+
+
+def solve_diis(overlaps: Array) -> Array:
+    """Return the combination coefficients for the ``[m, m]`` error ``overlaps``.
+
+    The system ``[[B, -1], [-1ᵀ, 0]] [c, λ] = [0, -1]`` with ``B`` the
+    overlaps scaled by their largest diagonal entry is solved through its
+    eigendecomposition, dropping the null space (see
+    :data:`NULL_SPACE_TOLERANCE`).
+    """
+    xp = array_namespace(overlaps)
+    m = int(overlaps.shape[0])
     # All errors exactly zero (a one-function block) leave nothing to scale.
     scale = xp.max(xp.linalg.diagonal(overlaps))
     overlaps = overlaps / xp.where(scale > 0.0, scale, 1.0)

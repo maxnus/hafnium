@@ -167,3 +167,7 @@ NONCOLLINEAR_LIMIT_TOL = 1e-8
 # correlation energy is first order in the orbital error, so the references
 # are converged to a gradient of 1e-9 on both sides before comparing.
 MP2_ENERGY_TOL = 1e-10
+# CCSD energies against PySCF, across the Fukutome classes, and against
+# full configuration interaction for two electrons: both sides converge the
+# reference to a gradient of 1e-9 and the amplitudes to 1e-10.
+CCSD_ENERGY_TOL = 1e-10

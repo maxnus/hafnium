@@ -58,6 +58,7 @@ nav:
       - adr/0029-noncollinear-functionals-by-the-multi-collinear-approach.md
       - adr/0030-block-tensors-with-a-conservation-rule.md
       - adr/0031-correlated-tensors-over-k-points.md
+      - adr/0032-coupled-cluster-equations-from-an-in-house-generator.md
   - API reference: api.md
 
 markdown_extensions:
