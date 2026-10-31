@@ -47,6 +47,14 @@ Until then the packages are documented directly.
 
 ::: hafnium.mp
 
+## hafnium.cc
+
+::: hafnium.cc
+
+## hafnium.cc.generator
+
+::: hafnium.cc.generator
+
 ## hafnium.backend
 
 ::: hafnium.backend

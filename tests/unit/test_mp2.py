@@ -7,7 +7,6 @@ from hafnium.basis import BasisSet
 from hafnium.correlated import (
     OrbitalSpaces,
     Space,
-    energy_denominators,
     transform_df_tensor,
 )
 from hafnium.errors import InputError, StructureError
@@ -224,8 +223,8 @@ def test_transformation_matches_the_explicit_contraction(
     assert spaces.space_of(fitted.structure.axes[2]) is Space.VIRTUAL
     with pytest.raises(StructureError, match="neither"):
         spaces.space_of(fitted.structure.axes[0])
-    denominators = energy_denominators(
-        spaces, TensorStructure(fitted.structure.axes[1:], ring=spaces.ring)
+    denominators = spaces.denominators(
+        TensorStructure(fitted.structure.axes[1:], ring=spaces.ring)
     )
     e_occ = spaces.occupied_energies.blocks[0]
     e_vir = spaces.virtual_energies.blocks[0]

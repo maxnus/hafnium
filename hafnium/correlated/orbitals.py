@@ -12,10 +12,14 @@ from hafnium.structured import (
     Block,
     BlockMatrix,
     BlockStructure,
+    BlockTensor,
     BlockVector,
     Ring,
     TensorAxis,
+    TensorStructure,
 )
+from hafnium.structured.tensor import Key
+from hafnium.structured.validation import dtype_for
 
 OCCUPATION_TOLERANCE = 1e-8
 """Deviation of an occupation number from zero or one that still counts as integer."""
@@ -145,8 +149,16 @@ class OrbitalSpaces:
 
     @property
     def ring(self) -> Ring:
-        """Ring the tensors over these orbitals are stored over."""
-        return Ring.COMPLEX if self.structure.is_complex else Ring.REAL
+        """Ring the tensors over these orbitals are stored over.
+
+        Complex for a complex state, and over a k axis with points that
+        time reversal does not leave invariant, where the Bloch orbitals
+        are complex.
+        """
+        axis = self.structure.k_axis
+        if self.structure.is_complex or (axis is not None and not axis.all_invariant):
+            return Ring.COMPLEX
+        return Ring.REAL
 
     @property
     def n_ao(self) -> int:
@@ -206,6 +218,61 @@ class OrbitalSpaces:
         assume.
         """
         return self.coefficients(space).materialized(orbitals=True)
+
+    def denominators(self, structure: TensorStructure) -> BlockTensor:
+        """``Σ_occupied ε − Σ_virtual ε`` over the axes of ``structure``.
+
+        Every axis runs over the occupied or the virtual orbitals; the
+        orbital energies of occupied indices enter with a plus, those of
+        virtual indices with a minus, so that for the axes ``[i, j, a, b]``
+        the result is ``ε_i + ε_j − ε_a − ε_b``.
+        """
+        spaces_of_axes = [self.space_of(axis) for axis in structure.axes]
+        signs = [1.0 if space is Space.OCCUPIED else -1.0 for space in spaces_of_axes]
+        xp = array_namespace(*self.occupied_energies.blocks)
+        dtype = dtype_for(xp, structure.ring)
+
+        def build(key: Key) -> Array:
+            total: Array | None = None
+            for position, (space, sign, sector) in enumerate(
+                zip(spaces_of_axes, signs, key, strict=True)
+            ):
+                shape = [1] * len(key)
+                shape[position] = -1
+                term = sign * xp.reshape(self.sector_energies(space, sector), shape)
+                total = term if total is None else total + term
+            assert total is not None
+            return xp.astype(xp.broadcast_to(total, structure.shape(key)), dtype)
+
+        return BlockTensor.from_function(structure, build)
+
+    def fock_block(
+        self, slots: tuple[Space, Space], *, ring: Ring | None = None
+    ) -> BlockTensor:
+        """``f[p, q] = δ_pq ε_p`` of the canonical orbitals, ``p`` conjugated.
+
+        ``slots`` holds the spaces of the two indices; the occupied–virtual
+        block vanishes like the virtual–occupied one, since the Fock
+        operator of a converged Hartree–Fock state is diagonal in its
+        canonical orbitals, with the orbital energies on the diagonal. The
+        block is stored over ``ring``, by default :attr:`ring`.
+        """
+        bra, ket = slots
+        structure = TensorStructure(
+            (self.axis(bra, conjugated=True), self.axis(ket, conjugated=False)),
+            ring=self.ring if ring is None else ring,
+        )
+        xp = array_namespace(*self.occupied_energies.blocks)
+        dtype = dtype_for(xp, structure.ring)
+
+        def build(key: Key) -> Array:
+            shape = structure.shape(key)
+            if bra is not ket or key[0] != key[1]:
+                return xp.zeros(shape, dtype=dtype)
+            energies = self.sector_energies(bra, key[0])
+            return xp.astype(xp.eye(shape[0]) * xp.expand_dims(energies, axis=0), dtype)
+
+        return BlockTensor.from_function(structure, build)
 
     def space_of(self, axis: TensorAxis) -> Space:
         """Which space ``axis`` runs over, whatever its conjugation.

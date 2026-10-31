@@ -1,15 +1,19 @@
-"""The fitted integrals in the orbital basis, and the orbital energy denominators."""
+"""The fitted integrals in the orbital basis."""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from hafnium.backend import Array, adjoint, array_namespace
+from hafnium.basis import BasisSet
 from hafnium.correlated.orbitals import OrbitalSpaces, Space
 from hafnium.errors import InputError, StructureError
+from hafnium.integrals import DensityFitting, IntegralEngine, density_fitting_k
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
+from hafnium.molecule import Cell, Molecule
+from hafnium.scf import ScfResult
 from hafnium.structured import (
     BlockStructure,
     BlockTensor,
@@ -18,9 +22,10 @@ from hafnium.structured import (
     Spin,
     TensorAxis,
     TensorStructure,
+    contract,
 )
 from hafnium.structured.tensor import Key
-from hafnium.structured.validation import dtype_for
+from hafnium.symmetry import KPoints, PointGroup, SymmetryAdaptation
 
 
 def auxiliary_axis(n_aux: int, sectors: IrrepSectors | None = None) -> TensorAxis:
@@ -310,31 +315,163 @@ def _transform(df_tensor: Array, bra: Array, ket: Array, spin: Spin) -> Array:
     return xp.expand_dims(adjoint(bra), axis=0) @ half
 
 
-def energy_denominators(
-    spaces: OrbitalSpaces, structure: TensorStructure
-) -> BlockTensor:
-    """``Σ_occupied ε − Σ_virtual ε`` over the axes of ``structure``.
+@dataclass(frozen=True, slots=True, eq=False)
+class FittedOrbitalTensors:
+    """The fitted tensor between every pair of orbital spaces, formed on demand.
 
-    Every axis runs over the occupied or the virtual orbitals of
-    ``spaces``; the orbital energies of occupied indices enter with a
-    plus, those of virtual indices with a minus, so that for the axes
-    ``[i, j, a, b]`` the result is ``ε_i + ε_j − ε_a − ε_b``.
+    ``B[P, p, q]`` for ``p`` in one space and ``q`` in another is
+    :func:`transform_df_tensor` of a molecule's fitted tensor or
+    :func:`transform_fitted_tensors` of a cell's, kept once per pair of
+    spaces; a cell's tensors come in the plain and the signed form (the
+    signature of the metric on the auxiliary index), a molecule's signed
+    form is the plain one. From them :meth:`antisymmetrized` assembles the
+    integrals ``<pq||rs>`` of any block.
+
+    Parameters
+    ----------
+    spaces
+        The orbital spaces of the reference.
+    n_cells
+        Cells in the supercell of the mesh, the number of k-points, so
+        that an energy of the supercell divides by it per cell; one for
+        a molecule.
     """
-    spaces_of_axes = [spaces.space_of(axis) for axis in structure.axes]
-    signs = [1.0 if space is Space.OCCUPIED else -1.0 for space in spaces_of_axes]
-    xp = array_namespace(*spaces.occupied_energies.blocks)
-    dtype = dtype_for(xp, structure.ring)
 
-    def build(key: Key) -> Array:
-        total: Array | None = None
-        for position, (space, sign, sector) in enumerate(
-            zip(spaces_of_axes, signs, key, strict=True)
-        ):
-            shape = [1] * len(key)
-            shape[position] = -1
-            term = sign * xp.reshape(spaces.sector_energies(space, sector), shape)
-            total = term if total is None else total + term
-        assert total is not None
-        return xp.astype(xp.broadcast_to(total, structure.shape(key)), dtype)
+    spaces: OrbitalSpaces
+    n_cells: int
+    _molecular: tuple[Array, IrrepSectors | None] | None
+    _periodic: FittedPeriodicTensors | None
+    _cache: dict[tuple[Space, Space, bool], BlockTensor] = field(
+        default_factory=lambda: {}, repr=False
+    )
 
-    return BlockTensor.from_function(structure, build)
+    @classmethod
+    def from_df_tensor(
+        cls,
+        df_tensor: Array,
+        spaces: OrbitalSpaces,
+        *,
+        auxiliary: IrrepSectors | None = None,
+    ) -> FittedOrbitalTensors:
+        """Wrap the fitted tensor of a molecule, see :func:`transform_df_tensor`."""
+        if spaces.structure.k_axis is not None:
+            raise InputError(
+                "the orbitals belong to a cell; transform its periodic fitting with "
+                "transform_periodic_fitting"
+            )
+        return cls(spaces, 1, (df_tensor, auxiliary), None)
+
+    @classmethod
+    def from_periodic_fitting(
+        cls,
+        fitting: PeriodicDensityFitting,
+        spaces: OrbitalSpaces,
+        *,
+        threshold: float = DEFAULT_METRIC_THRESHOLD,
+    ) -> FittedOrbitalTensors:
+        """Wrap the fitting of a cell, see :func:`transform_periodic_fitting`."""
+        if spaces.structure.k_axis is None:
+            raise InputError(
+                "the orbitals are molecular; transform the fitted tensor of a "
+                "molecule with transform_df_tensor"
+            )
+        return cls(
+            spaces,
+            fitting.kpoints.n_kpt,
+            None,
+            fitted_periodic_tensors(fitting, threshold),
+        )
+
+    @classmethod
+    def build(
+        cls,
+        engine: IntegralEngine,
+        basis: BasisSet,
+        system: Molecule | Cell,
+        auxiliary: BasisSet,
+        reference: ScfResult,
+        *,
+        kpoints: KPoints | None = None,
+        threshold: float = DEFAULT_METRIC_THRESHOLD,
+    ) -> FittedOrbitalTensors:
+        """Fit the two-electron integrals of ``system`` for ``reference``.
+
+        The ``auxiliary`` basis fits with the Coulomb metric, whose
+        eigenvalues below ``threshold`` of the largest are dropped
+        (:meth:`~hafnium.integrals.DensityFitting.df_tensor`). A molecular
+        reference over irrep sectors adapts the auxiliary basis to its
+        group, in whose standard frame the molecule is. A cell takes the
+        ``kpoints`` of the reference and fits with momentum transfer
+        (ADR-0019). Any Fukutome class serves as the reference; its
+        orbitals must be occupied by whole electrons.
+        """
+        spaces = OrbitalSpaces.from_scf(reference)
+        if isinstance(system, Cell):
+            if kpoints is None:
+                raise InputError("a cell needs the k-points of the reference")
+            fitting = density_fitting_k(engine, basis, auxiliary, system, kpoints)
+            return cls.from_periodic_fitting(fitting, spaces, threshold=threshold)
+        if kpoints is not None:
+            raise InputError("a molecule has no k-points; drop them")
+        sectors = reference.structure.irreps
+        adapted = (
+            None
+            if sectors is None
+            else SymmetryAdaptation.from_basis(
+                auxiliary, system, PointGroup.named(sectors.group)
+            ).irreps()
+        )
+        molecular = DensityFitting.build(engine, basis, auxiliary, system)
+        return cls.from_df_tensor(
+            molecular.df_tensor(threshold=threshold), spaces, auxiliary=adapted
+        )
+
+    @property
+    def ring(self) -> Ring:
+        """Ring the tensors are stored over: complex for a cell's."""
+        return Ring.COMPLEX if self._periodic is not None else self.spaces.ring
+
+    def tensor(self, bra: Space, ket: Space, *, signed: bool = False) -> BlockTensor:
+        """Return ``B[P, p, q]``, ``p`` in ``bra`` and conjugated, ``q`` in ``ket``.
+
+        With ``signed`` the signature of a cell's metric multiplies the
+        auxiliary index; a molecule has none.
+        """
+        signed = signed and self._periodic is not None
+        cached = self._cache.get((bra, ket, signed))
+        if cached is not None:
+            return cached
+        if self._molecular is not None:
+            df_tensor, auxiliary = self._molecular
+            tensor = transform_df_tensor(
+                df_tensor, self.spaces, bra, ket, auxiliary=auxiliary
+            )
+        else:
+            assert self._periodic is not None
+            tensor = transform_fitted_tensors(
+                self._periodic, self.spaces, bra, ket, signed=signed
+            )
+        self._cache[bra, ket, signed] = tensor
+        return tensor
+
+    def antisymmetrized(self, slots: tuple[Space, Space, Space, Space]) -> BlockTensor:
+        """``<pq||rs> = (pr|qs) − (ps|qr)`` as the block tensor ``[p, q, r, s]``.
+
+        ``slots`` holds the space of each index, occupied, occupied,
+        virtual, virtual for ``<ij||ab>``; ``p`` and ``q`` are conjugated
+        (CONVENTIONS.md §3).
+        ``(pr|qs) = Σ_P B[P, p, r] conj(B[P, s, q])`` pairs the fitted
+        tensor with the conjugate of the signed one, ``B[P, q, s] =
+        conj(B[P, s, q])`` for the real auxiliary functions of a molecule
+        and, with the signature of the metric, for the Bloch functions of
+        a cell; the sum over the auxiliary index then pairs an
+        unconjugated with a conjugated axis.
+        """
+        p, q, r, s = slots
+        direct = contract(
+            "Ppr,Psq->pqrs", self.tensor(p, r), self.tensor(s, q, signed=True).conj()
+        )
+        exchange = contract(
+            "Pps,Prq->pqrs", self.tensor(p, s), self.tensor(r, q, signed=True).conj()
+        )
+        return direct - exchange

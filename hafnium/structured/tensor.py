@@ -29,6 +29,7 @@ the charge rule of its result follows from those of its operands.
 
 from __future__ import annotations
 
+import functools
 import itertools
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -292,6 +293,9 @@ class TensorStructure:
     _keys: tuple[Key, ...] = field(init=False, repr=False, compare=False)
     _stored: tuple[Key, ...] = field(init=False, repr=False, compare=False)
     _positions: dict[Key, int] = field(init=False, repr=False, compare=False)
+    _derivations: dict[Key, tuple[Key, bool]] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         axes = tuple(self.axes)
@@ -303,13 +307,11 @@ class TensorStructure:
             "_modulus",
             next((axis.modulus for axis in axes if axis.modulus is not None), None),
         )
-        keys = _allowed_keys(axes)
-        stored = tuple(key for key in keys if self.derivation(key)[0] == key)
+        keys, stored, positions, derivations = _tables(axes)
         object.__setattr__(self, "_keys", keys)
         object.__setattr__(self, "_stored", stored)
-        object.__setattr__(
-            self, "_positions", {key: index for index, key in enumerate(stored)}
-        )
+        object.__setattr__(self, "_positions", positions)
+        object.__setattr__(self, "_derivations", derivations)
 
     @property
     def n_axes(self) -> int:
@@ -376,27 +378,20 @@ class TensorStructure:
         distinct keys with whether their block is the conjugate of the
         block ``key``. A symmetry that maps ``key`` onto itself adds nothing.
         """
-        images: dict[Key, bool] = {key: False}
-        for generator in self._generators:
-            for current, conjugated in list(images.items()):
-                moved = tuple(generator.maps[axis][s] for axis, s in enumerate(current))
-                images.setdefault(moved, conjugated != generator.conjugates)
-        return tuple(images.items())
+        return _orbit(self._generators, key)
 
     def derivation(self, key: Key) -> tuple[Key, bool]:
         """Return the stored key the block ``key`` follows from, and whether conjugated.
 
         The stored member of an orbit is the lexicographically smallest
         key; a block mapped onto itself by a symmetry is its own source.
+        The derivations of the allowed keys are computed once.
         """
-        orbit = self.orbit(key)
-        source = min(image for image, _ in orbit)
-        if source == key:
-            return key, False
-        for image, conjugated in orbit:
-            if image == source:
-                return source, conjugated
-        raise AssertionError("the source is in the orbit")
+        cached = self._derivations.get(key)
+        return self._derive(key) if cached is None else cached
+
+    def _derive(self, key: Key) -> tuple[Key, bool]:
+        return _derive(self._generators, key)
 
     def conjugated(self) -> TensorStructure:
         """Return the structure of the complex conjugate: every axis conjugated."""
@@ -489,6 +484,48 @@ def _is_neutral(charge: _Charge) -> bool:
     )
 
 
+def _orbit(
+    generators: tuple[_Generator, ...], key: Key
+) -> tuple[tuple[Key, bool], ...]:
+    images: dict[Key, bool] = {key: False}
+    for generator in generators:
+        for current, conjugated in list(images.items()):
+            moved = tuple(generator.maps[axis][s] for axis, s in enumerate(current))
+            images.setdefault(moved, conjugated != generator.conjugates)
+    return tuple(images.items())
+
+
+def _derive(generators: tuple[_Generator, ...], key: Key) -> tuple[Key, bool]:
+    orbit = _orbit(generators, key)
+    source = min(image for image, _ in orbit)
+    if source == key:
+        return key, False
+    for image, conjugated in orbit:
+        if image == source:
+            return source, conjugated
+    raise AssertionError("the source is in the orbit")
+
+
+@functools.lru_cache(maxsize=1024)
+def _tables(
+    axes: tuple[TensorAxis, ...],
+) -> tuple[
+    tuple[Key, ...], tuple[Key, ...], dict[Key, int], dict[Key, tuple[Key, bool]]
+]:
+    """Enumerate the keys, stored keys, positions and derivations of ``axes``.
+
+    Structures over the same axes recur at every iteration of a correlated
+    method, so the tables are kept for the last ones; the tables are
+    shared, never mutated.
+    """
+    generators = _generators(axes)
+    keys = _allowed_keys(axes)
+    derivations = {key: _derive(generators, key) for key in keys}
+    stored = tuple(key for key in keys if derivations[key][0] == key)
+    positions = {key: index for index, key in enumerate(stored)}
+    return keys, stored, positions, derivations
+
+
 def _allowed_keys(axes: tuple[TensorAxis, ...]) -> tuple[Key, ...]:
     """Enumerate the keys whose charges cancel, with no empty sector, in order.
 
@@ -513,13 +550,15 @@ def _allowed_keys(axes: tuple[TensorAxis, ...]) -> tuple[Key, ...]:
         else tuple([1] * len(last.characters(0) or ())),
         None if modulus is None else tuple([0] * len(modulus)),
     )
+    charges = [
+        {s: _charge(axis, s) for s in range(axis.n_sectors) if axis.sizes[s] > 0}
+        for axis in axes[:-1]
+    ]
     keys: list[Key] = []
-    for prefix in itertools.product(
-        *[[s for s in range(axis.n_sectors) if axis.sizes[s] > 0] for axis in axes[:-1]]
-    ):
+    for prefix in itertools.product(*[list(table) for table in charges]):
         total = neutral
-        for axis, s in zip(axes[:-1], prefix, strict=True):
-            total = _combine(total, _charge(axis, s), modulus)
+        for table, s in zip(charges, prefix, strict=True):
+            total = _combine(total, table[s], modulus)
         keys.extend((*prefix, s) for s in by_charge.get(_negated(total, modulus), []))
     return tuple(keys)
 
@@ -924,9 +963,26 @@ def contract(subscripts: str, first: BlockTensor, second: BlockTensor) -> BlockT
         [letters_first.index(letter) for letter in contracted],
         [letters_second.index(letter) for letter in contracted],
     )
+    # tensordot leaves the free axes of its first operand, then the second's;
+    # the operands go in the order that spares a permutation of every product.
+    free = (
+        [(0, k) for k in range(first.n_axes) if k not in positions[0]],
+        [(1, k) for k in range(second.n_axes) if k not in positions[1]],
+    )
+    order = tuple((free[0] + free[1]).index(source) for source in sources)
+    swapped = tuple((free[1] + free[0]).index(source) for source in sources)
+    identity = tuple(range(len(order)))
+    operand_order = (0, 1) if order == identity or swapped != identity else (1, 0)
     return BlockTensor.from_blocks(
         structure,
-        _accumulate(subscripts, first, second, positions, sources, structure),
+        _accumulate(
+            first,
+            second,
+            positions,
+            (order if operand_order == (0, 1) else swapped, operand_order),
+            sources,
+            structure,
+        ),
         xp=array_namespace(*first.blocks, *second.blocks)
         if first.blocks or second.blocks
         else None,
@@ -934,18 +990,23 @@ def contract(subscripts: str, first: BlockTensor, second: BlockTensor) -> BlockT
 
 
 def _accumulate(
-    subscripts: str,
     first: BlockTensor,
     second: BlockTensor,
     positions: tuple[list[int], list[int]],
+    product: tuple[tuple[int, ...], tuple[int, int]],
     sources: list[tuple[int, int]],
     structure: TensorStructure,
 ) -> dict[Key, Array]:
     """Sum the block products of a contraction into the stored result keys.
 
-    ``positions`` holds the axes of the contracted letters in each operand.
+    ``positions`` holds the axes of the contracted letters in each operand;
+    ``product`` the permutation from the axes ``tensordot`` leaves to the
+    result's and the order in which the operands enter it. Each product
+    is one ``tensordot``, a matrix product.
     """
     positions_first, positions_second = positions
+    order, operand_order = product
+    identity = tuple(range(len(order)))
     by_contracted: dict[Key, list[Key]] = {}
     for key in second.structure.keys:
         by_contracted.setdefault(tuple(key[p] for p in positions_second), []).append(
@@ -971,7 +1032,17 @@ def _accumulate(
             block_second = second_blocks.get(key_second)
             if block_second is None:
                 block_second = second_blocks[key_second] = second.block(key_second)
-            value = xp.einsum(subscripts, block_first, block_second, optimize=True)
+            value = (
+                xp.tensordot(
+                    block_first, block_second, axes=(positions_first, positions_second)
+                )
+                if operand_order == (0, 1)
+                else xp.tensordot(
+                    block_second, block_first, axes=(positions_second, positions_first)
+                )
+            )
+            if order != identity:
+                value = xp.permute_dims(value, order)
             previous = accumulated.get(result_key)
             accumulated[result_key] = value if previous is None else previous + value
     return accumulated
