@@ -24,11 +24,7 @@ from dataclasses import dataclass
 
 from hafnium.backend import Array, array_namespace
 from hafnium.basis import BasisSet
-from hafnium.correlated import (
-    FittedOrbitalTensors,
-    OrbitalSpaces,
-    energy_denominators,
-)
+from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces
 from hafnium.integrals import IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
@@ -146,7 +142,7 @@ def second_order(reference: ScfResult, fitted: FittedOrbitalTensors) -> Mp2Resul
     """
     integrals = fitted.antisymmetrized("oovv")
     excitations = integrals.conj()
-    amplitudes = excitations / energy_denominators(fitted.spaces, excitations.structure)
+    amplitudes = excitations / fitted.spaces.denominators(excitations.structure)
     pairing = contract("ijab,ijab->", integrals, amplitudes).scalar
     xp = array_namespace(pairing)
     return Mp2Result(

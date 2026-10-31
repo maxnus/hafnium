@@ -12,12 +12,7 @@ from hafnium.cc import (
     df_ccsd,
     solve_ccsd,
 )
-from hafnium.correlated import (
-    FittedOrbitalTensors,
-    OrbitalSpaces,
-    Space,
-    fock_block,
-)
+from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.molecule import Molecule
 from hafnium.mp import mp2_from_df_tensor
@@ -250,7 +245,7 @@ def test_integral_blocks_match_the_dense_spin_orbital_formula(
     assert fitted.tensor(Space.OCCUPIED, Space.VIRTUAL, signed=True) is fitted.tensor(
         Space.OCCUPIED, Space.VIRTUAL
     )
-    with pytest.raises(InputError, match="four slots"):
+    with pytest.raises(InputError, match="4 slots"):
         fitted.antisymmetrized("oov")
     with pytest.raises(InputError, match="occupied"):
         fitted.antisymmetrized("ooxv")
@@ -265,7 +260,7 @@ def test_fock_blocks_are_diagonal_in_the_canonical_orbitals(
         ("oo", spaces.occupied_energies),
         ("vv", spaces.virtual_energies),
     ):
-        block = fock_block(spaces, slots)
+        block = spaces.fock_block(slots)
         assert block.structure.keys == ((0, 0), (1, 1))
         for position in range(2):
             np.testing.assert_allclose(
@@ -273,10 +268,10 @@ def test_fock_blocks_are_diagonal_in_the_canonical_orbitals(
                 np.diag(energies.blocks[position]),
                 atol=STRUCTURE_TOL,
             )
-    assert np.all(fock_block(spaces, "ov").to_dense() == 0.0)
-    assert np.all(fock_block(spaces, "vo").to_dense() == 0.0)
-    with pytest.raises(InputError, match="two slots"):
-        fock_block(spaces, "oov")
+    assert np.all(spaces.fock_block("ov").to_dense() == 0.0)
+    assert np.all(spaces.fock_block("vo").to_dense() == 0.0)
+    with pytest.raises(InputError, match="2 slots"):
+        spaces.fock_block("oov")
 
 
 def test_options_and_convergence_are_reported(water_hamiltonian: Hamiltonian) -> None:

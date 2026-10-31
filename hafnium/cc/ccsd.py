@@ -26,13 +26,8 @@ from hafnium.cc._ccsd_equations import (
     singles_residual,
 )
 from hafnium.cc.diis import AmplitudeDiis
-from hafnium.cc.hamiltonian import normal_ordered_hamiltonian
-from hafnium.correlated import (
-    FittedOrbitalTensors,
-    OrbitalSpaces,
-    Space,
-    energy_denominators,
-)
+from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
+from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.integrals import IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
@@ -224,7 +219,7 @@ def solve_ccsd(
     if options is None:
         options = CcsdOptions()
     spaces = fitted.spaces
-    hamiltonian = normal_ordered_hamiltonian(
+    hamiltonian = NormalOrderedHamiltonian.from_fitted(
         fitted, fock_blocks=FOCK_BLOCKS, integral_blocks=INTEGRAL_BLOCKS
     )
     singles, doubles, denominators_singles, denominators_doubles = _starting_point(
@@ -281,7 +276,7 @@ def _starting_point(
 ) -> tuple[BlockTensor, BlockTensor, BlockTensor, BlockTensor]:
     """Return the starting singles and doubles with their energy denominators."""
     excitations = integrals.conj()
-    denominators_doubles = energy_denominators(spaces, excitations.structure)
+    denominators_doubles = spaces.denominators(excitations.structure)
     singles_structure = TensorStructure(
         (
             spaces.axis(Space.OCCUPIED, conjugated=False),
@@ -289,7 +284,7 @@ def _starting_point(
         ),
         ring=excitations.structure.ring,
     )
-    denominators_singles = energy_denominators(spaces, singles_structure)
+    denominators_singles = spaces.denominators(singles_structure)
     if guess is None:
         doubles = excitations / denominators_doubles
         singles = BlockTensor.zeros(

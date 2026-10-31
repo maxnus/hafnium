@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from hafnium.correlated import FittedOrbitalTensors, fock_block
+from hafnium.correlated import FittedOrbitalTensors
 from hafnium.structured import BlockTensor
 
 
@@ -26,24 +26,26 @@ class NormalOrderedHamiltonian:
     fock: Mapping[str, BlockTensor]
     integrals: Mapping[str, BlockTensor]
 
+    @classmethod
+    def from_fitted(
+        cls,
+        fitted: FittedOrbitalTensors,
+        *,
+        fock_blocks: Iterable[str],
+        integral_blocks: Iterable[str],
+    ) -> NormalOrderedHamiltonian:
+        """Form the blocks an equation reads from the fitted tensors.
 
-def normal_ordered_hamiltonian(
-    fitted: FittedOrbitalTensors,
-    *,
-    fock_blocks: Iterable[str],
-    integral_blocks: Iterable[str],
-) -> NormalOrderedHamiltonian:
-    """Form the blocks of ``H_N`` an equation reads from the fitted tensors.
-
-    The Fock blocks are those of the canonical orbitals of the reference
-    (:func:`~hafnium.correlated.fock_block`) over the ring of the fitted
-    tensors, the integral blocks the antisymmetrized ones of
-    :meth:`FittedOrbitalTensors.antisymmetrized`.
-    """
-    return NormalOrderedHamiltonian(
-        {
-            slots: fock_block(fitted.spaces, slots, ring=fitted.ring)
-            for slots in fock_blocks
-        },
-        {slots: fitted.antisymmetrized(slots) for slots in integral_blocks},
-    )
+        The Fock blocks are those of the canonical orbitals of the
+        reference (:meth:`~hafnium.correlated.OrbitalSpaces.fock_block`)
+        over the ring of the fitted tensors, the integral blocks the
+        antisymmetrized ones of
+        :meth:`~hafnium.correlated.FittedOrbitalTensors.antisymmetrized`.
+        """
+        return cls(
+            {
+                slots: fitted.spaces.fock_block(slots, ring=fitted.ring)
+                for slots in fock_blocks
+            },
+            {slots: fitted.antisymmetrized(slots) for slots in integral_blocks},
+        )

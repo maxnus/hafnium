@@ -69,7 +69,7 @@ class AmplitudeDiis:
             return self.amplitudes[0]
         xp = array_namespace(*(block for e in self.errors[0] for block in e.blocks))
         overlaps = xp.asarray(
-            [[overlap(a, b) for b in self.errors] for a in self.errors],
+            [[self.overlap(a, b) for b in self.errors] for a in self.errors],
             dtype=xp.float64,
         )
         coefficients = [float(c) for c in solve_diis(overlaps)]
@@ -83,12 +83,12 @@ class AmplitudeDiis:
             combined.append(total)
         return tuple(combined)
 
-
-def overlap(a: Amplitudes, b: Amplitudes) -> float:
-    """Real part of ``Σ conj(a) b`` over the stored blocks of every tensor."""
-    total = 0.0
-    for x, y in zip(a, b, strict=True):
-        for block_x, block_y in zip(x.blocks, y.blocks, strict=True):
-            xp = array_namespace(block_x, block_y)
-            total += float(xp.real(xp.sum(xp.conj(block_x) * block_y)))
-    return total
+    @staticmethod
+    def overlap(a: Amplitudes, b: Amplitudes) -> float:
+        """Real part of ``Σ conj(a) b`` over the stored blocks of every tensor."""
+        total = 0.0
+        for x, y in zip(a, b, strict=True):
+            for block_x, block_y in zip(x.blocks, y.blocks, strict=True):
+                xp = array_namespace(block_x, block_y)
+                total += float(xp.real(xp.sum(xp.conj(block_x) * block_y)))
+        return total

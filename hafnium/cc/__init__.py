@@ -17,7 +17,7 @@ from hafnium.cc.ccsd import (
     solve_ccsd,
 )
 from hafnium.cc.diis import AmplitudeDiis
-from hafnium.cc.hamiltonian import NormalOrderedHamiltonian, normal_ordered_hamiltonian
+from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
 
 __all__ = [
     "AmplitudeDiis",
@@ -28,6 +28,5 @@ __all__ = [
     "ccsd_from_df_tensor",
     "ccsd_from_periodic_fitting",
     "df_ccsd",
-    "normal_ordered_hamiltonian",
     "solve_ccsd",
 ]

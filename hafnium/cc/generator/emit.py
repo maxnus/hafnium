@@ -13,24 +13,18 @@ the indices the two operands share.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import combinations
 
-from hafnium.cc.generator.ccsd import ccsd_equations
-from hafnium.cc.generator.wick import (
-    OCCUPIED,
-    Factor,
-    Term,
-    canonical,
-    key,
-    substituted,
-)
+from hafnium.cc.generator.ccsd import Equation, ccsd_equations
+from hafnium.cc.generator.wick import LABELS, Kind, Term
+from hafnium.correlated import Space
 
 INTERMEDIATES = ("x", "y", "z", "w")
 """Names of the intermediates of a term's program, the result in the first."""
 
-EXTENT = {OCCUPIED: 10, "v": 40}
+EXTENT = {Space.OCCUPIED: 10, Space.VIRTUAL: 40}
 """Extents of the two spaces for ranking the contraction orders."""
 
 Permutation = tuple[tuple[str, str], ...]
@@ -119,8 +113,8 @@ class Orbit:
         return ANTISYMMETRIZERS[frozenset(p for p, _ in self.cosets)]
 
 
-def orbits(terms: Sequence[Term], free: str) -> list[Orbit]:
-    """Group canonical ``terms`` by the permutations of their free indices.
+def orbits(equation: Equation) -> list[Orbit]:
+    """Group the terms of ``equation`` by the permutations of its free indices.
 
     The residual ``R`` satisfies ``R = ε(g) g(R)`` for every permutation
     ``g`` of its antisymmetric index pairs, so the coefficient of the
@@ -134,27 +128,25 @@ def orbits(terms: Sequence[Term], free: str) -> list[Orbit]:
         If a term lacks an image, or an image has another coefficient
         than the antisymmetry of the residual requires.
     """
-    by_key = {key(term.factors): term for term in terms}
+    by_key = {term.key: term for term in equation.terms}
     done: set[tuple[object, ...]] = set()
     result: list[Orbit] = []
-    for term in sorted(terms, key=lambda t: key(t.factors)):
-        term_key = key(term.factors)
-        if term_key in done:
+    for term in sorted(equation.terms, key=lambda t: t.key):
+        if term.key in done:
             continue
         cosets: list[tuple[Permutation, int]] = []
-        for permutation, parity in PERMUTATIONS[free]:
-            image = canonical(substituted(term, dict(permutation)))
-            image_key = key(image.factors)
+        for permutation, parity in PERMUTATIONS[equation.free]:
+            image = term.substituted(dict(permutation)).canonical()
             expected = parity * image.coefficient
-            actual = by_key.get(image_key)
+            actual = by_key.get(image.key)
             if actual is None or actual.coefficient != expected:
                 raise ValueError(
                     "the residual is not antisymmetric: the image of a term under "
                     f"{permutation} has coefficient {actual and actual.coefficient}, "
                     f"expected {expected}"
                 )
-            if image_key not in done:
-                done.add(image_key)
+            if image.key not in done:
+                done.add(image.key)
                 cosets.append((permutation, parity))
         result.append(Orbit(term, tuple(cosets)))
     return result
@@ -169,21 +161,12 @@ class _Operand:
     expression: str
 
 
-def _expression(factor: Factor) -> str:
-    if factor.name in ("f", "v"):
-        slots = "".join(index.space for index in factor.indices)
-        return f'{factor.name}["{slots}"]'
-    return factor.name
-
-
-def _letters(factor: Factor) -> str:
-    return "".join(index.label for index in factor.indices)
-
-
 def _cost(a: str, b: str) -> int:
     cost = 1
     for letter in set(a) | set(b):
-        cost *= EXTENT[OCCUPIED if letter in "ijklmn" else "v"]
+        cost *= EXTENT[
+            Space.OCCUPIED if letter in LABELS[Space.OCCUPIED] else Space.VIRTUAL
+        ]
     return cost
 
 
@@ -218,7 +201,7 @@ def _orders(
 
 def program(term: Term, free: str) -> list[str]:
     """Statements evaluating ``term`` without its coefficient into ``x``."""
-    operands = [_Operand(_letters(f), _expression(f)) for f in term.factors]
+    operands = [_Operand(f.letters, f.expression) for f in term.factors]
     if len(operands) == 1:
         (operand,) = operands
         expression = operand.expression
@@ -260,9 +243,9 @@ def _accumulation(orbit: Orbit, first: bool) -> str:
     return f"r = r {'-' if coefficient < 0 else '+'} {value}"
 
 
-def function_source(name: str, terms: Sequence[Term], free: str) -> str:
-    """Write the Python function evaluating the merged ``terms`` of one equation."""
-    function, docstring = SIGNATURES[name]
+def function_source(equation: Equation) -> str:
+    """Write the Python function evaluating the terms of ``equation``."""
+    function, docstring = SIGNATURES[equation.name]
     lines = [
         f"def {function}(",
         "    h: NormalOrderedHamiltonian, t1: BlockTensor, t2: BlockTensor",
@@ -270,8 +253,8 @@ def function_source(name: str, terms: Sequence[Term], free: str) -> str:
         f'    """{docstring}"""',
         "    f, v = h.fock, h.integrals",
     ]
-    for position, orbit in enumerate(orbits(terms, free)):
-        lines.extend(f"    {line}" for line in program(orbit.term, free))
+    for position, orbit in enumerate(orbits(equation)):
+        lines.extend(f"    {line}" for line in program(orbit.term, equation.free))
         lines.append(f"    {_accumulation(orbit, position == 0)}")
     lines.append("    return r")
     return "\n".join(lines) + "\n"
@@ -282,14 +265,13 @@ def module_source() -> str:
     equations = ccsd_equations()
     fock: set[str] = set()
     integrals: set[str] = set()
-    for terms in equations.values():
-        for term in terms:
+    for equation in equations.values():
+        for term in equation.terms:
             for factor in term.factors:
-                slots = "".join(index.space for index in factor.indices)
-                if factor.name == "f":
-                    fock.add(slots)
-                elif factor.name == "v":
-                    integrals.add(slots)
+                if factor.kind is Kind.FOCK:
+                    fock.add(factor.slots)
+                elif factor.kind is Kind.INTEGRAL:
+                    integrals.add(factor.slots)
     constants = (
         "FOCK_BLOCKS = (" + ", ".join(f'"{s}"' for s in sorted(fock)) + ")\n"
         '"""The blocks of the Fock operator the equations read."""\n'
@@ -299,7 +281,7 @@ def module_source() -> str:
         '"""The blocks of the antisymmetrized integrals the equations read."""\n'
     )
     functions = "".join(
-        "\n\n" + function_source(name, equations[name], free)
-        for name, free in (("energy", ""), ("singles", "ia"), ("doubles", "ijab"))
+        "\n\n" + function_source(equations[name])
+        for name in ("energy", "singles", "doubles")
     )
     return PRELUDE + "\n" + constants + HELPERS + functions

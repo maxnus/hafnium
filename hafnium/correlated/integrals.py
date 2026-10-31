@@ -1,4 +1,4 @@
-"""The fitted integrals in the orbital basis, and the orbital energy denominators."""
+"""The fitted integrals in the orbital basis."""
 
 from __future__ import annotations
 
@@ -25,11 +25,7 @@ from hafnium.structured import (
     contract,
 )
 from hafnium.structured.tensor import Key
-from hafnium.structured.validation import dtype_for
 from hafnium.symmetry import KPoints, PointGroup, SymmetryAdaptation
-
-SPACE_OF_LETTER = {"o": Space.OCCUPIED, "v": Space.VIRTUAL}
-"""The space a slot letter of an integral block names."""
 
 
 def auxiliary_axis(n_aux: int, sectors: IrrepSectors | None = None) -> TensorAxis:
@@ -319,52 +315,6 @@ def _transform(df_tensor: Array, bra: Array, ket: Array, spin: Spin) -> Array:
     return xp.expand_dims(adjoint(bra), axis=0) @ half
 
 
-def energy_denominators(
-    spaces: OrbitalSpaces, structure: TensorStructure
-) -> BlockTensor:
-    """``Σ_occupied ε − Σ_virtual ε`` over the axes of ``structure``.
-
-    Every axis runs over the occupied or the virtual orbitals of
-    ``spaces``; the orbital energies of occupied indices enter with a
-    plus, those of virtual indices with a minus, so that for the axes
-    ``[i, j, a, b]`` the result is ``ε_i + ε_j − ε_a − ε_b``.
-    """
-    spaces_of_axes = [spaces.space_of(axis) for axis in structure.axes]
-    signs = [1.0 if space is Space.OCCUPIED else -1.0 for space in spaces_of_axes]
-    xp = array_namespace(*spaces.occupied_energies.blocks)
-    dtype = dtype_for(xp, structure.ring)
-
-    def build(key: Key) -> Array:
-        total: Array | None = None
-        for position, (space, sign, sector) in enumerate(
-            zip(spaces_of_axes, signs, key, strict=True)
-        ):
-            shape = [1] * len(key)
-            shape[position] = -1
-            term = sign * xp.reshape(spaces.sector_energies(space, sector), shape)
-            total = term if total is None else total + term
-        assert total is not None
-        return xp.astype(xp.broadcast_to(total, structure.shape(key)), dtype)
-
-    return BlockTensor.from_function(structure, build)
-
-
-def spaces_of(slots: str) -> tuple[Space, ...]:
-    """Read the spaces of the slots ``"oovv"`` names, one letter each.
-
-    Raises
-    ------
-    InputError
-        If a letter is neither ``o`` nor ``v``.
-    """
-    try:
-        return tuple(SPACE_OF_LETTER[letter] for letter in slots)
-    except KeyError as error:
-        raise InputError(
-            f"a slot is occupied (o) or virtual (v), got {slots!r}"
-        ) from error
-
-
 @dataclass(frozen=True, slots=True, eq=False)
 class FittedOrbitalTensors:
     """The fitted tensor between every pair of orbital spaces, formed on demand.
@@ -516,9 +466,7 @@ class FittedOrbitalTensors:
         a cell; the sum over the auxiliary index then pairs an
         unconjugated with a conjugated axis.
         """
-        if len(slots) != 4:
-            raise InputError(f"an integral block has four slots, got {slots!r}")
-        p, q, r, s = spaces_of(slots)
+        p, q, r, s = Space.from_letters(slots, 4)
         direct = contract(
             "Ppr,Psq->pqrs", self.tensor(p, r), self.tensor(s, q, signed=True).conj()
         )
@@ -526,34 +474,3 @@ class FittedOrbitalTensors:
             "Pps,Prq->pqrs", self.tensor(p, s), self.tensor(r, q, signed=True).conj()
         )
         return direct - exchange
-
-
-def fock_block(
-    spaces: OrbitalSpaces, slots: str, *, ring: Ring | None = None
-) -> BlockTensor:
-    """``f[p, q] = δ_pq ε_p`` of the canonical orbitals, ``p`` conjugated.
-
-    ``slots`` names the spaces of the two indices, ``"ov"`` for the
-    occupied–virtual block, which vanishes like the virtual–occupied one:
-    the Fock operator of a converged Hartree–Fock state is diagonal in
-    its canonical orbitals, with the orbital energies on the diagonal.
-    The block is stored over ``ring``, by default that of the spaces.
-    """
-    if len(slots) != 2:
-        raise InputError(f"a Fock block has two slots, got {slots!r}")
-    bra, ket = spaces_of(slots)
-    structure = TensorStructure(
-        (spaces.axis(bra, conjugated=True), spaces.axis(ket, conjugated=False)),
-        ring=spaces.ring if ring is None else ring,
-    )
-    xp = array_namespace(*spaces.occupied_energies.blocks)
-    dtype = dtype_for(xp, structure.ring)
-
-    def build(key: Key) -> Array:
-        shape = structure.shape(key)
-        if bra is not ket or key[0] != key[1]:
-            return xp.zeros(shape, dtype=dtype)
-        energies = spaces.sector_energies(bra, key[0])
-        return xp.astype(xp.eye(shape[0]) * xp.expand_dims(energies, axis=0), dtype)
-
-    return BlockTensor.from_function(structure, build)

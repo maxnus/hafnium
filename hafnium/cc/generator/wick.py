@@ -23,42 +23,53 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from fractions import Fraction
 from itertools import permutations, product
 
-OCCUPIED = "o"
-VIRTUAL = "v"
-SPACES = (OCCUPIED, VIRTUAL)
+from hafnium.correlated import Space
 
-OCCUPIED_LABELS = "ijklmn"
-VIRTUAL_LABELS = "abcdef"
-LABELS = {OCCUPIED: OCCUPIED_LABELS, VIRTUAL: VIRTUAL_LABELS}
+LABELS = {Space.OCCUPIED: "ijklmn", Space.VIRTUAL: "abcdef"}
+"""The labels of the indices of each space, free ones first."""
 
-ANTISYMMETRIC_PAIRS: dict[str, tuple[tuple[int, int], ...]] = {
-    "v": ((0, 1), (2, 3)),
-    "t2": ((0, 1), (2, 3)),
-}
-"""Slot pairs of a factor that change its sign when swapped.
 
-``v[p, q, r, s] = <pq||rs>`` is antisymmetric in ``p, q`` and in ``r, s``,
-``t2[i, j, a, b]`` in ``i, j`` and in ``a, b``.
-"""
+class Kind(Enum):
+    """The tensors a term is a product of, by the name they carry in a program."""
 
-FACTOR_ORDER = {"f": 0, "v": 0, "t1": 1, "t2": 2}
-"""Order of the factors of a canonical term: the Hamiltonian first."""
+    FOCK = "f"
+    INTEGRAL = "v"
+    SINGLES = "t1"
+    DOUBLES = "t2"
+
+    @property
+    def antisymmetric_pairs(self) -> tuple[tuple[int, int], ...]:
+        """Slot pairs that change the sign of the tensor when swapped.
+
+        ``v[p, q, r, s] = <pq||rs>`` is antisymmetric in ``p, q`` and in
+        ``r, s``, ``t2[i, j, a, b]`` in ``i, j`` and in ``a, b``.
+        """
+        if self in (Kind.INTEGRAL, Kind.DOUBLES):
+            return ((0, 1), (2, 3))
+        return ()
+
+    @property
+    def order(self) -> int:
+        """Position of the kind among the factors of a canonical term."""
+        return {Kind.FOCK: 0, Kind.INTEGRAL: 0, Kind.SINGLES: 1, Kind.DOUBLES: 2}[self]
+
+    @property
+    def of_hamiltonian(self) -> bool:
+        """Whether the tensor is a block of the Hamiltonian, keyed by its slots."""
+        return self in (Kind.FOCK, Kind.INTEGRAL)
 
 
 @dataclass(frozen=True, slots=True)
 class Index:
     """An orbital index of ``space``; a free index keeps its ``label``."""
 
-    space: str
+    space: Space
     label: str
     free: bool = False
-
-    def __post_init__(self) -> None:
-        if self.space not in SPACES:
-            raise ValueError(f"an index is occupied or virtual, got {self.space!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +77,6 @@ class Operator:
     """``a†`` (``creation``) or ``a`` of the orbital ``index``."""
 
     index: Index
-
     creation: bool
 
     @property
@@ -76,24 +86,55 @@ class Operator:
         ``a†`` of a virtual orbital adds a particle, ``a`` of an occupied
         orbital a hole; the other two annihilate one.
         """
-        return self.creation == (self.index.space == VIRTUAL)
+        return self.creation == (self.index.space is Space.VIRTUAL)
 
-
-def contractible(left: Operator, right: Operator) -> bool:
-    """Whether ``left right`` has a non-vanishing contraction over the reference."""
-    return (
-        left.index.space == right.index.space
-        and not left.creates_quasiparticle
-        and right.creates_quasiparticle
-    )
+    def contracts_with(self, right: Operator) -> bool:
+        """Whether ``self right`` has a non-vanishing contraction over the reference."""
+        return (
+            self.index.space is right.index.space
+            and not self.creates_quasiparticle
+            and right.creates_quasiparticle
+        )
 
 
 @dataclass(frozen=True, slots=True)
 class Factor:
-    """A tensor ``name`` with its ``indices`` in slot order."""
+    """A tensor of ``kind`` with its ``indices`` in slot order."""
 
-    name: str
+    kind: Kind
     indices: tuple[Index, ...]
+
+    @property
+    def slots(self) -> str:
+        """The spaces of the slots as letters, ``"oovv"``."""
+        return "".join(index.space.letter for index in self.indices)
+
+    @property
+    def letters(self) -> str:
+        """The labels of the indices in slot order, the subscripts of a program."""
+        return "".join(index.label for index in self.indices)
+
+    @property
+    def expression(self) -> str:
+        """The tensor in a program: ``f["ov"]``, ``v["oovv"]``, ``t1`` or ``t2``."""
+        if self.kind.of_hamiltonian:
+            return f'{self.kind.value}["{self.slots}"]'
+        return self.kind.value
+
+    def variants(self) -> list[tuple[int, Factor]]:
+        """List the factor under each combination of its antisymmetric swaps, signed."""
+        variants: list[tuple[int, Factor]] = [(1, self)]
+        for pair in self.kind.antisymmetric_pairs:
+            swapped: list[tuple[int, Factor]] = []
+            for sign, factor in variants:
+                indices = list(factor.indices)
+                indices[pair[0]], indices[pair[1]] = indices[pair[1]], indices[pair[0]]
+                swapped.append((-sign, Factor(factor.kind, tuple(indices))))
+            variants.extend(swapped)
+        return variants
+
+    def __str__(self) -> str:
+        return f"{self.kind.value}[{','.join(index.label for index in self.indices)}]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +176,9 @@ class OperatorString:
         return cls(coefficient * sign, factor, (*creators, *annihilators))
 
 
+Key = tuple[object, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class Term:
     """``coefficient × Π factors`` with summation over the indices that are not free."""
@@ -151,6 +195,78 @@ class Term:
                 if index.free and index not in seen:
                     seen.append(index)
         return tuple(seen)
+
+    @property
+    def key(self) -> Key:
+        """The comparable form of the factors that canonical terms are merged by."""
+        return tuple(
+            (
+                factor.kind.value,
+                tuple((i.space.letter, i.label, i.free) for i in factor.indices),
+            )
+            for factor in self.factors
+        )
+
+    def __str__(self) -> str:
+        return f"{self.coefficient} {' '.join(str(factor) for factor in self.factors)}"
+
+    def canonical(self) -> Term:
+        """Relabel the dummies and order the factors so that equal terms coincide.
+
+        Every ordering of the factors of equal kind and every sign-carrying
+        permutation of the antisymmetric slots is tried, the dummies are
+        relabelled in order of appearance, and the smallest representation
+        is taken; its sign goes into the coefficient.
+        """
+        free = {index.label for index in self.free_indices}
+        pools = {
+            space: [c for c in labels if c not in free]
+            for space, labels in LABELS.items()
+        }
+        best: tuple[Key, int, tuple[Factor, ...]] | None = None
+        for ordering in _orderings(self.factors):
+            for variant in product(*(factor.variants() for factor in ordering)):
+                sign = 1
+                for s, _ in variant:
+                    sign *= s
+                factors = _relabelled([f for _, f in variant], pools)
+                form = Term(self.coefficient, factors).key
+                if best is None or form < best[0]:
+                    best = (form, sign, factors)
+        assert best is not None
+        return Term(self.coefficient * best[1], best[2])
+
+    def substituted(self, mapping: dict[str, str]) -> Term:
+        """Rename the free indices by label."""
+        return Term(
+            self.coefficient,
+            tuple(
+                Factor(
+                    factor.kind,
+                    tuple(
+                        Index(index.space, mapping.get(index.label, index.label), True)
+                        if index.free
+                        else index
+                        for index in factor.indices
+                    ),
+                )
+                for factor in self.factors
+            ),
+        )
+
+    @classmethod
+    def merge(cls, terms: Iterable[Term]) -> list[Term]:
+        """Canonicalize ``terms`` and add up those that coincide, dropping zeros."""
+        totals: dict[Key, Term] = {}
+        for term in terms:
+            form = term.canonical()
+            previous = totals.get(form.key)
+            totals[form.key] = (
+                form
+                if previous is None
+                else Term(previous.coefficient + form.coefficient, form.factors)
+            )
+        return [term for term in totals.values() if term.coefficient != 0]
 
 
 # -------------------------------------------------------------- contractions
@@ -182,7 +298,7 @@ def full_contractions(
             return
         for offset, other in enumerate(remaining[1:]):
             group_other, op_other = operators[other]
-            if group_other == group_first or not contractible(op_first, op_other):
+            if group_other == group_first or not op_first.contracts_with(op_other):
                 continue
             rest = [k for k in remaining if k not in (first, other)]
             yield from recurse(
@@ -219,7 +335,7 @@ def connected_expectation(
         representative = _identified(operators, pairs)
         factors = tuple(
             Factor(
-                string.factor.name,
+                string.factor.kind,
                 tuple(
                     representative.get(index, index) for index in string.factor.indices
                 ),
@@ -254,93 +370,22 @@ def _identified(
 # ----------------------------------------------------------- canonical form
 
 
-def canonical(term: Term) -> Term:
-    """Relabel the dummy indices and order the factors so that equal terms coincide.
-
-    Every ordering of the factors of equal kind and every sign-carrying
-    permutation of the antisymmetric slots is tried, the dummies are
-    relabelled in order of appearance, and the smallest representation is
-    taken; its sign goes into the coefficient.
-    """
-    free = {index.label for index in term.free_indices}
-    pools = {space: [c for c in LABELS[space] if c not in free] for space in SPACES}
-    best: tuple[tuple[object, ...], int, tuple[Factor, ...]] | None = None
-    for ordering in _orderings(term.factors):
-        for variant in product(*(_variants(factor) for factor in ordering)):
-            sign = 1
-            for s, _ in variant:
-                sign *= s
-            factors = _relabelled([f for _, f in variant], pools)
-            form = key(factors)
-            if best is None or form < best[0]:
-                best = (form, sign, factors)
-    assert best is not None
-    return Term(term.coefficient * best[1], best[2])
-
-
-def merged(terms: Iterable[Term]) -> list[Term]:
-    """Canonicalize ``terms`` and add up those that coincide, dropping zeros."""
-    totals: dict[tuple[object, ...], Term] = {}
-    for term in terms:
-        form = canonical(term)
-        form_key = key(form.factors)
-        previous = totals.get(form_key)
-        totals[form_key] = (
-            form
-            if previous is None
-            else Term(previous.coefficient + form.coefficient, form.factors)
-        )
-    return [term for term in totals.values() if term.coefficient != 0]
-
-
-def substituted(term: Term, mapping: dict[str, str]) -> Term:
-    """Rename the free indices of ``term`` by label."""
-    return Term(
-        term.coefficient,
-        tuple(
-            Factor(
-                factor.name,
-                tuple(
-                    Index(index.space, mapping.get(index.label, index.label), True)
-                    if index.free
-                    else index
-                    for index in factor.indices
-                ),
-            )
-            for factor in term.factors
-        ),
-    )
-
-
 def _orderings(factors: Sequence[Factor]) -> Iterator[tuple[Factor, ...]]:
-    """Every ordering of the factors that keeps the kinds in :data:`FACTOR_ORDER`."""
+    """Every ordering of the factors that keeps the kinds in :attr:`Kind.order`."""
     kinds = sorted(
-        {factor.name for factor in factors}, key=lambda n: (FACTOR_ORDER[n], n)
+        {factor.kind for factor in factors}, key=lambda k: (k.order, k.value)
     )
-    groups = [[f for f in factors if f.name == kind] for kind in kinds]
+    groups = [[f for f in factors if f.kind is kind] for kind in kinds]
     for arrangement in product(*(permutations(group) for group in groups)):
         yield tuple(f for group in arrangement for f in group)
 
 
-def _variants(factor: Factor) -> list[tuple[int, Factor]]:
-    """List the factor under every combination of its antisymmetric swaps, signed."""
-    variants = [(1, factor)]
-    for pair in ANTISYMMETRIC_PAIRS.get(factor.name, ()):
-        swapped: list[tuple[int, Factor]] = []
-        for sign, f in variants:
-            indices = list(f.indices)
-            indices[pair[0]], indices[pair[1]] = indices[pair[1]], indices[pair[0]]
-            swapped.append((-sign, Factor(f.name, tuple(indices))))
-        variants.extend(swapped)
-    return variants
-
-
 def _relabelled(
-    factors: Sequence[Factor], pools: dict[str, list[str]]
+    factors: Sequence[Factor], pools: dict[Space, list[str]]
 ) -> tuple[Factor, ...]:
     """Give the dummies labels from ``pools`` in order of first appearance."""
     names: dict[Index, Index] = {}
-    used: dict[str, int] = dict.fromkeys(SPACES, 0)
+    used: dict[Space, int] = dict.fromkeys(Space, 0)
     result: list[Factor] = []
     for factor in factors:
         indices: list[Index] = []
@@ -353,22 +398,5 @@ def _relabelled(
                 used[index.space] += 1
                 names[index] = Index(index.space, label)
             indices.append(names[index])
-        result.append(Factor(factor.name, tuple(indices)))
+        result.append(Factor(factor.kind, tuple(indices)))
     return tuple(result)
-
-
-def key(factors: Sequence[Factor]) -> tuple[object, ...]:
-    """Return the comparable form of ``factors`` that canonical terms are merged by."""
-    return tuple(
-        (factor.name, tuple((i.space, i.label, i.free) for i in factor.indices))
-        for factor in factors
-    )
-
-
-def describe(term: Term) -> str:
-    """``coefficient name[labels] ...`` for messages and tests."""
-    factors = " ".join(
-        f"{factor.name}[{','.join(index.label for index in factor.indices)}]"
-        for factor in term.factors
-    )
-    return f"{term.coefficient} {factors}"

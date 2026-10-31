@@ -25,17 +25,15 @@ from itertools import product
 from math import factorial
 
 from hafnium.cc.generator.wick import (
-    OCCUPIED,
-    SPACES,
-    VIRTUAL,
     Factor,
     Index,
+    Kind,
     Operator,
     OperatorString,
     Term,
     connected_expectation,
-    merged,
 )
+from hafnium.correlated import Space
 
 
 class Fresh:
@@ -44,7 +42,7 @@ class Fresh:
     def __init__(self) -> None:
         self.count = 0
 
-    def __call__(self, space: str) -> Index:
+    def __call__(self, space: Space) -> Index:
         """Return a new dummy index of ``space``."""
         self.count += 1
         return Index(space, f"_{self.count}")
@@ -53,21 +51,21 @@ class Fresh:
 def hamiltonian_strings(fresh: Fresh) -> list[OperatorString]:
     """``H_N`` split by the spaces of its indices, every string normal ordered."""
     strings: list[OperatorString] = []
-    for space_p, space_q in product(SPACES, repeat=2):
+    for space_p, space_q in product(Space, repeat=2):
         p, q = fresh(space_p), fresh(space_q)
         strings.append(
             OperatorString.normal_ordered(
                 Fraction(1),
-                Factor("f", (p, q)),
+                Factor(Kind.FOCK, (p, q)),
                 (Operator(p, True), Operator(q, False)),
             )
         )
-    for spaces in product(SPACES, repeat=4):
+    for spaces in product(Space, repeat=4):
         p, q, r, s = (fresh(space) for space in spaces)
         strings.append(
             OperatorString.normal_ordered(
                 Fraction(1, 4),
-                Factor("v", (p, q, r, s)),
+                Factor(Kind.INTEGRAL, (p, q, r, s)),
                 (
                     Operator(p, True),
                     Operator(q, True),
@@ -81,19 +79,21 @@ def hamiltonian_strings(fresh: Fresh) -> list[OperatorString]:
 
 def singles_cluster(fresh: Fresh) -> OperatorString:
     """``T1 = Σ t1[i, a] a†_a a_i``."""
-    i, a = fresh(OCCUPIED), fresh(VIRTUAL)
+    i, a = fresh(Space.OCCUPIED), fresh(Space.VIRTUAL)
     return OperatorString(
-        Fraction(1), Factor("t1", (i, a)), (Operator(a, True), Operator(i, False))
+        Fraction(1),
+        Factor(Kind.SINGLES, (i, a)),
+        (Operator(a, True), Operator(i, False)),
     )
 
 
 def doubles_cluster(fresh: Fresh) -> OperatorString:
     """``T2 = ¼ Σ t2[i, j, a, b] a†_a a†_b a_j a_i``."""
-    i, j = fresh(OCCUPIED), fresh(OCCUPIED)
-    a, b = fresh(VIRTUAL), fresh(VIRTUAL)
+    i, j = fresh(Space.OCCUPIED), fresh(Space.OCCUPIED)
+    a, b = fresh(Space.VIRTUAL), fresh(Space.VIRTUAL)
     return OperatorString(
         Fraction(1, 4),
-        Factor("t2", (i, j, a, b)),
+        Factor(Kind.DOUBLES, (i, j, a, b)),
         (Operator(a, True), Operator(b, True), Operator(j, False), Operator(i, False)),
     )
 
@@ -115,57 +115,80 @@ def cluster_products(
 
 
 @dataclass(frozen=True, slots=True)
+class Equation:
+    """The merged canonical terms of ``<Φ_μ| H_N e^T |Φ>_C``.
+
+    ``free`` holds the labels of the free indices in the order of the
+    result's axes, ``"ijab"`` for the doubles residual ``[i, j, a, b]``.
+    """
+
+    name: str
+    free: str
+    terms: tuple[Term, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Projection:
     """``<Φ_μ|`` as the operators of the bra and the labels of its free indices."""
 
+    name: str
     operators: tuple[Operator, ...]
     free: str
 
+    @classmethod
+    def energy(cls) -> Projection:
+        """``<Φ|``."""
+        return cls("energy", (), "")
 
-def energy_projection() -> Projection:
-    """``<Φ|``."""
-    return Projection((), "")
+    @classmethod
+    def singles(cls) -> Projection:
+        """``<Φ_i^a| = <Φ| a†_i a_a``."""
+        i, a = Index(Space.OCCUPIED, "i", True), Index(Space.VIRTUAL, "a", True)
+        return cls("singles", (Operator(i, True), Operator(a, False)), "ia")
+
+    @classmethod
+    def doubles(cls) -> Projection:
+        """``<Φ_ij^ab| = <Φ| a†_i a†_j a_b a_a``."""
+        i, j = Index(Space.OCCUPIED, "i", True), Index(Space.OCCUPIED, "j", True)
+        a, b = Index(Space.VIRTUAL, "a", True), Index(Space.VIRTUAL, "b", True)
+        return cls(
+            "doubles",
+            (
+                Operator(i, True),
+                Operator(j, True),
+                Operator(b, False),
+                Operator(a, False),
+            ),
+            "ijab",
+        )
+
+    def equation(self) -> Equation:
+        """Derive ``<Φ_μ| H_N e^T |Φ>_C`` as merged canonical terms."""
+        fresh = Fresh()
+        bra = OperatorString(Fraction(1), None, self.operators)
+        terms: list[Term] = []
+        # The projection and the Hamiltonian contract at most 4 + 4 operators.
+        for hamiltonian in hamiltonian_strings(fresh):
+            for coefficient, clusters in cluster_products(
+                fresh, len(self.operators) + 4
+            ):
+                strings = [bra, hamiltonian, *clusters]
+                terms.extend(
+                    Term(term.coefficient * coefficient, term.factors)
+                    for term in connected_expectation(
+                        strings, 1, range(2, len(strings))
+                    )
+                )
+        return Equation(self.name, self.free, tuple(Term.merge(terms)))
 
 
-def singles_projection() -> Projection:
-    """``<Φ_i^a| = <Φ| a†_i a_a``."""
-    i, a = Index(OCCUPIED, "i", True), Index(VIRTUAL, "a", True)
-    return Projection((Operator(i, True), Operator(a, False)), "ia")
-
-
-def doubles_projection() -> Projection:
-    """``<Φ_ij^ab| = <Φ| a†_i a†_j a_b a_a``."""
-    i, j = Index(OCCUPIED, "i", True), Index(OCCUPIED, "j", True)
-    a, b = Index(VIRTUAL, "a", True), Index(VIRTUAL, "b", True)
-    return Projection(
-        (Operator(i, True), Operator(j, True), Operator(b, False), Operator(a, False)),
-        "ijab",
-    )
-
-
-def projected_equation(projection: Projection) -> list[Term]:
-    """``<Φ_μ| H_N e^T |Φ>_C`` as merged canonical terms."""
-    fresh = Fresh()
-    bra = OperatorString(Fraction(1), None, projection.operators)
-    terms: list[Term] = []
-    # The projection and the Hamiltonian contract at most 4 + 4 operators.
-    for hamiltonian in hamiltonian_strings(fresh):
-        for coefficient, clusters in cluster_products(
-            fresh, len(projection.operators) + 4
-        ):
-            strings = [bra, hamiltonian, *clusters]
-            scaled = [
-                Term(term.coefficient * coefficient, term.factors)
-                for term in connected_expectation(strings, 1, range(2, len(strings)))
-            ]
-            terms.extend(scaled)
-    return merged(terms)
-
-
-def ccsd_equations() -> dict[str, list[Term]]:
-    """Derive the energy, singles and doubles equations of CCSD."""
+def ccsd_equations() -> dict[str, Equation]:
+    """Derive the energy, singles and doubles equations of CCSD, by name."""
     return {
-        "energy": projected_equation(energy_projection()),
-        "singles": projected_equation(singles_projection()),
-        "doubles": projected_equation(doubles_projection()),
+        projection.name: projection.equation()
+        for projection in (
+            Projection.energy(),
+            Projection.singles(),
+            Projection.doubles(),
+        )
     }
