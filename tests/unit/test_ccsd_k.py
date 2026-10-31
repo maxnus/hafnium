@@ -4,10 +4,11 @@ import pytest
 
 from hafnium.cc import (
     CcsdOptions,
-    CcsdResult,
-    TriplesOptions,
+    CcsdTResult,
     ccsd_from_periodic_fitting,
+    ccsd_t_from_periodic_fitting,
     df_ccsd,
+    df_ccsd_t,
 )
 from hafnium.errors import InputError
 from hafnium.molecule import Molecule
@@ -23,7 +24,6 @@ from tests.unit.test_mp2_k import Setup, setup
 from tests.unit.test_scf import CLASSES, OPEN_SHELL_CLASSES
 
 OPTIONS = CcsdOptions(energy_tolerance=1e-12, amplitude_tolerance=1e-10)
-TRIPLES = TriplesOptions()
 
 
 @pytest.fixture(scope="module")
@@ -32,33 +32,28 @@ def helium_pair() -> Setup:
 
 
 @pytest.fixture(scope="module")
-def restricted_helium(helium_pair: Setup) -> tuple[ScfResult, CcsdResult]:
+def restricted_helium(helium_pair: Setup) -> tuple[ScfResult, CcsdTResult]:
     _, _, _, mesh, fitting, hamiltonian = helium_pair
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name("RHF").with_kpoints(mesh), options=TIGHT
     )
-    result = ccsd_from_periodic_fitting(
-        reference, fitting, options=OPTIONS, triples=TRIPLES
-    )
+    result = ccsd_t_from_periodic_fitting(reference, fitting, options=OPTIONS)
     return reference, result
 
 
 @pytest.mark.parametrize("name", CLASSES)
 def test_every_class_gives_the_closed_shell_energy_over_k(
-    name: str, helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdResult]
+    name: str, helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdTResult]
 ) -> None:
     _, _, _, mesh, fitting, hamiltonian = helium_pair
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name(name).with_kpoints(mesh), options=TIGHT
     )
-    result = ccsd_from_periodic_fitting(
-        reference, fitting, options=OPTIONS, triples=TRIPLES
-    )
+    result = ccsd_t_from_periodic_fitting(reference, fitting, options=OPTIONS)
     assert result.converged
     assert result.correlation_energy == pytest.approx(
         restricted_helium[1].correlation_energy, abs=CCSD_ENERGY_TOL
     )
-    assert result.triples_correction is not None
     assert result.triples_correction == pytest.approx(
         restricted_helium[1].triples_correction, abs=CCSD_ENERGY_TOL
     )
@@ -75,7 +70,7 @@ def test_every_class_gives_the_closed_shell_energy_over_k(
 
 
 def test_supercell_at_gamma_folds_the_energy_per_cell(
-    helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdResult]
+    helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdTResult]
 ) -> None:
     cell, _, _, mesh, _, _ = helium_pair
     supercell, basis, auxiliary, gamma, fitting, hamiltonian = setup(
@@ -84,15 +79,8 @@ def test_supercell_at_gamma_folds_the_energy_per_cell(
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name("RHF").with_kpoints(gamma), options=TIGHT
     )
-    folded = df_ccsd(
-        ENGINE,
-        basis,
-        supercell,
-        auxiliary,
-        reference,
-        kpoints=gamma,
-        options=OPTIONS,
-        triples=TRIPLES,
+    folded = df_ccsd_t(
+        ENGINE, basis, supercell, auxiliary, reference, kpoints=gamma, options=OPTIONS
     )
     assert folded.correlation_energy / mesh.n_kpt == pytest.approx(
         restricted_helium[1].correlation_energy, abs=CCSD_ENERGY_TOL
@@ -100,7 +88,6 @@ def test_supercell_at_gamma_folds_the_energy_per_cell(
     assert folded.reference_energy / mesh.n_kpt == pytest.approx(
         restricted_helium[0].energy, abs=CCSD_ENERGY_TOL
     )
-    assert folded.triples_correction is not None
     assert folded.triples_correction / mesh.n_kpt == pytest.approx(
         restricted_helium[1].triples_correction, abs=CCSD_ENERGY_TOL
     )
@@ -124,7 +111,7 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
         hamiltonian, SymmetrySpec.from_name("UHF").with_kpoints(mesh), options=TIGHT
     )
     energies: list[float] = []
-    corrections: list[float | None] = []
+    corrections: list[float] = []
     for name in OPEN_SHELL_CLASSES:
         spec = SymmetrySpec.from_name(name).with_kpoints(mesh)
         reference = solve_scf(
@@ -133,14 +120,11 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
             guess=unrestricted.density.embed(spec.structure()),
             options=TIGHT,
         )
-        result = ccsd_from_periodic_fitting(
-            reference, fitting, options=OPTIONS, triples=TRIPLES
-        )
+        result = ccsd_t_from_periodic_fitting(reference, fitting, options=OPTIONS)
         energies.append(result.correlation_energy)
         corrections.append(result.triples_correction)
     assert energies[0] < 0.0
     assert all(e == pytest.approx(energies[0], abs=CCSD_ENERGY_TOL) for e in energies)
-    assert corrections[0] is not None
     assert all(
         c == pytest.approx(corrections[0], abs=CCSD_ENERGY_TOL) for c in corrections
     )
@@ -152,20 +136,12 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
         SymmetrySpec.from_name("UHF").with_kpoints(gamma),
         options=TIGHT,
     )
-    folded = df_ccsd(
-        ENGINE,
-        basis,
-        supercell,
-        auxiliary,
-        reference,
-        kpoints=gamma,
-        options=OPTIONS,
-        triples=TRIPLES,
+    folded = df_ccsd_t(
+        ENGINE, basis, supercell, auxiliary, reference, kpoints=gamma, options=OPTIONS
     )
     assert folded.correlation_energy / 3 == pytest.approx(
         energies[0], abs=CCSD_ENERGY_TOL
     )
-    assert folded.triples_correction is not None
     assert folded.triples_correction / 3 == pytest.approx(
         corrections[0], abs=CCSD_ENERGY_TOL
     )

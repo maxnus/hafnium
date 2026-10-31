@@ -6,23 +6,23 @@ from pathlib import Path
 import pytest
 
 import hafnium.cc._ccsd_equations as generated
-import hafnium.cc._triples_equations as generated_triples
-from hafnium.cc.generator.ccsd import (
-    DummyIndices,
-    Equation,
-    Projection,
-    ccsd_equations,
-    hamiltonian_strings,
-    singles_cluster,
-    triples_equations,
-)
+import hafnium.cc._ccsd_t_equations as generated_ccsd_t
+from hafnium.cc.generator.ccsd import ccsd_equations
+from hafnium.cc.generator.ccsd_t import ccsd_t_equations
 from hafnium.cc.generator.emit import (
     ccsd_module_source,
+    ccsd_t_module_source,
     function_source,
     orbits,
     permutations_of,
     program,
-    triples_module_source,
+)
+from hafnium.cc.generator.equations import (
+    DummyIndices,
+    Equation,
+    Projection,
+    hamiltonian_strings,
+    singles_cluster,
 )
 from hafnium.cc.generator.wick import (
     Factor,
@@ -50,8 +50,8 @@ def test_committed_equations_are_current() -> None:
     """The generated modules are regenerated to detect drift (PLAN §5.5)."""
     source = Path(generated.__file__).read_text(encoding="utf-8")
     assert source == ccsd_module_source()
-    source = Path(generated_triples.__file__).read_text(encoding="utf-8")
-    assert source == triples_module_source()
+    source = Path(generated_ccsd_t.__file__).read_text(encoding="utf-8")
+    assert source == ccsd_t_module_source()
 
 
 def test_energy_is_the_known_expression(equations: dict[str, Equation]) -> None:
@@ -247,7 +247,7 @@ def test_program_contracts_pairwise_over_shared_indices() -> None:
 
 def test_triples_equations_have_the_textbook_terms() -> None:
     """``W`` and ``V`` of (T): two orbits of nine images each (ADR-0033)."""
-    equations = triples_equations()
+    equations = ccsd_t_equations()
     connected = equations["connected_triples"]
     assert connected.free == "ijkabc"
     terms = {str(term) for term in connected.terms}

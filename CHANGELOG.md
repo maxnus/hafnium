@@ -357,8 +357,9 @@ uses [Semantic Versioning](https://semver.org/).
 - The (T) correction (M8, part four, ADR-0033): the generator derives
   the connected and the disconnected triples (`Projection.triples`,
   `Projection.expectation` keeping the terms connected to the
-  Hamiltonian or the others, `triples_equations`) and writes
-  `hafnium.cc._triples_equations`, a second committed program whose
+  Hamiltonian or the others, `ccsd_t_equations`, with the machinery
+  shared by the methods in `hafnium.cc.generator.equations`) and writes
+  `hafnium.cc._ccsd_t_equations`, a second committed program whose
   functions take one window of the occupied axis per occupied index and
   evaluate every image of a term over the permuted windows. A
   `TensorAxis` has windows (`starts`, `window`, `windows`,
@@ -366,10 +367,10 @@ uses [Semantic Versioning](https://semver.org/).
   sectors to the same slice and keep the symmetries of the state, and
   `BlockTensor.window` slices a tensor along an axis. `triples_correction`
   sums `conj(W + V) W / D / 36` over the triples of windows with the
-  window chosen from a memory limit (`TriplesOptions`), and `df_ccsd`,
-  `ccsd_from_df_tensor`, `ccsd_from_periodic_fitting` and `solve_ccsd`
-  take `triples=` and carry the correction as
-  `CcsdResult.triples_correction`, included in `total_energy`. The
+  window chosen from a memory limit (`TriplesOptions`); `df_ccsd_t`,
+  `ccsd_t_from_df_tensor`, `ccsd_t_from_periodic_fitting` and
+  `solve_ccsd_t` run CCSD and the correction and return a `CcsdTResult`,
+  a `CcsdResult` with the correction included in its `total_energy`. The
   corrections agree across the eight classes to 1e-11 Hartree, vanish
   for two electrons, do not depend on the window, match a dense
   evaluation of the textbook formula, and match PySCF's CCSD(T) for RHF,
@@ -386,6 +387,6 @@ uses [Semantic Versioning](https://semver.org/).
   (H₂ in STO-3G), where the virtual axis was read as occupied;
   `expectation` replaces `connected_expectation` with a `connected`
   flag, `cluster_products` lists cluster builders, and
-  `ccsd_module_source` and `triples_module_source` replace
+  `ccsd_module_source` and `ccsd_t_module_source` replace
   `module_source`.
 

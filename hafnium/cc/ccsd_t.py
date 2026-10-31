@@ -1,6 +1,6 @@
-"""The (T) correction to CCSD over windows of the occupied axis (ADR-0033).
+"""CCSD(T): the (T) correction over windows of the occupied axis (ADR-0033).
 
-With the converged amplitudes, the correction is
+With the converged CCSD amplitudes, the correction is
 
 ``E(T) = 1/36 Σ_ijkabc conj(W + V) W / D``,
 
@@ -9,14 +9,16 @@ generate, ``V = <Φ_ijk^abc| H_N (T1 + T2) |Φ>`` the disconnected ones and
 ``D = ε_i + ε_j + ε_k − ε_a − ε_b − ε_c``: the fourth-order energy of the
 triples ``<Φ| T2† H_N T3 |Φ>`` with ``T3 = W / D`` and the fifth-order
 ``<Φ| T1† H_N T3 |Φ>``, the bra giving the conjugates. The programs of
-:mod:`hafnium.cc._triples_equations` evaluate ``W`` and ``V`` over three
+:mod:`hafnium.cc._ccsd_t_equations` evaluate ``W`` and ``V`` over three
 windows of the occupied axis at a time, so that the triples are never
 held in full: the occupied axis is cut into windows
 (:meth:`~hafnium.structured.TensorAxis.windows`), and since the summand
 is symmetric under the permutations of ``i, j, k`` the sum runs over the
 triples ``I ≤ J ≤ K`` of windows, each counted as often as its orderings.
 Over the k-points of a cell the energy of the supercell of the mesh is
-divided by the number of points per cell (ADR-0031).
+divided by the number of points per cell (ADR-0031). The entry points
+mirror those of CCSD and return a :class:`CcsdTResult`, a
+:class:`~hafnium.cc.CcsdResult` with the correction.
 """
 
 from __future__ import annotations
@@ -24,17 +26,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
-from hafnium.backend import array_namespace
-from hafnium.cc._triples_equations import (
+from hafnium.backend import Array, array_namespace
+from hafnium.basis import BasisSet
+from hafnium.cc._ccsd_t_equations import (
     FOCK_BLOCKS,
     INTEGRAL_BLOCKS,
     connected_triples,
     disconnected_triples,
 )
+from hafnium.cc.ccsd import CcsdOptions, CcsdResult, solve_ccsd
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
 from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import InputError
-from hafnium.structured import BlockTensor, Ring, TensorAxis, TensorStructure, contract
+from hafnium.integrals import IntegralEngine
+from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
+from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
+from hafnium.molecule import Cell, Molecule
+from hafnium.scf import ScfResult
+from hafnium.structured import (
+    BlockTensor,
+    IrrepSectors,
+    Ring,
+    TensorAxis,
+    TensorStructure,
+    contract,
+)
+from hafnium.symmetry import KPoints
 
 SLOTS = (Space.OCCUPIED,) * 3 + (Space.VIRTUAL,) * 3
 """The spaces of the axes of a triples tensor ``[i, j, k, a, b, c]``."""
@@ -70,6 +87,127 @@ class TriplesOptions:
             raise InputError("the memory limit of a batch is positive")
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class CcsdTResult(CcsdResult):
+    """A :class:`~hafnium.cc.CcsdResult` with its (T) correction.
+
+    Parameters
+    ----------
+    triples_correction
+        The (T) correction in Hartree, per cell for a periodic system;
+        ``correlation_energy`` stays that of CCSD.
+    """
+
+    triples_correction: float
+
+    @property
+    def total_energy(self) -> float:
+        """Reference plus CCSD correlation energy plus the (T) correction."""
+        return self.reference_energy + self.correlation_energy + self.triples_correction
+
+    @classmethod
+    def from_ccsd(cls, result: CcsdResult, triples_correction: float) -> CcsdTResult:
+        """Attach ``triples_correction`` to the fields of ``result``."""
+        return cls(
+            result.reference_energy,
+            result.correlation_energy,
+            result.singles,
+            result.doubles,
+            result.converged,
+            result.history,
+            triples_correction,
+        )
+
+
+def df_ccsd_t(  # noqa: PLR0913
+    engine: IntegralEngine,
+    basis: BasisSet,
+    system: Molecule | Cell,
+    auxiliary: BasisSet,
+    reference: ScfResult,
+    *,
+    kpoints: KPoints | None = None,
+    threshold: float = DEFAULT_METRIC_THRESHOLD,
+    options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
+) -> CcsdTResult:
+    """Compute the DF-CCSD(T) energy of a converged Hartree–Fock ``reference``.
+
+    The fitted tensors are built as :func:`~hafnium.cc.df_ccsd` builds
+    them, then :func:`solve_ccsd_t` iterates CCSD and adds the correction.
+    """
+    fitted = FittedOrbitalTensors.build(
+        engine,
+        basis,
+        system,
+        auxiliary,
+        reference,
+        kpoints=kpoints,
+        threshold=threshold,
+    )
+    return solve_ccsd_t(reference, fitted, options, triples)
+
+
+def ccsd_t_from_df_tensor(
+    reference: ScfResult,
+    df_tensor: Array,
+    *,
+    auxiliary: IrrepSectors | None = None,
+    options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
+) -> CcsdTResult:
+    """Compute the DF-CCSD(T) energy of a molecular ``reference`` from a fitted tensor.
+
+    ``auxiliary`` is as for :func:`~hafnium.cc.ccsd_from_df_tensor`.
+    """
+    fitted = FittedOrbitalTensors.from_df_tensor(
+        df_tensor, OrbitalSpaces.from_scf(reference), auxiliary=auxiliary
+    )
+    return solve_ccsd_t(reference, fitted, options, triples)
+
+
+def ccsd_t_from_periodic_fitting(
+    reference: ScfResult,
+    fitting: PeriodicDensityFitting,
+    *,
+    threshold: float = DEFAULT_METRIC_THRESHOLD,
+    options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
+) -> CcsdTResult:
+    """Compute the DF-CCSD(T) energy per cell of a periodic ``reference``.
+
+    The fitted tensors are those of
+    :func:`~hafnium.cc.ccsd_from_periodic_fitting`; the correction is per
+    cell like the correlation energy.
+    """
+    fitted = FittedOrbitalTensors.from_periodic_fitting(
+        fitting, OrbitalSpaces.from_scf(reference), threshold=threshold
+    )
+    return solve_ccsd_t(reference, fitted, options, triples)
+
+
+def solve_ccsd_t(
+    reference: ScfResult,
+    fitted: FittedOrbitalTensors,
+    options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
+    *,
+    guess: tuple[BlockTensor, BlockTensor] | None = None,
+) -> CcsdTResult:
+    """Iterate CCSD (:func:`~hafnium.cc.solve_ccsd`) and add the (T) correction.
+
+    Raises
+    ------
+    ConvergenceError
+        If CCSD does not converge; the exception carries its last
+        :class:`~hafnium.cc.CcsdResult`, without a correction.
+    """
+    result = solve_ccsd(reference, fitted, options, guess=guess)
+    return CcsdTResult.from_ccsd(
+        result, triples_correction(fitted, result.singles, result.doubles, triples)
+    )
+
+
 def triples_correction(
     fitted: FittedOrbitalTensors,
     singles: BlockTensor,
@@ -80,7 +218,8 @@ def triples_correction(
 
     ``singles`` and ``doubles`` are the amplitudes of a
     :class:`~hafnium.cc.CcsdResult` over the orbital spaces of ``fitted``;
-    over k-points the correction is per cell.
+    over k-points the correction is per cell. The entry points above
+    call it on the result of CCSD.
     """
     if options is None:
         options = TriplesOptions()

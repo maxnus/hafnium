@@ -8,13 +8,17 @@ from hafnium.cc import (
     AmplitudeDiis,
     CcsdOptions,
     CcsdResult,
+    CcsdTResult,
     TriplesOptions,
     ccsd_from_df_tensor,
+    ccsd_t_from_df_tensor,
     df_ccsd,
+    df_ccsd_t,
     solve_ccsd,
+    solve_ccsd_t,
     triples_correction,
 )
-from hafnium.cc.triples import window_size
+from hafnium.cc.ccsd_t import window_size
 from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.molecule import Molecule
@@ -49,15 +53,12 @@ def cation_hamiltonian() -> Hamiltonian:
 
 
 @pytest.fixture(scope="module")
-def restricted_ccsd(water_hamiltonian: Hamiltonian) -> CcsdResult:
+def restricted_ccsd(water_hamiltonian: Hamiltonian) -> CcsdTResult:
     reference = solve_scf(
         water_hamiltonian, SymmetrySpec.from_name("RHF"), options=TIGHT
     )
-    return ccsd_from_df_tensor(
-        reference,
-        fitted_tensor(water_hamiltonian),
-        options=OPTIONS,
-        triples=TriplesOptions(),
+    return ccsd_t_from_df_tensor(
+        reference, fitted_tensor(water_hamiltonian), options=OPTIONS
     )
 
 
@@ -162,20 +163,18 @@ def two_electron_fci_correlation(
 
 @pytest.mark.parametrize("name", CLASSES)
 def test_every_class_gives_the_closed_shell_energy(
-    name: str, water_hamiltonian: Hamiltonian, restricted_ccsd: CcsdResult
+    name: str, water_hamiltonian: Hamiltonian, restricted_ccsd: CcsdTResult
 ) -> None:
     reference = solve_scf(
         water_hamiltonian, SymmetrySpec.from_name(name), options=TIGHT
     )
     df_tensor = fitted_tensor(water_hamiltonian)
-    result = ccsd_from_df_tensor(
-        reference, df_tensor, options=OPTIONS, triples=TriplesOptions()
-    )
+    result = ccsd_t_from_df_tensor(reference, df_tensor, options=OPTIONS)
+    assert isinstance(result, CcsdResult)
     assert result.converged
     assert result.correlation_energy == pytest.approx(
         restricted_ccsd.correlation_energy, abs=CCSD_ENERGY_TOL
     )
-    assert result.triples_correction is not None
     assert result.triples_correction == pytest.approx(
         restricted_ccsd.triples_correction, abs=CCSD_ENERGY_TOL
     )
@@ -215,15 +214,11 @@ def test_open_shell_classes_agree(name: str, cation_hamiltonian: Hamiltonian) ->
         cation_hamiltonian, SymmetrySpec.from_name("UHF"), options=TIGHT
     )
     df_tensor = fitted_tensor(cation_hamiltonian)
-    expected = ccsd_from_df_tensor(
-        unrestricted, df_tensor, options=OPTIONS, triples=TriplesOptions()
-    )
+    expected = ccsd_t_from_df_tensor(unrestricted, df_tensor, options=OPTIONS)
     reference = solve_scf(
         cation_hamiltonian, SymmetrySpec.from_name(name), options=TIGHT
     )
-    result = ccsd_from_df_tensor(
-        reference, df_tensor, options=OPTIONS, triples=TriplesOptions()
-    )
+    result = ccsd_t_from_df_tensor(reference, df_tensor, options=OPTIONS)
     assert result.correlation_energy == pytest.approx(
         expected.correlation_energy, abs=CCSD_ENERGY_TOL
     )
@@ -240,9 +235,7 @@ def test_two_electron_ccsd_is_exact(name: str) -> None:
     _, hamiltonian = hamiltonian_for(molecule, "cc-pvdz", AUXILIARY)
     reference = solve_scf(hamiltonian, SymmetrySpec.from_name(name), options=TIGHT)
     df_tensor = fitted_tensor(hamiltonian)
-    result = ccsd_from_df_tensor(
-        reference, df_tensor, options=OPTIONS, triples=TriplesOptions()
-    )
+    result = ccsd_t_from_df_tensor(reference, df_tensor, options=OPTIONS)
     assert result.correlation_energy == pytest.approx(
         two_electron_fci_correlation(reference, hamiltonian, df_tensor),
         abs=CCSD_ENERGY_TOL,
@@ -266,27 +259,18 @@ def test_blocked_reference_gives_the_same_energy(name: str) -> None:
         ENGINE, basis, oriented, two_body, point_group=detection.group
     )
     spec = SymmetrySpec.from_name(name)
-    expected = df_ccsd(
+    expected = df_ccsd_t(
         ENGINE,
         basis,
         oriented,
         auxiliary,
         solve_scf(plain, spec, options=TIGHT),
         options=OPTIONS,
-        triples=TriplesOptions(),
     )
     reference = solve_scf(
         blocked, spec.with_point_group(detection.group), options=TIGHT
     )
-    result = df_ccsd(
-        ENGINE,
-        basis,
-        oriented,
-        auxiliary,
-        reference,
-        options=OPTIONS,
-        triples=TriplesOptions(),
-    )
+    result = df_ccsd_t(ENGINE, basis, oriented, auxiliary, reference, options=OPTIONS)
     assert result.correlation_energy == pytest.approx(
         expected.correlation_energy, abs=CCSD_ENERGY_TOL
     )
@@ -443,10 +427,27 @@ def test_triples_match_the_dense_formula_over_any_window(
     )
     df_tensor = fitted_tensor(water_hamiltonian)
     result = ccsd_from_df_tensor(reference, df_tensor, options=OPTIONS)
-    assert result.triples_correction is None
+    assert not hasattr(result, "triples_correction")
     expected = dense_triples(reference, df_tensor, result)
     fitted = FittedOrbitalTensors.from_df_tensor(
         df_tensor, OrbitalSpaces.from_scf(reference)
+    )
+    # The CCSD(T) result carries the CCSD fields and the correction.
+    with_triples = solve_ccsd_t(
+        reference, fitted, OPTIONS, guess=(result.singles, result.doubles)
+    )
+    assert with_triples.n_iterations == 1
+    assert with_triples.correlation_energy == pytest.approx(
+        result.correlation_energy, abs=CCSD_ENERGY_TOL
+    )
+    assert with_triples.triples_correction == pytest.approx(
+        expected, abs=CCSD_ENERGY_TOL
+    )
+    assert with_triples.total_energy == pytest.approx(
+        result.total_energy + with_triples.triples_correction
+    )
+    assert CcsdTResult.from_ccsd(result, 0.5).total_energy == pytest.approx(
+        result.total_energy + 0.5
     )
     occupied = result.doubles.structure.axes[0]
     for options in (
