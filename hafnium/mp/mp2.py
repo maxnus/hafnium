@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from hafnium.backend import Array, array_namespace
 from hafnium.basis import BasisSet
-from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces
+from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.integrals import IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
@@ -136,11 +136,13 @@ def second_order(reference: ScfResult, fitted: FittedOrbitalTensors) -> Mp2Resul
     """Form the second-order energy and amplitudes from the fitted tensors.
 
     ``<ij||ab>`` is :meth:`~hafnium.correlated.FittedOrbitalTensors.antisymmetrized`
-    of the block ``"oovv"``; ``t2 = <ab||ij> / Δ`` is its conjugate over
-    the denominators, and ``E₂ = ¼ Σ <ij||ab> t2`` divided by the number
-    of cells in the supercell of the mesh.
+    of the occupied–occupied–virtual–virtual block; ``t2 = <ab||ij> / Δ``
+    is its conjugate over the denominators, and ``E₂ = ¼ Σ <ij||ab> t2``
+    divided by the number of cells in the supercell of the mesh.
     """
-    integrals = fitted.antisymmetrized("oovv")
+    integrals = fitted.antisymmetrized(
+        (Space.OCCUPIED, Space.OCCUPIED, Space.VIRTUAL, Space.VIRTUAL)
+    )
     excitations = integrals.conj()
     amplitudes = excitations / fitted.spaces.denominators(excitations.structure)
     pairing = contract("ijab,ijab->", integrals, amplitudes).scalar

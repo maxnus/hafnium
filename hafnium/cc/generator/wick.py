@@ -32,6 +32,9 @@ from hafnium.correlated import Space
 LABELS = {Space.OCCUPIED: "ijklmn", Space.VIRTUAL: "abcdef"}
 """The labels of the indices of each space, free ones first."""
 
+SPACE_NAMES = {Space.OCCUPIED: "OCC", Space.VIRTUAL: "VIR"}
+"""The names a program gives the spaces when keying a Hamiltonian block."""
+
 
 class Kind(Enum):
     """The tensors a term is a product of, by the name they carry in a program."""
@@ -105,9 +108,9 @@ class Factor:
     indices: tuple[Index, ...]
 
     @property
-    def slots(self) -> str:
-        """The spaces of the slots as letters, ``"oovv"``."""
-        return "".join(index.space.letter for index in self.indices)
+    def slots(self) -> tuple[Space, ...]:
+        """The spaces of the slots, the key of a Hamiltonian block."""
+        return tuple(index.space for index in self.indices)
 
     @property
     def letters(self) -> str:
@@ -116,9 +119,12 @@ class Factor:
 
     @property
     def expression(self) -> str:
-        """The tensor in a program: ``f["ov"]``, ``v["oovv"]``, ``t1`` or ``t2``."""
+        """The tensor in a program: ``f[OCC, VIR]``, ...
+
+        The Hamiltonian blocks are keyed by the names of their slot spaces.
+        """
         if self.kind.of_hamiltonian:
-            return f'{self.kind.value}["{self.slots}"]'
+            return f"{self.kind.value}[{', '.join(SPACE_NAMES[s] for s in self.slots)}]"
         return self.kind.value
 
     def variants(self) -> list[tuple[int, Factor]]:
@@ -202,7 +208,7 @@ class Term:
         return tuple(
             (
                 factor.kind.value,
-                tuple((i.space.letter, i.label, i.free) for i in factor.indices),
+                tuple((i.space.value, i.label, i.free) for i in factor.indices),
             )
             for factor in self.factors
         )

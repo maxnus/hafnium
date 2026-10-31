@@ -330,9 +330,9 @@ uses [Semantic Versioning](https://semver.org/).
   orbital spaces and assembles the antisymmetrized integrals `<pq||rs>`
   of any block, `OrbitalSpaces.fock_block` is the diagonal Fock operator
   of the canonical orbitals and `OrbitalSpaces.denominators` replaces
-  `energy_denominators`, `Space` reads and writes the slot letters of a
-  block name, `NormalOrderedHamiltonian.from_fitted` forms the blocks an
-  equation reads, and MP2 runs on the same class (`second_order` replaces
+  `energy_denominators`, the blocks of the Hamiltonian are keyed by
+  tuples of `Space`, `NormalOrderedHamiltonian.from_fitted` forms the
+  blocks an equation reads, and MP2 runs on the same class (`second_order` replaces
   `antisymmetrized_integrals`).
   `df_ccsd`, `ccsd_from_df_tensor`, `ccsd_from_periodic_fitting` and
   `solve_ccsd` iterate the equations with the DIIS of `AmplitudeDiis`,

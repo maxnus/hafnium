@@ -35,32 +35,6 @@ class Space(Enum):
     OCCUPIED = "occupied"
     VIRTUAL = "virtual"
 
-    @property
-    def letter(self) -> str:
-        """The slot letter of the space, ``o`` or ``v``, as in ``"oovv"``."""
-        return self.value[0]
-
-    @classmethod
-    def from_letter(cls, letter: str) -> Space:
-        """Read a slot letter, ``o`` or ``v``.
-
-        Raises
-        ------
-        InputError
-            If the letter names neither space.
-        """
-        for space in cls:
-            if space.letter == letter:
-                return space
-        raise InputError(f"a slot is occupied (o) or virtual (v), got {letter!r}")
-
-    @classmethod
-    def from_letters(cls, slots: str, count: int) -> tuple[Space, ...]:
-        """Read the ``count`` slot letters of a block name such as ``"oovv"``."""
-        if len(slots) != count:
-            raise InputError(f"a block name has {count} slots, got {slots!r}")
-        return tuple(cls.from_letter(letter) for letter in slots)
-
 
 @dataclass(frozen=True, slots=True, eq=False)
 class OrbitalSpaces:
@@ -272,17 +246,18 @@ class OrbitalSpaces:
 
         return BlockTensor.from_function(structure, build)
 
-    def fock_block(self, slots: str, *, ring: Ring | None = None) -> BlockTensor:
+    def fock_block(
+        self, slots: tuple[Space, Space], *, ring: Ring | None = None
+    ) -> BlockTensor:
         """``f[p, q] = δ_pq ε_p`` of the canonical orbitals, ``p`` conjugated.
 
-        ``slots`` names the spaces of the two indices, ``"ov"`` for the
-        occupied–virtual block, which vanishes like the virtual–occupied
-        one: the Fock operator of a converged Hartree–Fock state is
-        diagonal in its canonical orbitals, with the orbital energies on
-        the diagonal. The block is stored over ``ring``, by default
-        :attr:`ring`.
+        ``slots`` holds the spaces of the two indices; the occupied–virtual
+        block vanishes like the virtual–occupied one, since the Fock
+        operator of a converged Hartree–Fock state is diagonal in its
+        canonical orbitals, with the orbital energies on the diagonal. The
+        block is stored over ``ring``, by default :attr:`ring`.
         """
-        bra, ket = Space.from_letters(slots, 2)
+        bra, ket = slots
         structure = TensorStructure(
             (self.axis(bra, conjugated=True), self.axis(ket, conjugated=False)),
             ring=self.ring if ring is None else ring,

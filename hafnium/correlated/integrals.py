@@ -454,11 +454,12 @@ class FittedOrbitalTensors:
         self._cache[bra, ket, signed] = tensor
         return tensor
 
-    def antisymmetrized(self, slots: str) -> BlockTensor:
+    def antisymmetrized(self, slots: tuple[Space, Space, Space, Space]) -> BlockTensor:
         """``<pq||rs> = (pr|qs) − (ps|qr)`` as the block tensor ``[p, q, r, s]``.
 
-        ``slots`` names the space of each index, ``"oovv"`` for
-        ``<ij||ab>``; ``p`` and ``q`` are conjugated (CONVENTIONS.md §3).
+        ``slots`` holds the space of each index, occupied, occupied,
+        virtual, virtual for ``<ij||ab>``; ``p`` and ``q`` are conjugated
+        (CONVENTIONS.md §3).
         ``(pr|qs) = Σ_P B[P, p, r] conj(B[P, s, q])`` pairs the fitted
         tensor with the conjugate of the signed one, ``B[P, q, s] =
         conj(B[P, s, q])`` for the real auxiliary functions of a molecule
@@ -466,7 +467,7 @@ class FittedOrbitalTensors:
         a cell; the sum over the auxiliary index then pairs an
         unconjugated with a conjugated axis.
         """
-        p, q, r, s = Space.from_letters(slots, 4)
+        p, q, r, s = slots
         direct = contract(
             "Ppr,Psq->pqrs", self.tensor(p, r), self.tensor(s, q, signed=True).conj()
         )

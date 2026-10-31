@@ -5,8 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from hafnium.correlated import FittedOrbitalTensors
+from hafnium.correlated import FittedOrbitalTensors, Space
 from hafnium.structured import BlockTensor
+
+FockBlock = tuple[Space, Space]
+"""The spaces of the two slots of a Fock block."""
+IntegralBlock = tuple[Space, Space, Space, Space]
+"""The spaces of the four slots of a block of ``<pq||rs>``."""
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -16,23 +21,23 @@ class NormalOrderedHamiltonian:
     Parameters
     ----------
     fock
-        ``f[p, q]`` keyed by the spaces of its slots, ``"oo"``, ``"ov"``,
-        ``"vo"`` and ``"vv"``, with ``p`` conjugated.
+        ``f[p, q]`` keyed by the spaces of its two slots, with ``p``
+        conjugated.
     integrals
-        ``<pq||rs>`` keyed by the spaces of its four slots, ``"oovv"`` and
-        so on, with ``p`` and ``q`` conjugated (CONVENTIONS.md §3).
+        ``<pq||rs>`` keyed by the spaces of its four slots, with ``p`` and
+        ``q`` conjugated (CONVENTIONS.md §3).
     """
 
-    fock: Mapping[str, BlockTensor]
-    integrals: Mapping[str, BlockTensor]
+    fock: Mapping[FockBlock, BlockTensor]
+    integrals: Mapping[IntegralBlock, BlockTensor]
 
     @classmethod
     def from_fitted(
         cls,
         fitted: FittedOrbitalTensors,
         *,
-        fock_blocks: Iterable[str],
-        integral_blocks: Iterable[str],
+        fock_blocks: Iterable[FockBlock],
+        integral_blocks: Iterable[IntegralBlock],
     ) -> NormalOrderedHamiltonian:
         """Form the blocks an equation reads from the fitted tensors.
 

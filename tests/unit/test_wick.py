@@ -7,8 +7,8 @@ import pytest
 
 import hafnium.cc._ccsd_equations as generated
 from hafnium.cc.generator.ccsd import (
+    DummyIndices,
     Equation,
-    Fresh,
     Projection,
     ccsd_equations,
     hamiltonian_strings,
@@ -134,26 +134,26 @@ def test_normal_ordering_carries_the_sign() -> None:
 
 def test_disconnected_terms_are_dropped() -> None:
     """``<Φ_i^a| f_N T1 T1 |Φ>`` keeps only the terms with both T1 linked to f."""
-    fresh = Fresh()
+    dummies = DummyIndices()
     projection = Projection.singles()
     bra = OperatorString(Fraction(1), None, projection.operators)
     # One cluster operator: f[vo] contracts with the bra alone and is
     # unlinked, f[ov] has no quasi-creator for it.
     terms = Term.merge(
         term
-        for one_body in hamiltonian_strings(fresh)[:4]
+        for one_body in hamiltonian_strings(dummies)[:4]
         for term in connected_expectation(
-            [bra, one_body, singles_cluster(fresh)], 1, [2]
+            [bra, one_body, singles_cluster(dummies)], 1, [2]
         )
     )
     assert sorted(str(t) for t in terms) == [
         "-1 f[j,i] t1[j,a]",
         "1 f[a,b] t1[i,b]",
     ]
-    f_ov = hamiltonian_strings(fresh)[1]
+    f_ov = hamiltonian_strings(dummies)[1]
     assert f_ov.factor is not None
-    assert f_ov.factor.slots == "ov"
-    two = [bra, f_ov, singles_cluster(fresh), singles_cluster(fresh)]
+    assert f_ov.factor.slots == (O, V)
+    two = [bra, f_ov, singles_cluster(dummies), singles_cluster(dummies)]
     # The two equivalent contractions of ``T1 T1`` double the term; the
     # ``1/2!`` of the exponential is applied by the equation.
     connected = Term.merge(connected_expectation(two, 1, [2, 3]))
@@ -227,7 +227,7 @@ def test_program_contracts_pairwise_over_shared_indices() -> None:
         assert set(inputs[0]) & set(inputs[1]), line
     assert program(
         Term(Fraction(1), (Factor(Kind.INTEGRAL, (A, B, I, J)),)), "ijab"
-    ) == ['x = v["vvoo"].permute("abij->ijab")']
+    ) == ['x = v[VIR, VIR, OCC, OCC].permute("abij->ijab")']
     assert program(Term(Fraction(1), (Factor(Kind.FOCK, (I, A)),)), "ia") == [
-        'x = f["ov"]'
+        "x = f[OCC, VIR]"
     ]

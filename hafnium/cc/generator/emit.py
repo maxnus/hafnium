@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from hafnium.cc.generator.ccsd import Equation, ccsd_equations
-from hafnium.cc.generator.wick import LABELS, Kind, Term
+from hafnium.cc.generator.wick import LABELS, SPACE_NAMES, Kind, Term
 from hafnium.correlated import Space
 
 INTERMEDIATES = ("x", "y", "z", "w")
@@ -64,7 +64,10 @@ without axes and the residuals ``<Φ_i^a| H_N e^T |Φ>`` and
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
+from hafnium.correlated import Space
 from hafnium.structured import BlockTensor, contract
+
+OCC, VIR = Space.OCCUPIED, Space.VIRTUAL
 '''
 
 HELPERS = '''
@@ -263,8 +266,8 @@ def function_source(equation: Equation) -> str:
 def module_source() -> str:
     """Write the complete source of :mod:`hafnium.cc._ccsd_equations`."""
     equations = ccsd_equations()
-    fock: set[str] = set()
-    integrals: set[str] = set()
+    fock: set[tuple[Space, ...]] = set()
+    integrals: set[tuple[Space, ...]] = set()
     for equation in equations.values():
         for term in equation.terms:
             for factor in term.factors:
@@ -272,12 +275,17 @@ def module_source() -> str:
                     fock.add(factor.slots)
                 elif factor.kind is Kind.INTEGRAL:
                     integrals.add(factor.slots)
+
+    def listed(blocks: set[tuple[Space, ...]]) -> str:
+        return "".join(
+            "    (" + ", ".join(SPACE_NAMES[s] for s in block) + "),\n"
+            for block in sorted(blocks, key=lambda b: [s.value for s in b])
+        )
+
     constants = (
-        "FOCK_BLOCKS = (" + ", ".join(f'"{s}"' for s in sorted(fock)) + ")\n"
+        "FOCK_BLOCKS = (\n" + listed(fock) + ")\n"
         '"""The blocks of the Fock operator the equations read."""\n'
-        "INTEGRAL_BLOCKS = (\n"
-        + "".join(f'    "{s}",\n' for s in sorted(integrals))
-        + ")\n"
+        "INTEGRAL_BLOCKS = (\n" + listed(integrals) + ")\n"
         '"""The blocks of the antisymmetrized integrals the equations read."""\n'
     )
     functions = "".join(

@@ -37,6 +37,8 @@ from hafnium.scf import ScfResult
 from hafnium.structured import BlockTensor, IrrepSectors, TensorStructure
 from hafnium.symmetry import KPoints
 
+OCCUPIED, VIRTUAL = Space.OCCUPIED, Space.VIRTUAL
+
 
 @dataclass(frozen=True, slots=True)
 class CcsdOptions:
@@ -223,7 +225,7 @@ def solve_ccsd(
         fitted, fock_blocks=FOCK_BLOCKS, integral_blocks=INTEGRAL_BLOCKS
     )
     singles, doubles, denominators_singles, denominators_doubles = _starting_point(
-        hamiltonian.integrals["oovv"], spaces, guess
+        hamiltonian.integrals[OCCUPIED, OCCUPIED, VIRTUAL, VIRTUAL], spaces, guess
     )
     per_cell = 1.0 / fitted.n_cells
     diis = AmplitudeDiis(options.diis_size)

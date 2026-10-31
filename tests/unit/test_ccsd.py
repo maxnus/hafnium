@@ -229,11 +229,14 @@ def test_integral_blocks_match_the_dense_spin_orbital_formula(
     _, antisymmetrized = spin_orbital_integrals(reference, df_tensor)
     occupied = reference.mo_occupations.to_dense() > 0.5
     selectors = {"o": occupied, "v": ~occupied}
-    for slots in ("oovv", "ovvv", "vvoo", "ooov", "vvvv", "ovov"):
+    for letters in ("oovv", "ovvv", "vvoo", "ooov", "vvvv", "ovov"):
         expected = antisymmetrized
-        for axis, letter in enumerate(slots):
+        for axis, letter in enumerate(letters):
             expected = np.compress(selectors[letter], expected, axis=axis)
-        block = fitted.antisymmetrized(slots)
+        p, q, r, s = (
+            Space.OCCUPIED if letter == "o" else Space.VIRTUAL for letter in letters
+        )
+        block = fitted.antisymmetrized((p, q, r, s))
         assert [a.conjugated for a in block.structure.axes] == [
             True,
             True,
@@ -245,10 +248,6 @@ def test_integral_blocks_match_the_dense_spin_orbital_formula(
     assert fitted.tensor(Space.OCCUPIED, Space.VIRTUAL, signed=True) is fitted.tensor(
         Space.OCCUPIED, Space.VIRTUAL
     )
-    with pytest.raises(InputError, match="4 slots"):
-        fitted.antisymmetrized("oov")
-    with pytest.raises(InputError, match="occupied"):
-        fitted.antisymmetrized("ooxv")
 
 
 def test_fock_blocks_are_diagonal_in_the_canonical_orbitals(
@@ -256,11 +255,11 @@ def test_fock_blocks_are_diagonal_in_the_canonical_orbitals(
 ) -> None:
     reference = solve_scf(water_hamiltonian, SymmetrySpec.from_name("UHF"))
     spaces = OrbitalSpaces.from_scf(reference)
-    for slots, energies in (
-        ("oo", spaces.occupied_energies),
-        ("vv", spaces.virtual_energies),
+    for space, energies in (
+        (Space.OCCUPIED, spaces.occupied_energies),
+        (Space.VIRTUAL, spaces.virtual_energies),
     ):
-        block = spaces.fock_block(slots)
+        block = spaces.fock_block((space, space))
         assert block.structure.keys == ((0, 0), (1, 1))
         for position in range(2):
             np.testing.assert_allclose(
@@ -268,10 +267,8 @@ def test_fock_blocks_are_diagonal_in_the_canonical_orbitals(
                 np.diag(energies.blocks[position]),
                 atol=STRUCTURE_TOL,
             )
-    assert np.all(spaces.fock_block("ov").to_dense() == 0.0)
-    assert np.all(spaces.fock_block("vo").to_dense() == 0.0)
-    with pytest.raises(InputError, match="2 slots"):
-        spaces.fock_block("oov")
+    assert np.all(spaces.fock_block((Space.OCCUPIED, Space.VIRTUAL)).to_dense() == 0.0)
+    assert np.all(spaces.fock_block((Space.VIRTUAL, Space.OCCUPIED)).to_dense() == 0.0)
 
 
 def test_options_and_convergence_are_reported(water_hamiltonian: Hamiltonian) -> None:

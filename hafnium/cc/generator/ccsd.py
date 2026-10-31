@@ -36,23 +36,23 @@ from hafnium.cc.generator.wick import (
 from hafnium.correlated import Space
 
 
-class Fresh:
-    """Unique dummy indices."""
+class DummyIndices:
+    """A supply of distinct summation indices for one derivation."""
 
     def __init__(self) -> None:
         self.count = 0
 
-    def __call__(self, space: Space) -> Index:
-        """Return a new dummy index of ``space``."""
+    def new(self, space: Space) -> Index:
+        """Return a dummy index of ``space`` not handed out before."""
         self.count += 1
         return Index(space, f"_{self.count}")
 
 
-def hamiltonian_strings(fresh: Fresh) -> list[OperatorString]:
+def hamiltonian_strings(dummies: DummyIndices) -> list[OperatorString]:
     """``H_N`` split by the spaces of its indices, every string normal ordered."""
     strings: list[OperatorString] = []
     for space_p, space_q in product(Space, repeat=2):
-        p, q = fresh(space_p), fresh(space_q)
+        p, q = dummies.new(space_p), dummies.new(space_q)
         strings.append(
             OperatorString.normal_ordered(
                 Fraction(1),
@@ -61,7 +61,7 @@ def hamiltonian_strings(fresh: Fresh) -> list[OperatorString]:
             )
         )
     for spaces in product(Space, repeat=4):
-        p, q, r, s = (fresh(space) for space in spaces)
+        p, q, r, s = (dummies.new(space) for space in spaces)
         strings.append(
             OperatorString.normal_ordered(
                 Fraction(1, 4),
@@ -77,9 +77,9 @@ def hamiltonian_strings(fresh: Fresh) -> list[OperatorString]:
     return strings
 
 
-def singles_cluster(fresh: Fresh) -> OperatorString:
+def singles_cluster(dummies: DummyIndices) -> OperatorString:
     """``T1 = Σ t1[i, a] a†_a a_i``."""
-    i, a = fresh(Space.OCCUPIED), fresh(Space.VIRTUAL)
+    i, a = dummies.new(Space.OCCUPIED), dummies.new(Space.VIRTUAL)
     return OperatorString(
         Fraction(1),
         Factor(Kind.SINGLES, (i, a)),
@@ -87,10 +87,10 @@ def singles_cluster(fresh: Fresh) -> OperatorString:
     )
 
 
-def doubles_cluster(fresh: Fresh) -> OperatorString:
+def doubles_cluster(dummies: DummyIndices) -> OperatorString:
     """``T2 = ¼ Σ t2[i, j, a, b] a†_a a†_b a_j a_i``."""
-    i, j = fresh(Space.OCCUPIED), fresh(Space.OCCUPIED)
-    a, b = fresh(Space.VIRTUAL), fresh(Space.VIRTUAL)
+    i, j = dummies.new(Space.OCCUPIED), dummies.new(Space.OCCUPIED)
+    a, b = dummies.new(Space.VIRTUAL), dummies.new(Space.VIRTUAL)
     return OperatorString(
         Fraction(1, 4),
         Factor(Kind.DOUBLES, (i, j, a, b)),
@@ -99,7 +99,7 @@ def doubles_cluster(fresh: Fresh) -> OperatorString:
 
 
 def cluster_products(
-    fresh: Fresh, max_operators: int
+    dummies: DummyIndices, max_operators: int
 ) -> list[tuple[Fraction, list[OperatorString]]]:
     """List ``T1^m T2^n / (m! n!)`` up to ``max_operators`` operators.
 
@@ -108,8 +108,8 @@ def cluster_products(
     products: list[tuple[Fraction, list[OperatorString]]] = []
     for n in range(max_operators // 4 + 1):
         for m in range((max_operators - 4 * n) // 2 + 1):
-            strings = [singles_cluster(fresh) for _ in range(m)]
-            strings += [doubles_cluster(fresh) for _ in range(n)]
+            strings = [singles_cluster(dummies) for _ in range(m)]
+            strings += [doubles_cluster(dummies) for _ in range(n)]
             products.append((Fraction(1, factorial(m) * factorial(n)), strings))
     return products
 
@@ -164,13 +164,13 @@ class Projection:
 
     def equation(self) -> Equation:
         """Derive ``<Φ_μ| H_N e^T |Φ>_C`` as merged canonical terms."""
-        fresh = Fresh()
+        dummies = DummyIndices()
         bra = OperatorString(Fraction(1), None, self.operators)
         terms: list[Term] = []
         # The projection and the Hamiltonian contract at most 4 + 4 operators.
-        for hamiltonian in hamiltonian_strings(fresh):
+        for hamiltonian in hamiltonian_strings(dummies):
             for coefficient, clusters in cluster_products(
-                fresh, len(self.operators) + 4
+                dummies, len(self.operators) + 4
             ):
                 strings = [bra, hamiltonian, *clusters]
                 terms.extend(

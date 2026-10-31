@@ -192,9 +192,9 @@ Spin never appears as an explicit index in method code; it is part of the
   symmetries of the state derive blocks: the spin flip of a restricted
   state copies, time reversal conjugates and maps every point to `−k`.
   Coupled-cluster code (ADR-0032) reads the normal-ordered Hamiltonian
-  as blocks keyed by the spaces of their slots, `f["ov"]` for `f[i, a]`
-  with `i` conjugated and `v["oovv"]` for `<ij||ab>` with `i` and `j`
-  conjugated; the amplitudes are `t1[i, a]` and `t2[i, j, a, b]` with the
+  as blocks keyed by the `Space` of each slot, `f[OCC, VIR]` for
+  `f[i, a]` with `i` conjugated and `v[OCC, OCC, VIR, VIR]` for
+  `<ij||ab>` with `i` and `j` conjugated; the amplitudes are `t1[i, a]` and `t2[i, j, a, b]` with the
   virtual indices conjugated, and the residuals `<Φ_i^a| H_N e^T |Φ>` and
   `<Φ_ij^ab| H_N e^T |Φ>` share their structure.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
