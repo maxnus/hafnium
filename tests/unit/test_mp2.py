@@ -156,6 +156,24 @@ def test_mp2_matches_the_dense_spin_orbital_formula(
     )
 
 
+def test_equal_occupied_and_virtual_counts_keep_the_spaces_apart() -> None:
+    """H₂ in STO-3G has as many virtual as occupied orbitals.
+
+    The denominators take the space of every axis by name, since the
+    axes of the two spaces are then indistinguishable by their sizes.
+    """
+    _, hamiltonian = hamiltonian_for(hydrogen(), "sto-3g", AUXILIARY)
+    reference = solve_scf(hamiltonian, SymmetrySpec.from_name("RHF"), options=TIGHT)
+    df_tensor = fitted_tensor(hamiltonian)
+    spaces = OrbitalSpaces.from_scf(reference)
+    assert spaces.sizes(Space.OCCUPIED) == spaces.sizes(Space.VIRTUAL) == (1, 1)
+    result = mp2_from_df_tensor(reference, df_tensor)
+    assert result.correlation_energy < 0.0
+    assert result.correlation_energy == pytest.approx(
+        dense_mp2(reference, df_tensor), abs=ENERGY_TOL
+    )
+
+
 def test_amplitudes_are_antisymmetric(restricted_mp2: Mp2Result) -> None:
     amplitudes = restricted_mp2.amplitudes
     dense = amplitudes.to_dense()
@@ -219,13 +237,14 @@ def test_transformation_matches_the_explicit_contraction(
     assert spaces.ring is fitted.structure.ring
     assert spaces.sizes(Space.OCCUPIED) == (5, 5)
     assert spaces.sizes(Space.VIRTUAL) == (2, 2)
-    assert spaces.space_of(fitted.structure.axes[1]) is Space.OCCUPIED
-    assert spaces.space_of(fitted.structure.axes[2]) is Space.VIRTUAL
-    with pytest.raises(StructureError, match="neither"):
-        spaces.space_of(fitted.structure.axes[0])
-    denominators = spaces.denominators(
-        TensorStructure(fitted.structure.axes[1:], ring=spaces.ring)
-    )
+    pair = TensorStructure(fitted.structure.axes[1:], ring=spaces.ring)
+    with pytest.raises(StructureError, match="does not run over the virtual"):
+        spaces.denominators(pair, (Space.VIRTUAL, Space.OCCUPIED))
+    with pytest.raises(StructureError, match="one space per axis"):
+        spaces.denominators(pair, (Space.OCCUPIED,))
+    with pytest.raises(StructureError, match="axis 0 does not run"):
+        spaces.denominators(fitted.structure, (Space.OCCUPIED,) * 3)
+    denominators = spaces.denominators(pair, (Space.OCCUPIED, Space.VIRTUAL))
     e_occ = spaces.occupied_energies.blocks[0]
     e_vir = spaces.virtual_energies.blocks[0]
     np.testing.assert_allclose(

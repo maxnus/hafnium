@@ -99,16 +99,25 @@ class TensorAxis:
     conjugated
         Whether the index enters conjugated, as the bra index of an
         integral does; the charge of its sector then counts negatively.
+    starts
+        Position of the first function of every sector within the sector
+        of the axis this one is a window of (:meth:`window`); empty, the
+        default, for an axis over the whole space, where every sector
+        starts at zero. The related sectors of a window (:meth:`related_sectors`)
+        start at the same position, as they hold as many functions.
     """
 
     structure: BlockStructure
     sizes: tuple[int, ...]
     conjugated: bool = False
+    starts: tuple[int, ...] = ()
     _offsets: tuple[int, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         sizes = tuple(int(size) for size in self.sizes)
         object.__setattr__(self, "sizes", sizes)
+        starts = tuple(int(start) for start in self.starts) or (0,) * len(sizes)
+        object.__setattr__(self, "starts", starts)
         _check_k_axis(self.structure)
         n_kpt = self.n_kpt
         blocks = self.structure.blocks
@@ -117,11 +126,17 @@ class TensorAxis:
                 f"an axis over the {self.structure.describe()} structure has "
                 f"{len(blocks) * n_kpt} sectors, got {len(sizes)} sizes"
             )
-        if any(size < 0 for size in sizes):
-            raise StructureError("sector sizes are non-negative")
+        if len(starts) != len(sizes):
+            raise StructureError("every sector of an axis has a size and a start")
+        if any(size < 0 for size in sizes) or any(start < 0 for start in starts):
+            raise StructureError("sector sizes and starts are non-negative")
         for index, block in enumerate(blocks):
             if block.derived_from is not None and any(
-                sizes[index * n_kpt + k] != sizes[block.derived_from * n_kpt + k]
+                (sizes[index * n_kpt + k], starts[index * n_kpt + k])
+                != (
+                    sizes[block.derived_from * n_kpt + k],
+                    starts[block.derived_from * n_kpt + k],
+                )
                 for k in range(n_kpt)
             ):
                 raise StructureError(
@@ -133,7 +148,10 @@ class TensorAxis:
         object.__setattr__(self, "_offsets", tuple(offsets))
         for sector in range(len(sizes)):
             image = self.image(Symmetry.TIME_REVERSAL, sector)
-            if image is not None and sizes[image] != sizes[sector]:
+            if image is not None and (sizes[image], starts[image]) != (
+                sizes[sector],
+                starts[sector],
+            ):
                 raise StructureError(
                     "time reversal relates sectors that hold different numbers of "
                     "functions"
@@ -244,13 +262,103 @@ class TensorAxis:
                 return index
         return block
 
+    def related_sectors(self, sector: int) -> tuple[int, ...]:
+        """Return the sectors that hold as many functions as ``sector``, it included.
+
+        The partner block at the same point derives from the block of
+        ``sector`` or is derived by it, and the images under the symmetries
+        of the state hold copies or conjugates of the same blocks; the set
+        is closed under both relations and ordered.
+        """
+        related = {sector}
+        pending = [sector]
+        while pending:
+            current = pending.pop()
+            images: list[int | None] = [
+                self.sector(
+                    self._partner(self.block_index(current)), self.kpoint(current)
+                )
+            ]
+            images.extend(self.image(symmetry, current) for symmetry in Symmetry)
+            for image in images:
+                if image is not None and image not in related:
+                    related.add(image)
+                    pending.append(image)
+        return tuple(sorted(related))
+
+    def window(self, sector: int, start: int, stop: int) -> TensorAxis:
+        """Restrict the axis to the functions ``start:stop`` of ``sector``.
+
+        The related sectors of ``sector`` are restricted to the same
+        functions and every other sector is left empty, so a tensor over
+        the window holds the blocks of those functions alone; the
+        ``starts`` of the window record the position of the functions
+        within the sectors of this axis.
+        """
+        related = self.related_sectors(sector)
+        if not 0 <= start <= stop <= self.sizes[sector]:
+            raise StructureError(
+                f"a window of a sector of {self.sizes[sector]} functions lies "
+                f"within it, got {start}:{stop}"
+            )
+        return TensorAxis(
+            self.structure,
+            tuple(stop - start if s in related else 0 for s in range(self.n_sectors)),
+            self.conjugated,
+            tuple(
+                self.starts[s] + start if s in related else self.starts[s]
+                for s in range(self.n_sectors)
+            ),
+        )
+
+    def windows(self, size: int) -> tuple[TensorAxis, ...]:
+        """Partition the axis into windows of at most ``size`` functions per sector.
+
+        Each set of related sectors is cut into consecutive windows of
+        ``size`` functions, the last one shorter, in the order of the
+        sectors; the windows cover every function of the axis once.
+        """
+        if size < 1:
+            raise StructureError("a window holds at least one function")
+        result: list[TensorAxis] = []
+        seen: set[int] = set()
+        for sector in range(self.n_sectors):
+            if sector in seen:
+                continue
+            seen.update(self.related_sectors(sector))
+            result.extend(
+                self.window(sector, start, min(start + size, self.sizes[sector]))
+                for start in range(0, self.sizes[sector], size)
+            )
+        return tuple(result)
+
+    def is_window_of(self, other: TensorAxis) -> bool:
+        """Whether every sector is a slice of the same sector of ``other``.
+
+        An axis is a window of itself; the conjugation must agree.
+        """
+        return (
+            self.structure == other.structure
+            and self.conjugated == other.conjugated
+            and all(
+                start >= other_start and start + size <= other_start + other_size
+                for start, size, other_start, other_size in zip(
+                    self.starts, self.sizes, other.starts, other.sizes, strict=True
+                )
+            )
+        )
+
     def conjugate(self) -> TensorAxis:
         """Return the same axis with the opposite conjugation."""
-        return TensorAxis(self.structure, self.sizes, not self.conjugated)
+        return TensorAxis(self.structure, self.sizes, not self.conjugated, self.starts)
 
     def same_space(self, other: TensorAxis) -> bool:
-        """Whether both axes run over the same sectors and sizes."""
-        return self.structure == other.structure and self.sizes == other.sizes
+        """Whether both axes run over the same sectors, sizes and windows."""
+        return (
+            self.structure == other.structure
+            and self.sizes == other.sizes
+            and self.starts == other.starts
+        )
 
 
 def _check_k_axis(structure: BlockStructure) -> None:
@@ -739,6 +847,46 @@ class BlockTensor:
         return BlockTensor(
             self.structure, tuple(function(block) for block in self.blocks)
         )
+
+    def window(self, position: int, axis: TensorAxis) -> BlockTensor:
+        """Restrict the index ``position`` to ``axis``, a window of its axis.
+
+        The blocks over the window are views of the stored blocks of this
+        tensor sliced along ``position``, conjugated after the slice when
+        the block derives from its source by conjugation.
+
+        Raises
+        ------
+        StructureError
+            If ``axis`` is not a window of the axis at ``position``
+            (:meth:`TensorAxis.is_window_of`).
+        """
+        full = self.structure.axes[position]
+        if not axis.is_window_of(full):
+            raise StructureError(
+                f"the axis is not a window of index {position} of the "
+                f"{self.structure.describe()}"
+            )
+        axes = list(self.structure.axes)
+        axes[position] = axis
+        structure = TensorStructure(tuple(axes), ring=self.structure.ring)
+        if not self.blocks:
+            return BlockTensor.from_blocks(structure, {})
+        xp = array_namespace(*self.blocks)
+        blocks: dict[Key, Array] = {}
+        for key in structure.stored_keys:
+            # The related sectors of the window share its slice, so the
+            # slice of the key applies to its source.
+            source, conjugate = self.structure.derivation(key)
+            stored = self.structure.position(source)
+            assert stored is not None, "the source of an allowed key is stored"
+            sector = key[position]
+            start = axis.starts[sector] - full.starts[sector]
+            slices = [slice(None)] * self.n_axes
+            slices[position] = slice(start, start + axis.sizes[sector])
+            array = self.blocks[stored][tuple(slices)]
+            blocks[key] = xp.conj(array) if conjugate else array
+        return BlockTensor.from_blocks(structure, blocks, xp=xp)
 
     # ------------------------------------------------------------------ algebra
 

@@ -7,6 +7,8 @@ data, so the comparison does not depend on PySCF's own basis library.
 
 from __future__ import annotations
 
+import contextlib
+import tempfile
 from dataclasses import dataclass
 from typing import Any
 
@@ -294,13 +296,14 @@ def kmp2_reference(
 def ccsd_reference(
     molecule: Molecule, basis: BasisSet, auxiliary: BasisSet, kind: str
 ) -> dict[str, float]:
-    """Density-fitted ``kind`` Hartree–Fock and DF-CCSD energies in one auxiliary basis.
+    """Density-fitted ``kind`` Hartree–Fock, DF-CCSD and (T) energies in one basis.
 
     The reference is converged to a gradient of 1e-10 and the amplitudes
     to a norm of 1e-10. PySCF has DF-CCSD for RHF (``cc.dfccsd``) and UHF
     (``cc.dfuccsd``) references; a GHF reference runs ``cc.gccsd`` on the
     four-centre integrals assembled from the same fitted tensor
-    (``with_df.get_eri``), which is the same approximation.
+    (``with_df.get_eri``), which is the same approximation. The (T)
+    correction is ``ccsd_t`` of the same object.
     """
     scf: Any = pytest.importorskip("pyscf.scf")
     dfccsd: Any = pytest.importorskip("pyscf.cc.dfccsd")
@@ -329,6 +332,7 @@ def ccsd_reference(
     return {
         "reference_energy": reference_energy,
         "correlation_energy": correlation_energy,
+        "triples_correction": float(coupled_cluster.ccsd_t()),
     }
 
 
@@ -341,12 +345,14 @@ def kccsd_reference(
     *,
     exchange_correction: bool = True,
 ) -> dict[str, float]:
-    """Density-fitted ``kind`` k-point HF and CCSD energies per cell.
+    """Density-fitted ``kind`` k-point HF, CCSD and (T) energies per cell.
 
     PySCF's ``KRCCSD``, ``KUCCSD`` or ``KGCCSD`` (``"krhf"``, ``"kuhf"``,
     ``"kghf"``) with Gaussian density fitting in the same auxiliary basis,
     the reference converged to a gradient of 1e-10 and the amplitudes to
-    a norm of 1e-10. By default PySCF's k-point CCSD classes rebuild the
+    a norm of 1e-10, and the (T) correction of ``ccsd_t`` for the two
+    classes that have it (``KUCCSD`` has none, so its result carries no
+    ``triples_correction``). By default PySCF's k-point CCSD classes rebuild the
     Fock matrix without the Ewald exchange correction of the mean field
     (``exxdiv=None``) and only shift the orbital energies of the
     denominators by the Madelung constant for convergence, so their
@@ -357,6 +363,10 @@ def kccsd_reference(
     and ``KGCCSD`` have no such option, so they are compared without the
     correction on either side (``exchange_correction`` false, PySCF's
     ``exxdiv=None`` in the mean field too), where the three classes agree.
+    ``KGCCSD`` also shifts the occupied orbital energies of its
+    denominators by the Madelung constant whatever the mean field's
+    setting, which its (T) inherits; the (T) here is evaluated with the
+    diagonal of the Fock matrix of the equations instead.
     """
     pbc_scf: Any = pytest.importorskip("pyscf.pbc.scf")
     pbc_cc: Any = pytest.importorskip("pyscf.pbc.cc")
@@ -388,10 +398,25 @@ def kccsd_reference(
     coupled_cluster.max_cycle = 200
     correlation_energy = float(coupled_cluster.kernel()[0])
     assert coupled_cluster.converged
-    return {
+    result = {
         "reference_energy": reference_energy,
         "correlation_energy": correlation_energy,
     }
+    if kind == "krhf":
+        # The kernel writes a scratch file into the working directory.
+        with tempfile.TemporaryDirectory() as scratch, contextlib.chdir(scratch):
+            result["triples_correction"] = float(coupled_cluster.ccsd_t())
+    elif kind == "kghf":
+        # KGCCSD shifts the occupied orbital energies of its denominators
+        # by the Madelung constant whatever the mean field's ``exxdiv``, a
+        # convergence device for the CCSD iteration that leaves its fixed
+        # point alone but changes (T), whose denominators enter the energy;
+        # the denominators of the Fock operator the equations use are its
+        # diagonal, as KRCCSD keeps them with ``keep_exxdiv``.
+        eris = coupled_cluster.ao2mo()
+        eris.mo_energy = [eris.fock[k].diagonal().real for k in range(len(kpts))]
+        result["triples_correction"] = float(coupled_cluster.ccsd_t(eris=eris))
+    return result
 
 
 def padded_lattice_vectors(cell: Cell, vacuum: float) -> np.ndarray:

@@ -1,4 +1,4 @@
-"""DF-CCSD energies against PySCF's density-fitted CCSD, and stored data."""
+"""DF-CCSD(T) energies against PySCF's density-fitted CCSD(T), and stored data."""
 
 import json
 from importlib import resources
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.cc import CcsdOptions, CcsdResult, df_ccsd
+from hafnium.cc import CcsdOptions, CcsdTResult, df_ccsd_t
 from hafnium.molecule import Molecule
 from hafnium.scf import DensityFittedCoulombExchange, Hamiltonian, ScfOptions, solve_scf
 from hafnium.symmetry import SymmetrySpec
@@ -36,7 +36,7 @@ OPTIONS = CcsdOptions(energy_tolerance=1e-12, amplitude_tolerance=1e-10)
 
 def compute(
     name: str, basis_name: str, kind: str
-) -> tuple[Molecule, BasisSet, BasisSet, CcsdResult]:
+) -> tuple[Molecule, BasisSet, BasisSet, CcsdTResult]:
     molecule = MOLECULES[name]
     basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     auxiliary = BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY)
@@ -51,16 +51,19 @@ def compute(
         molecule,
         basis,
         auxiliary,
-        df_ccsd(ENGINE, basis, molecule, auxiliary, reference, options=OPTIONS),
+        df_ccsd_t(ENGINE, basis, molecule, auxiliary, reference, options=OPTIONS),
     )
 
 
-def check_against(result: CcsdResult, expected: dict[str, Any]) -> None:
+def check_against(result: CcsdTResult, expected: dict[str, Any]) -> None:
     assert result.reference_energy == pytest.approx(
         expected["reference_energy"], abs=ENERGY_TOL
     )
     assert result.correlation_energy == pytest.approx(
         expected["correlation_energy"], abs=CCSD_ENERGY_TOL
+    )
+    assert result.triples_correction == pytest.approx(
+        expected["triples_correction"], abs=CCSD_ENERGY_TOL
     )
 
 

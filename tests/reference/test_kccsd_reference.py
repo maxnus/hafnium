@@ -1,4 +1,4 @@
-"""k-point DF-CCSD energies per cell against PySCF's k-point CCSD, and stored data."""
+"""k-point DF-CCSD(T) energies per cell against PySCF's, and stored data."""
 
 import json
 from importlib import resources
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.cc import CcsdOptions, CcsdResult, ccsd_from_periodic_fitting
+from hafnium.cc import CcsdOptions, CcsdTResult, ccsd_t_from_periodic_fitting
 from hafnium.integrals import density_fitting_k
 from hafnium.integrals.periodic import overlap_k
 from hafnium.integrals.periodic.exchange import madelung_constant
@@ -42,7 +42,7 @@ OPTIONS = CcsdOptions(energy_tolerance=1e-12, amplitude_tolerance=1e-10)
 
 def compute(
     name: str, basis_name: str, kind: str, exchange_correction: bool
-) -> tuple[Cell, BasisSet, BasisSet, KPoints, CcsdResult]:
+) -> tuple[Cell, BasisSet, BasisSet, KPoints, CcsdTResult]:
     cell = CELLS[name]()
     basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
     auxiliary = BasisSet.for_atoms(cell, AUXILIARY, library=LIBRARY)
@@ -62,17 +62,23 @@ def compute(
         basis,
         auxiliary,
         mesh,
-        ccsd_from_periodic_fitting(reference, fitting, options=OPTIONS),
+        ccsd_t_from_periodic_fitting(reference, fitting, options=OPTIONS),
     )
 
 
-def check_against(result: CcsdResult, expected: dict[str, Any]) -> None:
+def check_against(result: CcsdTResult, expected: dict[str, Any]) -> None:
     assert result.reference_energy == pytest.approx(
         expected["reference_energy"], abs=ENERGY_TOL
     )
     assert result.correlation_energy == pytest.approx(
         expected["correlation_energy"], abs=CCSD_ENERGY_TOL
     )
+    # PySCF has no (T) for KUCCSD; the unit tests check that class against
+    # the others.
+    if "triples_correction" in expected:
+        assert result.triples_correction == pytest.approx(
+            expected["triples_correction"], abs=CCSD_ENERGY_TOL
+        )
 
 
 @pytest.mark.reference

@@ -526,3 +526,120 @@ def test_time_reversal_and_the_spin_flip_combine_over_k() -> None:
     assert TensorStructure((shifted,), ring=Ring.COMPLEX).symmetries == (
         Symmetry.TIME_REVERSAL,
     )
+
+
+def dense_columns(axis: TensorAxis, window: TensorAxis) -> list[int]:
+    """The positions in the dense ``axis`` of the functions of ``window``."""
+    return [
+        axis.offset(s) + window.starts[s] - axis.starts[s] + n
+        for s in range(axis.n_sectors)
+        for n in range(window.sizes[s])
+    ]
+
+
+@pytest.mark.parametrize(("with_sectors", "over_k"), LABELLINGS)
+@pytest.mark.parametrize("name", CLASSES)
+def test_windows_partition_an_axis_and_slice_the_blocks(
+    name: str, with_sectors: bool, over_k: bool
+) -> None:
+    rng = np.random.default_rng(hash(("windows", name, with_sectors, over_k)) % 2**32)
+    aux, occupied, virtual, ring = fitted_axes(name, with_sectors, rng, over_k)
+    ket = occupied.conjugate()
+    tensor = random_member(rng, TensorStructure((aux, ket, virtual), ring=ring))
+    dense = tensor.to_dense()
+    windows = ket.windows(2)
+    covered: list[int] = []
+    for window in windows:
+        assert window.is_window_of(ket)
+        assert window.conjugated is ket.conjugated
+        assert window.structure == ket.structure
+        filled = [s for s in range(window.n_sectors) if window.sizes[s] > 0]
+        # A window restricts one set of related sectors to the same slice.
+        assert filled == list(ket.related_sectors(filled[0]))
+        assert len({(window.sizes[s], window.starts[s]) for s in filled}) == 1
+        assert 0 < window.sizes[filled[0]] <= 2
+        part = tensor.window(1, window)
+        assert part.structure.axes[1] == window
+        assert part.structure.symmetries == tensor.structure.symmetries
+        columns = dense_columns(ket, window)
+        np.testing.assert_allclose(
+            part.to_dense(), dense[:, columns, :], atol=STRUCTURE_TOL
+        )
+        covered.extend(columns)
+        # A contraction over the window is the slice of the full contraction.
+        folded = contract("Pia,Pjb->iajb", part, tensor.conj())
+        full = contract("Pia,Pjb->iajb", tensor, tensor.conj())
+        np.testing.assert_allclose(
+            folded.to_dense(), full.to_dense()[columns], atol=STRUCTURE_TOL
+        )
+    assert sorted(covered) == list(range(ket.extent))
+    if len(windows) > 1:
+        assert not windows[0].same_space(windows[1])
+        with pytest.raises(StructureError, match="different structures"):
+            _ = tensor.window(1, windows[0]) + tensor.window(1, windows[1])
+
+
+@pytest.mark.parametrize("name", ["UHF", "complex GHF"])
+def test_windows_are_validated(name: str) -> None:
+    rng = np.random.default_rng(hash(("windows", name)) % 2**32)
+    aux, occupied, virtual, ring = fitted_axes(name, False, rng, True)
+    ket = occupied.conjugate()
+    tensor = random_member(rng, TensorStructure((aux, ket, virtual), ring=ring))
+    # The whole axis is one window of itself per set of related sectors.
+    filled = {ket.related_sectors(s)[0] for s in range(ket.n_sectors) if ket.sizes[s]}
+    assert len(ket.windows(max(ket.sizes))) == len(filled)
+    assert tensor.window(1, ket).structure == tensor.structure
+    # A window of a window keeps the positions within the full axis.
+    window = ket.windows(2)[-1]
+    inner = window.window(max(range(ket.n_sectors), key=window.sizes.__getitem__), 0, 1)
+    assert inner.is_window_of(window)
+    assert inner.is_window_of(ket)
+    np.testing.assert_allclose(
+        tensor.window(1, window).window(1, inner).to_dense(),
+        tensor.to_dense()[:, dense_columns(ket, inner), :],
+        atol=STRUCTURE_TOL,
+    )
+    with pytest.raises(StructureError, match="not a window"):
+        tensor.window(1, ket.conjugate())
+    with pytest.raises(StructureError, match="within it"):
+        ket.window(0, 0, ket.sizes[0] + 1)
+    with pytest.raises(StructureError, match="at least one"):
+        ket.windows(0)
+
+
+def test_window_starts_are_validated() -> None:
+    restricted = BlockStructure.restricted()
+    with pytest.raises(StructureError, match="as many functions as its source"):
+        TensorAxis(restricted, (2, 2), starts=(0, 1))
+    with pytest.raises(StructureError, match="size and a start"):
+        TensorAxis(restricted, (2, 2), starts=(0,))
+    with pytest.raises(StructureError, match="non-negative"):
+        TensorAxis(restricted, (2, 2), starts=(-1, -1))
+    with pytest.raises(StructureError, match="time reversal relates"):
+        TensorAxis(
+            BlockStructure.unrestricted().with_k_axis(MESH),
+            (1, 2, 2, 1, 2, 2),
+            starts=(0, 1, 0, 0, 1, 0),
+        )
+    axis = TensorAxis(restricted, (3, 3))
+    assert axis.starts == (0, 0)
+    assert axis.related_sectors(1) == (0, 1)
+    window = axis.window(1, 1, 3)
+    assert window.sizes == (2, 2)
+    assert window.starts == (1, 1)
+    assert window.conjugate().starts == (1, 1)
+    assert [w.starts for w in axis.windows(2)] == [(0, 0), (2, 2)]
+    over_k = TensorAxis(
+        BlockStructure.unrestricted().with_k_axis(MESH), (2, 2, 2, 1, 1, 1)
+    )
+    # Time reversal pairs the second and third points of the mesh.
+    assert over_k.related_sectors(1) == (1, 2)
+    assert over_k.related_sectors(3) == (3,)
+    assert [w.sizes for w in over_k.windows(1)] == [
+        (1, 0, 0, 0, 0, 0),
+        (1, 0, 0, 0, 0, 0),
+        (0, 1, 1, 0, 0, 0),
+        (0, 1, 1, 0, 0, 0),
+        (0, 0, 0, 1, 0, 0),
+        (0, 0, 0, 0, 1, 1),
+    ]
