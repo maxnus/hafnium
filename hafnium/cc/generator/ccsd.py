@@ -1,4 +1,4 @@
-"""The spin-orbital CCSD equations as contracted terms (ADR-0032).
+"""The spin-orbital CCSD and (T) equations as contracted terms (ADR-0032, ADR-0033).
 
 With the normal-ordered Hamiltonian ``H_N = Σ f_pq {p† q} + ¼ Σ <pq||rs>
 {p† q† s r}`` and the cluster operators ``T1 = Σ t_i^a a†_a a_i`` and
@@ -15,10 +15,15 @@ expanded into occupied and virtual ones, so that the terms refer to the
 blocks ``f[oo]``, ``f[ov]``, ... and ``v[oovv]``, ... of the Hamiltonian,
 and ``e^T`` is expanded into the products ``T1^m T2^n / (m! n!)`` with no
 more operators than the projection and the Hamiltonian can contract.
+
+The (T) correction reads the triples ``<Φ_ijk^abc| H_N T2 |Φ>_C`` and
+the disconnected ``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` with
+``<Φ_ijk^abc| = <Φ| a†_i a†_j a†_k a_c a_b a_a`` (ADR-0033).
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from itertools import product
@@ -31,9 +36,12 @@ from hafnium.cc.generator.wick import (
     Operator,
     OperatorString,
     Term,
-    connected_expectation,
+    expectation,
 )
 from hafnium.correlated import Space
+
+Cluster = Callable[["DummyIndices"], OperatorString]
+"""A cluster operator, built over fresh dummy indices."""
 
 
 class DummyIndices:
@@ -98,19 +106,16 @@ def doubles_cluster(dummies: DummyIndices) -> OperatorString:
     )
 
 
-def cluster_products(
-    dummies: DummyIndices, max_operators: int
-) -> list[tuple[Fraction, list[OperatorString]]]:
+def cluster_products(max_operators: int) -> list[tuple[Fraction, list[Cluster]]]:
     """List ``T1^m T2^n / (m! n!)`` up to ``max_operators`` operators.
 
     The empty product comes first.
     """
-    products: list[tuple[Fraction, list[OperatorString]]] = []
+    products: list[tuple[Fraction, list[Cluster]]] = []
     for n in range(max_operators // 4 + 1):
         for m in range((max_operators - 4 * n) // 2 + 1):
-            strings = [singles_cluster(dummies) for _ in range(m)]
-            strings += [doubles_cluster(dummies) for _ in range(n)]
-            products.append((Fraction(1, factorial(m) * factorial(n)), strings))
+            clusters: list[Cluster] = [singles_cluster] * m + [doubles_cluster] * n
+            products.append((Fraction(1, factorial(m) * factorial(n)), clusters))
     return products
 
 
@@ -162,24 +167,55 @@ class Projection:
             "ijab",
         )
 
-    def equation(self) -> Equation:
-        """Derive ``<Φ_μ| H_N e^T |Φ>_C`` as merged canonical terms."""
+    @classmethod
+    def triples(cls) -> Projection:
+        """``<Φ_ijk^abc| = <Φ| a†_i a†_j a†_k a_c a_b a_a``."""
+        occupied = [Index(Space.OCCUPIED, label, True) for label in "ijk"]
+        virtual = [Index(Space.VIRTUAL, label, True) for label in "abc"]
+        return cls(
+            "triples",
+            (
+                *(Operator(index, True) for index in occupied),
+                *(Operator(index, False) for index in reversed(virtual)),
+            ),
+            "ijkabc",
+        )
+
+    def expectation(
+        self,
+        name: str,
+        products: Sequence[tuple[Fraction, Sequence[Cluster]]],
+        *,
+        connected: bool = True,
+    ) -> Equation:
+        """Derive ``<Φ_μ| H_N Σ products |Φ>`` as merged canonical terms.
+
+        ``products`` holds coefficients and products of cluster operators;
+        the terms in which every cluster operator is contracted with the
+        Hamiltonian are kept, or with ``connected`` false the others.
+        """
         dummies = DummyIndices()
         bra = OperatorString(Fraction(1), None, self.operators)
         terms: list[Term] = []
-        # The projection and the Hamiltonian contract at most 4 + 4 operators.
         for hamiltonian in hamiltonian_strings(dummies):
-            for coefficient, clusters in cluster_products(
-                dummies, len(self.operators) + 4
-            ):
-                strings = [bra, hamiltonian, *clusters]
+            for coefficient, clusters in products:
+                strings = [
+                    bra,
+                    hamiltonian,
+                    *(cluster(dummies) for cluster in clusters),
+                ]
                 terms.extend(
                     Term(term.coefficient * coefficient, term.factors)
-                    for term in connected_expectation(
-                        strings, 1, range(2, len(strings))
+                    for term in expectation(
+                        strings, 1, range(2, len(strings)), connected=connected
                     )
                 )
-        return Equation(self.name, self.free, tuple(Term.merge(terms)))
+        return Equation(name, self.free, tuple(Term.merge(terms)))
+
+    def equation(self) -> Equation:
+        """Derive ``<Φ_μ| H_N e^T |Φ>_C`` as merged canonical terms."""
+        # The projection and the Hamiltonian contract at most 4 + 4 operators.
+        return self.expectation(self.name, cluster_products(len(self.operators) + 4))
 
 
 def ccsd_equations() -> dict[str, Equation]:
@@ -191,4 +227,28 @@ def ccsd_equations() -> dict[str, Equation]:
             Projection.singles(),
             Projection.doubles(),
         )
+    }
+
+
+def triples_equations() -> dict[str, Equation]:
+    """Derive the connected and the disconnected triples of (T), by name.
+
+    ``connected_triples`` is ``<Φ_ijk^abc| H_N T2 |Φ>_C``, the triples
+    the doubles generate through the two-electron part of the
+    Hamiltonian, and ``disconnected_triples`` the terms of
+    ``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` in which the cluster operator is not
+    contracted with the Hamiltonian: the singles with ``<bc||jk>`` and the
+    doubles with ``f[vo]``, which vanishes for a canonical reference.
+    """
+    projection = Projection.triples()
+    one = Fraction(1)
+    return {
+        "connected_triples": projection.expectation(
+            "connected_triples", [(one, [doubles_cluster])]
+        ),
+        "disconnected_triples": projection.expectation(
+            "disconnected_triples",
+            [(one, [singles_cluster]), (one, [doubles_cluster])],
+            connected=False,
+        ),
     }

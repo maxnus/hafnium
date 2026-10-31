@@ -27,6 +27,7 @@ from hafnium.cc._ccsd_equations import (
 )
 from hafnium.cc.diis import AmplitudeDiis
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
+from hafnium.cc.triples import TriplesOptions, triples_correction
 from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.integrals import IntegralEngine
@@ -106,6 +107,9 @@ class CcsdResult:
         Whether the iteration reached its tolerances.
     history
         One entry per iteration.
+    triples_correction
+        The (T) correction in Hartree, per cell for a periodic system,
+        when it was asked for; ``None`` otherwise.
     """
 
     reference_energy: float
@@ -114,11 +118,16 @@ class CcsdResult:
     doubles: BlockTensor
     converged: bool
     history: tuple[CcsdIteration, ...]
+    triples_correction: float | None = None
 
     @property
     def total_energy(self) -> float:
-        """Reference plus correlation energy in Hartree."""
-        return self.reference_energy + self.correlation_energy
+        """Reference plus correlation energy in Hartree, plus (T) when computed."""
+        return (
+            self.reference_energy
+            + self.correlation_energy
+            + (self.triples_correction or 0.0)
+        )
 
     @property
     def n_iterations(self) -> int:
@@ -136,6 +145,7 @@ def df_ccsd(  # noqa: PLR0913
     kpoints: KPoints | None = None,
     threshold: float = DEFAULT_METRIC_THRESHOLD,
     options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
 ) -> CcsdResult:
     """Compute the DF-CCSD energy of a converged Hartree–Fock ``reference``.
 
@@ -144,7 +154,8 @@ def df_ccsd(  # noqa: PLR0913
     ``auxiliary`` basis with the Coulomb metric, adapted to the point
     group of a molecular reference over irrep sectors, with momentum
     transfer over the ``kpoints`` of a cell. Any Fukutome class serves as
-    the reference; its orbitals must be occupied by whole electrons.
+    the reference; its orbitals must be occupied by whole electrons. With
+    ``triples`` the (T) correction follows (:func:`solve_ccsd`).
     """
     fitted = FittedOrbitalTensors.build(
         engine,
@@ -155,7 +166,7 @@ def df_ccsd(  # noqa: PLR0913
         kpoints=kpoints,
         threshold=threshold,
     )
-    return solve_ccsd(reference, fitted, options)
+    return solve_ccsd(reference, fitted, options, triples=triples)
 
 
 def ccsd_from_df_tensor(
@@ -164,17 +175,19 @@ def ccsd_from_df_tensor(
     *,
     auxiliary: IrrepSectors | None = None,
     options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
 ) -> CcsdResult:
     """Compute the DF-CCSD energy of a molecular ``reference`` from its fitted tensor.
 
     ``auxiliary`` holds the irrep sectors of the auxiliary basis when the
     reference is blocked over a point group; see
-    :func:`~hafnium.correlated.transform_df_tensor`.
+    :func:`~hafnium.correlated.transform_df_tensor`. With ``triples`` the
+    (T) correction follows (:func:`solve_ccsd`).
     """
     fitted = FittedOrbitalTensors.from_df_tensor(
         df_tensor, OrbitalSpaces.from_scf(reference), auxiliary=auxiliary
     )
-    return solve_ccsd(reference, fitted, options)
+    return solve_ccsd(reference, fitted, options, triples=triples)
 
 
 def ccsd_from_periodic_fitting(
@@ -183,6 +196,7 @@ def ccsd_from_periodic_fitting(
     *,
     threshold: float = DEFAULT_METRIC_THRESHOLD,
     options: CcsdOptions | None = None,
+    triples: TriplesOptions | None = None,
 ) -> CcsdResult:
     """Compute the DF-CCSD energy per cell of a periodic ``reference``.
 
@@ -190,12 +204,13 @@ def ccsd_from_periodic_fitting(
     supercell normalization (:func:`~hafnium.correlated.transform_periodic_fitting`),
     the equations of the supercell of the mesh are iterated over the
     blocks that conserve crystal momentum, and the energy per cell is
-    that of the supercell divided by the number of k-points.
+    that of the supercell divided by the number of k-points. With
+    ``triples`` the (T) correction follows (:func:`solve_ccsd`).
     """
     fitted = FittedOrbitalTensors.from_periodic_fitting(
         fitting, OrbitalSpaces.from_scf(reference), threshold=threshold
     )
-    return solve_ccsd(reference, fitted, options)
+    return solve_ccsd(reference, fitted, options, triples=triples)
 
 
 def solve_ccsd(
@@ -204,13 +219,17 @@ def solve_ccsd(
     options: CcsdOptions | None = None,
     *,
     guess: tuple[BlockTensor, BlockTensor] | None = None,
+    triples: TriplesOptions | None = None,
 ) -> CcsdResult:
     """Iterate the CCSD equations from the fitted tensors of ``reference``.
 
     Without a ``guess`` the singles start from zero and the doubles from
     the first-order amplitudes ``<ab||ij> / Δ``, so the energy of the
     first iteration is the MP2 energy; ``guess`` holds starting singles
-    and doubles instead, the amplitudes of an earlier result.
+    and doubles instead, the amplitudes of an earlier result. With
+    ``triples`` the (T) correction of the converged amplitudes is
+    computed as :func:`~hafnium.cc.triples_correction` says and carried
+    by the result.
 
     Raises
     ------
@@ -249,7 +268,15 @@ def solve_ccsd(
         )
         if converged:
             return CcsdResult(
-                reference.energy, correlation, singles, doubles, True, tuple(history)
+                reference.energy,
+                correlation,
+                singles,
+                doubles,
+                True,
+                tuple(history),
+                None
+                if triples is None
+                else triples_correction(fitted, singles, doubles, triples),
             )
         diis = diis.push(
             (singles + update_singles, doubles + update_doubles),
@@ -278,7 +305,9 @@ def _starting_point(
 ) -> tuple[BlockTensor, BlockTensor, BlockTensor, BlockTensor]:
     """Return the starting singles and doubles with their energy denominators."""
     excitations = integrals.conj()
-    denominators_doubles = spaces.denominators(excitations.structure)
+    denominators_doubles = spaces.denominators(
+        excitations.structure, (OCCUPIED, OCCUPIED, VIRTUAL, VIRTUAL)
+    )
     singles_structure = TensorStructure(
         (
             spaces.axis(Space.OCCUPIED, conjugated=False),
@@ -286,7 +315,7 @@ def _starting_point(
         ),
         ring=excitations.structure.ring,
     )
-    denominators_singles = spaces.denominators(singles_structure)
+    denominators_singles = spaces.denominators(singles_structure, (OCCUPIED, VIRTUAL))
     if guess is None:
         doubles = excitations / denominators_doubles
         singles = BlockTensor.zeros(

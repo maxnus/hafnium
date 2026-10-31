@@ -1088,9 +1088,17 @@ the antisymmetrized integrals of any block, shared with MP2; the
 amplitude iteration with DIIS; CCSD for all eight classes with
 point-group sectors and over k-points from the same program, equal to
 FCI for two electrons and matching PySCF's DF-CCSD and k-point CCSD in
-all three classes to 1e-10 Hartree. Next: (T) from the same generator with batching over the
-occupied triples, then the Λ equations; later the DF-driven ladder, the
-point operations of a space group as further generators over the wedge.
+all three classes to 1e-10 Hartree. Part four done 2026-10-31 (ADR-0033):
+the generator derives the connected and the disconnected triples of (T)
+and writes them as a second program that takes windows of the occupied
+axis, tensor axes have windows that keep the symmetries of the state,
+and the correction is summed over triples of windows under a memory
+limit; (T) for all eight classes with point-group sectors and over
+k-points, equal across the classes, zero for two electrons, matching
+PySCF's CCSD(T) for RHF, UHF and GHF and its k-point KRCCSD(T) and
+KGCCSD(T) to 1e-10 Hartree. Next: the Λ equations; later the DF-driven
+ladder with windows over the virtual axes, the point operations of a
+space group as further generators over the wedge.
 
 **M9 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
 `custom_vjp` from derivative integrals, libxc `custom_jvp`, implicit

@@ -1,4 +1,4 @@
-"""k-point DF-CCSD energies per cell against PySCF's k-point CCSD, and stored data."""
+"""k-point DF-CCSD(T) energies per cell against PySCF's, and stored data."""
 
 import json
 from importlib import resources
@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.cc import CcsdOptions, CcsdResult, ccsd_from_periodic_fitting
+from hafnium.cc import (
+    CcsdOptions,
+    CcsdResult,
+    TriplesOptions,
+    ccsd_from_periodic_fitting,
+)
 from hafnium.integrals import density_fitting_k
 from hafnium.integrals.periodic import overlap_k
 from hafnium.integrals.periodic.exchange import madelung_constant
@@ -62,7 +67,9 @@ def compute(
         basis,
         auxiliary,
         mesh,
-        ccsd_from_periodic_fitting(reference, fitting, options=OPTIONS),
+        ccsd_from_periodic_fitting(
+            reference, fitting, options=OPTIONS, triples=TriplesOptions()
+        ),
     )
 
 
@@ -73,6 +80,12 @@ def check_against(result: CcsdResult, expected: dict[str, Any]) -> None:
     assert result.correlation_energy == pytest.approx(
         expected["correlation_energy"], abs=CCSD_ENERGY_TOL
     )
+    # PySCF has no (T) for KUCCSD; the unit tests check that class against
+    # the others.
+    if "triples_correction" in expected:
+        assert result.triples_correction == pytest.approx(
+            expected["triples_correction"], abs=CCSD_ENERGY_TOL
+        )
 
 
 @pytest.mark.reference

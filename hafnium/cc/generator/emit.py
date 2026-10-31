@@ -1,23 +1,31 @@
-"""Emit the CCSD equations as a program of pairwise contractions over block tensors.
+"""Emit the equations as programs of pairwise contractions over block tensors.
 
-The doubles residual is antisymmetric in ``i, j`` and in ``a, b``, so its
-terms fall into orbits under the permutations of those pairs: a term and
-the images of its free indices, each image carrying the sign of the
-permutation. One term per orbit is evaluated and the images are its
-permuted copies. Within a term the factors are contracted two at a time
-in the cheapest order, with the occupied and virtual extents weighted
-as :data:`EXTENT` says, and every index is shared by at most two factors
-or free, so a pairwise :func:`~hafnium.structured.contract` sums exactly
-the indices the two operands share.
+A residual is antisymmetric in its occupied free indices and in its
+virtual ones, so its terms fall into orbits under the permutations of
+those indices: a term and the images of its free indices, each image
+carrying the sign of the permutation. One term per orbit is evaluated
+and the images are its permuted copies. Within a term the factors are
+contracted two at a time in the cheapest order, with the occupied and
+virtual extents weighted as :data:`EXTENT` says, and every index is
+shared by at most two factors or free, so a pairwise
+:func:`~hafnium.structured.contract` sums exactly the indices the two
+operands share.
+
+The triples of (T) are evaluated over windows of the occupied axis
+(ADR-0033): the function takes one window per occupied free index, the
+operands are restricted to the windows of the letters they carry, and
+the image of a term under a permutation of the occupied indices is the
+term evaluated over the permuted windows and then permuted.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from itertools import combinations
+from fractions import Fraction
+from itertools import combinations, permutations
 
-from hafnium.cc.generator.ccsd import Equation, ccsd_equations
+from hafnium.cc.generator.ccsd import Equation, ccsd_equations, triples_equations
 from hafnium.cc.generator.wick import LABELS, SPACE_NAMES, Kind, Term
 from hafnium.correlated import Space
 
@@ -28,49 +36,81 @@ EXTENT = {Space.OCCUPIED: 10, Space.VIRTUAL: 40}
 """Extents of the two spaces for ranking the contraction orders."""
 
 Permutation = tuple[tuple[str, str], ...]
+"""The free indices a permutation moves, as pairs ``(from, to)``."""
 
-PERMUTATIONS: dict[str, tuple[tuple[Permutation, int], ...]] = {
-    "": (((), 1),),
-    "ia": (((), 1),),
-    "ijab": (
-        ((), 1),
-        ((("i", "j"), ("j", "i")), -1),
-        ((("a", "b"), ("b", "a")), -1),
-        ((("i", "j"), ("j", "i"), ("a", "b"), ("b", "a")), 1),
-    ),
-}
-"""The permutations of the free indices of each equation, with their parities."""
+
+def permutations_of(free: str) -> tuple[tuple[Permutation, int], ...]:
+    """List the permutations of the free indices ``free`` with their parities.
+
+    Every permutation of the occupied letters with every permutation of
+    the virtual letters, the identity first; the parity is the product
+    of the parities.
+    """
+    occupied = [c for c in free if c in LABELS[Space.OCCUPIED]]
+    virtual = [c for c in free if c in LABELS[Space.VIRTUAL]]
+    result: list[tuple[Permutation, int]] = []
+    for virtual_image in permutations(virtual):
+        for occupied_image in permutations(occupied):
+            moved = tuple(
+                (source, target)
+                for source, target in (
+                    *zip(occupied, occupied_image, strict=True),
+                    *zip(virtual, virtual_image, strict=True),
+                )
+                if source != target
+            )
+            result.append((moved, _parity(occupied_image) * _parity(virtual_image)))
+    return tuple(result)
+
+
+def _parity(image: tuple[str, ...]) -> int:
+    inversions = sum(
+        1 for p, q in combinations(range(len(image)), 2) if image[p] > image[q]
+    )
+    return -1 if inversions % 2 else 1
+
 
 ANTISYMMETRIZERS: dict[frozenset[Permutation], str] = {
     frozenset({()}): "",
     frozenset({(), (("i", "j"), ("j", "i"))}): "_minus_ij",
     frozenset({(), (("a", "b"), ("b", "a"))}): "_minus_ab",
-    frozenset({p for p, _ in PERMUTATIONS["ijab"]}): "_minus_both",
+    frozenset({p for p, _ in permutations_of("ijab")}): "_minus_both",
 }
 """The helper applying the permutations of an orbit's coset representatives."""
 
-PRELUDE = '''"""The spin-orbital CCSD equations, generated code (ADR-0032).
+PRELUDE = '''"""{title}, generated code ({adr}).
 
 Do not edit: ``python -m hafnium.cc.generator`` derives the terms by
 Wick's theorem and writes this program of pairwise contractions, and a
-test regenerates it to detect drift. The functions
-take the normal-ordered Hamiltonian of a reference in its orbital basis
-and the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md
-§3, and return the connected energy ``<Φ| H_N e^T |Φ>`` as a tensor
-without axes and the residuals ``<Φ_i^a| H_N e^T |Φ>`` and
-``<Φ_ij^ab| H_N e^T |Φ>`` as tensors of the structure of the amplitudes.
+test regenerates it to detect drift. {description}
 """
 
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
 from hafnium.correlated import Space
-from hafnium.structured import BlockTensor, contract
+from hafnium.structured import BlockTensor, {imports}
 
 OCC, VIR = Space.OCCUPIED, Space.VIRTUAL
 '''
 
-HELPERS = '''
+CCSD_DESCRIPTION = """The functions
+take the normal-ordered Hamiltonian of a reference in its orbital basis
+and the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md
+§3, and return the connected energy ``<Φ| H_N e^T |Φ>`` as a tensor
+without axes and the residuals ``<Φ_i^a| H_N e^T |Φ>`` and
+``<Φ_ij^ab| H_N e^T |Φ>`` as tensors of the structure of the amplitudes."""
+
+TRIPLES_DESCRIPTION = """The functions
+take the normal-ordered Hamiltonian of a reference in its orbital basis,
+the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md §3
+and three windows of the occupied axis, and return the connected
+triples ``<Φ_ijk^abc| H_N T2 |Φ>_C`` and the disconnected ones
+``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` over those windows as tensors
+``[i, j, k, a, b, c]``, so that the triples are evaluated a batch of
+occupied indices at a time."""
+
+CCSD_HELPERS = '''
 
 def _minus_ij(x: BlockTensor) -> BlockTensor:
     """``(1 − P(ij)) x``."""
@@ -87,18 +127,54 @@ def _minus_both(x: BlockTensor) -> BlockTensor:
     return _minus_ab(_minus_ij(x))
 '''
 
+TRIPLES_HELPERS = '''
+
+def _windowed(x: BlockTensor, windows: tuple[TensorAxis | None, ...]) -> BlockTensor:
+    """Restrict the axes of ``x`` to the windows given, ``None`` leaving one whole."""
+    for position, window in enumerate(windows):
+        if window is not None:
+            x = x.window(position, window)
+    return x
+'''
+
+
+ATTRIBUTES = {Kind.FOCK: "fock", Kind.INTEGRAL: "integrals"}
+"""The attribute of the Hamiltonian each of its kinds is read from."""
+
+
+@dataclass(frozen=True, slots=True)
+class Signature:
+    """The function an equation is written as."""
+
+    function: str
+    docstring: str
+    windowed: str = ""
+    """The free indices the function takes a window each for."""
+
+
 SIGNATURES = {
-    "energy": (
-        "energy",
-        "``<Φ| H_N e^T |Φ>`` connected, as a tensor without axes.",
+    "energy": Signature(
+        "energy", "``<Φ| H_N e^T |Φ>`` connected, as a tensor without axes."
     ),
-    "singles": (
+    "singles": Signature(
         "singles_residual",
         "``<Φ_i^a| H_N e^T |Φ>`` connected, as the tensor ``[i, a]``.",
     ),
-    "doubles": (
+    "doubles": Signature(
         "doubles_residual",
         "``<Φ_ij^ab| H_N e^T |Φ>`` connected, as the tensor ``[i, j, a, b]``.",
+    ),
+    "connected_triples": Signature(
+        "connected_triples",
+        "``<Φ_ijk^abc| H_N T2 |Φ>`` connected, as ``[i, j, k, a, b, c]``.\n\n"
+        "The occupied indices run over the windows ``i``, ``j`` and ``k``.",
+        "ijk",
+    ),
+    "disconnected_triples": Signature(
+        "disconnected_triples",
+        "``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` disconnected, as ``[i, j, k, a, b, c]``."
+        "\n\nThe occupied indices run over the windows ``i``, ``j`` and ``k``.",
+        "ijk",
     ),
 }
 
@@ -138,7 +214,7 @@ def orbits(equation: Equation) -> list[Orbit]:
         if term.key in done:
             continue
         cosets: list[tuple[Permutation, int]] = []
-        for permutation, parity in PERMUTATIONS[equation.free]:
+        for permutation, parity in permutations_of(equation.free):
             image = term.substituted(dict(permutation)).canonical()
             expected = parity * image.coefficient
             actual = by_key.get(image.key)
@@ -202,9 +278,27 @@ def _orders(
             yield _cost(a, b) + cost, ((p, q, output), *steps)
 
 
-def program(term: Term, free: str) -> list[str]:
-    """Statements evaluating ``term`` without its coefficient into ``x``."""
-    operands = [_Operand(f.letters, f.expression) for f in term.factors]
+def _operands(term: Term, windows: Mapping[str, str] | None) -> list[_Operand]:
+    """Return the factors of ``term`` as operands, restricted to ``windows``."""
+    operands: list[_Operand] = []
+    for factor in term.factors:
+        expression = factor.expression
+        if windows and any(letter in windows for letter in factor.letters):
+            names = ", ".join(windows.get(letter, "None") for letter in factor.letters)
+            expression = f"_windowed({expression}, ({names}))"
+        operands.append(_Operand(factor.letters, expression))
+    return operands
+
+
+def program(
+    term: Term, free: str, windows: Mapping[str, str] | None = None
+) -> list[str]:
+    """Statements evaluating ``term`` without its coefficient into ``x``.
+
+    ``windows`` names the window variable every windowed free index of the
+    term is restricted to.
+    """
+    operands = _operands(term, windows)
     if len(operands) == 1:
         (operand,) = operands
         expression = operand.expression
@@ -223,9 +317,11 @@ def program(term: Term, free: str) -> list[str]:
             if b.expression in INTERMEDIATES
             else next(names)
         )
-        lines.append(
-            f'{name} = contract("{a.letters},{b.letters}->{output}", '
-            f"{a.expression}, {b.expression})"
+        lines.extend(
+            _call(
+                f"{name} = contract",
+                [f'"{a.letters},{b.letters}->{output}"', a.expression, b.expression],
+            )
         )
         operands = [o for k, o in enumerate(operands) if k not in (p, q)]
         operands.append(_Operand(output, name))
@@ -235,9 +331,29 @@ def program(term: Term, free: str) -> list[str]:
     return lines
 
 
-def _accumulation(orbit: Orbit, first: bool) -> str:
-    coefficient = orbit.term.coefficient
-    value = f"{orbit.antisymmetrizer}(x)" if orbit.antisymmetrizer else "x"
+LINE_LENGTH = 88
+"""The line length of the formatter the generated modules are checked with."""
+
+FUNCTION_INDENT = 4
+"""Indentation of the statements of a function, which the lines leave out."""
+
+
+def _call(head: str, arguments: list[str]) -> list[str]:
+    """Write ``head(arguments)`` as the formatter would, over lines without indent.
+
+    One line when it fits, else the arguments on one indented line, else
+    one argument per line with a trailing comma.
+    """
+    one = f"{head}({', '.join(arguments)})"
+    if FUNCTION_INDENT + len(one) <= LINE_LENGTH:
+        return [one]
+    hugged = ", ".join(arguments)
+    if 2 * FUNCTION_INDENT + len(hugged) <= LINE_LENGTH:
+        return [f"{head}(", f"    {hugged}", ")"]
+    return [f"{head}(", *(f"    {argument}," for argument in arguments), ")"]
+
+
+def _accumulation(coefficient: Fraction, value: str, first: bool) -> str:
     magnitude = abs(coefficient)
     if magnitude != 1:
         value = f"{float(magnitude)!r} * {value}"
@@ -246,26 +362,66 @@ def _accumulation(orbit: Orbit, first: bool) -> str:
     return f"r = r {'-' if coefficient < 0 else '+'} {value}"
 
 
+def _orbit_lines(orbit: Orbit, equation: Equation, first: bool) -> list[str]:
+    """Write the statements adding an orbit to ``r``."""
+    signature = SIGNATURES[equation.name]
+    if not signature.windowed:
+        lines = program(orbit.term, equation.free)
+        value = f"{orbit.antisymmetrizer}(x)" if orbit.antisymmetrizer else "x"
+        return [*lines, _accumulation(orbit.term.coefficient, value, first)]
+    lines: list[str] = []
+    for permutation, parity in orbit.cosets:
+        # The image under ``g`` carries the label ``g(l)`` where the
+        # representative carries ``l``, so it is the representative over
+        # the windows of ``g(l)`` with the axis of ``m`` taken from the
+        # slot of ``g⁻¹(m)``.
+        mapping = dict(permutation)
+        inverse = {target: source for source, target in permutation}
+        windows = {letter: mapping.get(letter, letter) for letter in signature.windowed}
+        lines.extend(program(orbit.term, equation.free, windows))
+        image = "".join(inverse.get(letter, letter) for letter in equation.free)
+        value = (
+            "x" if image == equation.free else f'x.permute("{equation.free}->{image}")'
+        )
+        lines.append(_accumulation(orbit.term.coefficient * parity, value, first))
+        first = False
+    return lines
+
+
 def function_source(equation: Equation) -> str:
     """Write the Python function evaluating the terms of ``equation``."""
-    function, docstring = SIGNATURES[equation.name]
-    lines = [
-        f"def {function}(",
-        "    h: NormalOrderedHamiltonian, t1: BlockTensor, t2: BlockTensor",
-        ") -> BlockTensor:",
-        f'    """{docstring}"""',
-        "    f, v = h.fock, h.integrals",
-    ]
+    signature = SIGNATURES[equation.name]
+    parameters = ["h: NormalOrderedHamiltonian", "t1: BlockTensor", "t2: BlockTensor"]
+    parameters += [f"{letter}: TensorAxis" for letter in signature.windowed]
+    lines = [f"def {signature.function}("]
+    if signature.windowed:
+        lines.extend(f"    {parameter}," for parameter in parameters)
+    else:
+        lines.append(f"    {', '.join(parameters)}")
+    lines.append(") -> BlockTensor:")
+    if "\n" in signature.docstring:
+        lines.append('    """' + signature.docstring.replace("\n\n", "\n\n    "))
+        lines.append('    """')
+    else:
+        lines.append(f'    """{signature.docstring}"""')
+    kinds = {factor.kind for term in equation.terms for factor in term.factors}
+    names = [kind for kind in (Kind.FOCK, Kind.INTEGRAL) if kind in kinds]
+    lines.append(
+        "    "
+        + ", ".join(kind.value for kind in names)
+        + " = "
+        + ", ".join(f"h.{ATTRIBUTES[kind]}" for kind in names)
+    )
     for position, orbit in enumerate(orbits(equation)):
-        lines.extend(f"    {line}" for line in program(orbit.term, equation.free))
-        lines.append(f"    {_accumulation(orbit, position == 0)}")
+        lines.extend(
+            f"    {line}" for line in _orbit_lines(orbit, equation, position == 0)
+        )
     lines.append("    return r")
     return "\n".join(lines) + "\n"
 
 
-def module_source() -> str:
-    """Write the complete source of :mod:`hafnium.cc._ccsd_equations`."""
-    equations = ccsd_equations()
+def _constants(equations: Mapping[str, Equation]) -> str:
+    """Write the blocks of the Hamiltonian the equations read as constants."""
     fock: set[tuple[Space, ...]] = set()
     integrals: set[tuple[Space, ...]] = set()
     for equation in equations.values():
@@ -276,20 +432,51 @@ def module_source() -> str:
                 elif factor.kind is Kind.INTEGRAL:
                     integrals.add(factor.slots)
 
-    def listed(blocks: set[tuple[Space, ...]]) -> str:
-        return "".join(
-            "    (" + ", ".join(SPACE_NAMES[s] for s in block) + "),\n"
+    def listed(name: str, blocks: set[tuple[Space, ...]]) -> str:
+        entries = [
+            "(" + ", ".join(SPACE_NAMES[s] for s in block) + ")"
             for block in sorted(blocks, key=lambda b: [s.value for s in b])
-        )
+        ]
+        # A tuple of one entry stays on one line, as the formatter keeps it.
+        if len(entries) == 1:
+            return f"{name} = ({entries[0]},)\n"
+        return f"{name} = (\n" + "".join(f"    {e},\n" for e in entries) + ")\n"
 
-    constants = (
-        "FOCK_BLOCKS = (\n" + listed(fock) + ")\n"
-        '"""The blocks of the Fock operator the equations read."""\n'
-        "INTEGRAL_BLOCKS = (\n" + listed(integrals) + ")\n"
-        '"""The blocks of the antisymmetrized integrals the equations read."""\n'
+    return (
+        listed("FOCK_BLOCKS", fock)
+        + '"""The blocks of the Fock operator the equations read."""\n'
+        + listed("INTEGRAL_BLOCKS", integrals)
+        + '"""The blocks of the antisymmetrized integrals the equations read."""\n'
+    )
+
+
+def ccsd_module_source() -> str:
+    """Write the complete source of :mod:`hafnium.cc._ccsd_equations`."""
+    equations = ccsd_equations()
+    prelude = PRELUDE.format(
+        title="The spin-orbital CCSD equations",
+        adr="ADR-0032",
+        description=CCSD_DESCRIPTION,
+        imports="contract",
     )
     functions = "".join(
         "\n\n" + function_source(equations[name])
         for name in ("energy", "singles", "doubles")
     )
-    return PRELUDE + "\n" + constants + HELPERS + functions
+    return prelude + "\n" + _constants(equations) + CCSD_HELPERS + functions
+
+
+def triples_module_source() -> str:
+    """Write the complete source of :mod:`hafnium.cc._triples_equations`."""
+    equations = triples_equations()
+    prelude = PRELUDE.format(
+        title="The triples of the (T) correction",
+        adr="ADR-0033",
+        description=TRIPLES_DESCRIPTION,
+        imports="TensorAxis, contract",
+    )
+    functions = "".join(
+        "\n\n" + function_source(equations[name])
+        for name in ("connected_triples", "disconnected_triples")
+    )
+    return prelude + "\n" + _constants(equations) + TRIPLES_HELPERS + functions

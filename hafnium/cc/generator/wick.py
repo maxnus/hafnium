@@ -314,15 +314,22 @@ def full_contractions(
     yield from recurse(list(range(len(operators))), 1, [])
 
 
-def connected_expectation(
-    strings: Sequence[OperatorString], hamiltonian: int, clusters: Iterable[int]
+def expectation(
+    strings: Sequence[OperatorString],
+    hamiltonian: int,
+    clusters: Iterable[int],
+    *,
+    connected: bool = True,
 ) -> list[Term]:
     """``<Φ| Π strings |Φ>`` keeping the terms connected to the Hamiltonian.
 
-    Every string at a position in ``clusters`` must be contracted with the
-    string at position ``hamiltonian`` at least once, the connectedness of
-    the coupled-cluster equations; the other strings (the projection)
-    contract freely. The terms are returned uncanonicalized.
+    A term is connected when every string at a position in ``clusters``
+    is contracted with the string at position ``hamiltonian`` at least
+    once, the connectedness of the coupled-cluster equations; the other
+    strings (the projection) contract freely. With ``connected`` false
+    the terms that are not connected are kept instead, the disconnected
+    products the (T) correction needs. The terms are returned
+    uncanonicalized.
     """
     operators = [(s, op) for s, string in enumerate(strings) for op in string.operators]
     required = set(clusters)
@@ -336,7 +343,7 @@ def connected_expectation(
             for p, q in pairs
             if hamiltonian in (operators[p][0], operators[q][0])
         }
-        if not required <= linked:
+        if (required <= linked) != connected:
             continue
         representative = _identified(operators, pairs)
         factors = tuple(

@@ -1,17 +1,23 @@
-"""Rewrite :mod:`hafnium.cc._ccsd_equations` from the generator."""
+"""Rewrite the generated equation modules of :mod:`hafnium.cc` from the generator."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from hafnium.cc.generator.emit import module_source
+from hafnium.cc.generator.emit import ccsd_module_source, triples_module_source
 
-TARGET = Path(__file__).resolve().parent.parent / "_ccsd_equations.py"
+PACKAGE = Path(__file__).resolve().parent.parent
+TARGETS = {
+    PACKAGE / "_ccsd_equations.py": ccsd_module_source,
+    PACKAGE / "_triples_equations.py": triples_module_source,
+}
+"""The generated modules and the functions that write their source."""
 
 
 def main() -> None:
-    """Write the generated module next to the package."""
-    TARGET.write_text(module_source(), encoding="utf-8")
+    """Write the generated modules next to the package."""
+    for target, source in TARGETS.items():
+        target.write_text(source(), encoding="utf-8")
 
 
 if __name__ == "__main__":
