@@ -59,6 +59,7 @@ nav:
       - adr/0030-block-tensors-with-a-conservation-rule.md
       - adr/0031-correlated-tensors-over-k-points.md
       - adr/0032-coupled-cluster-equations-from-an-in-house-generator.md
+      - adr/0033-the-triples-correction-over-windows-of-the-occupied-axis.md
   - API reference: api.md
 
 markdown_extensions:

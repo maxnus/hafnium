@@ -56,6 +56,7 @@ authoritative and this file explains the intent.
 | `df` | density fitting |
 | `mp2` | second-order Møller–Plesset |
 | `cc`, `ccsd` | coupled cluster (singles and doubles) |
+| `ccsd_pt`, `CcsdPt` | CCSD(T), with the perturbative triples in parentheses (never `ccsd_t`, which reads as CCSDT) |
 | `diis` | direct inversion in the iterative subspace |
 | `salc` | symmetry-adapted linear combination |
 | `occ`, `vir` | occupied, virtual (only in `n_occ`, `n_vir`, slice names) |

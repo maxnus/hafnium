@@ -2,7 +2,14 @@
 
 import pytest
 
-from hafnium.cc import CcsdOptions, ccsd_from_periodic_fitting, df_ccsd
+from hafnium.cc import (
+    CcsdOptions,
+    CcsdPtResult,
+    ccsd_from_periodic_fitting,
+    ccsd_pt_from_periodic_fitting,
+    df_ccsd,
+    df_ccsd_pt,
+)
 from hafnium.errors import InputError
 from hafnium.molecule import Molecule
 from hafnium.mp import mp2_from_periodic_fitting
@@ -25,28 +32,32 @@ def helium_pair() -> Setup:
 
 
 @pytest.fixture(scope="module")
-def restricted_helium(helium_pair: Setup) -> tuple[ScfResult, float]:
+def restricted_helium(helium_pair: Setup) -> tuple[ScfResult, CcsdPtResult]:
     _, _, _, mesh, fitting, hamiltonian = helium_pair
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name("RHF").with_kpoints(mesh), options=TIGHT
     )
-    result = ccsd_from_periodic_fitting(reference, fitting, options=OPTIONS)
-    return reference, result.correlation_energy
+    result = ccsd_pt_from_periodic_fitting(reference, fitting, options=OPTIONS)
+    return reference, result
 
 
 @pytest.mark.parametrize("name", CLASSES)
 def test_every_class_gives_the_closed_shell_energy_over_k(
-    name: str, helium_pair: Setup, restricted_helium: tuple[ScfResult, float]
+    name: str, helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdPtResult]
 ) -> None:
     _, _, _, mesh, fitting, hamiltonian = helium_pair
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name(name).with_kpoints(mesh), options=TIGHT
     )
-    result = ccsd_from_periodic_fitting(reference, fitting, options=OPTIONS)
+    result = ccsd_pt_from_periodic_fitting(reference, fitting, options=OPTIONS)
     assert result.converged
     assert result.correlation_energy == pytest.approx(
-        restricted_helium[1], abs=CCSD_ENERGY_TOL
+        restricted_helium[1].correlation_energy, abs=CCSD_ENERGY_TOL
     )
+    assert result.triples_correction == pytest.approx(
+        restricted_helium[1].triples_correction, abs=CCSD_ENERGY_TOL
+    )
+    assert result.triples_correction < 0.0
     assert result.history[0].correlation_energy == pytest.approx(
         mp2_from_periodic_fitting(reference, fitting).correlation_energy,
         abs=MP2_ENERGY_TOL,
@@ -59,7 +70,7 @@ def test_every_class_gives_the_closed_shell_energy_over_k(
 
 
 def test_supercell_at_gamma_folds_the_energy_per_cell(
-    helium_pair: Setup, restricted_helium: tuple[ScfResult, float]
+    helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdPtResult]
 ) -> None:
     cell, _, _, mesh, _, _ = helium_pair
     supercell, basis, auxiliary, gamma, fitting, hamiltonian = setup(
@@ -68,14 +79,17 @@ def test_supercell_at_gamma_folds_the_energy_per_cell(
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name("RHF").with_kpoints(gamma), options=TIGHT
     )
-    folded = df_ccsd(
+    folded = df_ccsd_pt(
         ENGINE, basis, supercell, auxiliary, reference, kpoints=gamma, options=OPTIONS
     )
     assert folded.correlation_energy / mesh.n_kpt == pytest.approx(
-        restricted_helium[1], abs=CCSD_ENERGY_TOL
+        restricted_helium[1].correlation_energy, abs=CCSD_ENERGY_TOL
     )
     assert folded.reference_energy / mesh.n_kpt == pytest.approx(
         restricted_helium[0].energy, abs=CCSD_ENERGY_TOL
+    )
+    assert folded.triples_correction / mesh.n_kpt == pytest.approx(
+        restricted_helium[1].triples_correction, abs=CCSD_ENERGY_TOL
     )
     assert folded.correlation_energy == pytest.approx(
         ccsd_from_periodic_fitting(
@@ -97,6 +111,7 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
         hamiltonian, SymmetrySpec.from_name("UHF").with_kpoints(mesh), options=TIGHT
     )
     energies: list[float] = []
+    corrections: list[float] = []
     for name in OPEN_SHELL_CLASSES:
         spec = SymmetrySpec.from_name(name).with_kpoints(mesh)
         reference = solve_scf(
@@ -105,13 +120,14 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
             guess=unrestricted.density.embed(spec.structure()),
             options=TIGHT,
         )
-        energies.append(
-            ccsd_from_periodic_fitting(
-                reference, fitting, options=OPTIONS
-            ).correlation_energy
-        )
+        result = ccsd_pt_from_periodic_fitting(reference, fitting, options=OPTIONS)
+        energies.append(result.correlation_energy)
+        corrections.append(result.triples_correction)
     assert energies[0] < 0.0
     assert all(e == pytest.approx(energies[0], abs=CCSD_ENERGY_TOL) for e in energies)
+    assert all(
+        c == pytest.approx(corrections[0], abs=CCSD_ENERGY_TOL) for c in corrections
+    )
     supercell, basis, auxiliary, gamma, _, folded_hamiltonian = setup(
         cell.supercell((3, 1, 1)), KPoints.gamma(), "sto-3g"
     )
@@ -120,11 +136,14 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
         SymmetrySpec.from_name("UHF").with_kpoints(gamma),
         options=TIGHT,
     )
-    folded = df_ccsd(
+    folded = df_ccsd_pt(
         ENGINE, basis, supercell, auxiliary, reference, kpoints=gamma, options=OPTIONS
     )
     assert folded.correlation_energy / 3 == pytest.approx(
         energies[0], abs=CCSD_ENERGY_TOL
+    )
+    assert folded.triples_correction / 3 == pytest.approx(
+        corrections[0], abs=CCSD_ENERGY_TOL
     )
 
 

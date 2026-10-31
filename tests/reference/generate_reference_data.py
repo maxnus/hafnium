@@ -463,13 +463,21 @@ def record_ccsd() -> None:
             basis_name,
             f"scf.{kind.upper()}.density_fit with conv_tol=1e-13, "
             f"conv_tol_grad=1e-10, then {CCSD_CLASSES[kind]} in the same auxiliary "
-            "basis with conv_tol=1e-12, conv_tol_normt=1e-10; Bohr",
+            "basis with conv_tol=1e-12, conv_tol_normt=1e-10, and its ccsd_t; Bohr",
             {key: np.asarray(value) for key, value in reference.items()},
             method=kind,
             auxiliary=MP2_AUXILIARY,
             charge=molecule.charge,
             spin=molecule.spin,
         )
+
+
+TRIPLES_SETTINGS = {
+    "krhf": ", and its ccsd_t",
+    "kuhf": "",
+    "kghf": ", and its ccsd_t with eris.mo_energy reset to the Fock diagonal "
+    "(KGCCSD shifts the occupied energies by the Madelung constant)",
+}
 
 
 def record_k_point_ccsd() -> None:
@@ -492,7 +500,8 @@ def record_k_point_ccsd() -> None:
             f"pbc.scf.{kind.upper()}(exxdiv={exxdiv}).density_fit with "
             f"conv_tol=1e-13, conv_tol_grad=1e-10, then pbc.cc.{kind[1].upper()}CCSD"
             f"{keep} in the same auxiliary basis with conv_tol=1e-12, "
-            "conv_tol_normt=1e-10; Bohr",
+            "conv_tol_normt=1e-10"
+            f"{TRIPLES_SETTINGS[kind]}; Bohr",
             {key: np.asarray(value) for key, value in reference.items()},
             method=kind,
             exchange_correction=exchange_correction,

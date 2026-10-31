@@ -278,7 +278,9 @@ def _starting_point(
 ) -> tuple[BlockTensor, BlockTensor, BlockTensor, BlockTensor]:
     """Return the starting singles and doubles with their energy denominators."""
     excitations = integrals.conj()
-    denominators_doubles = spaces.denominators(excitations.structure)
+    denominators_doubles = spaces.denominators(
+        excitations.structure, (OCCUPIED, OCCUPIED, VIRTUAL, VIRTUAL)
+    )
     singles_structure = TensorStructure(
         (
             spaces.axis(Space.OCCUPIED, conjugated=False),
@@ -286,7 +288,7 @@ def _starting_point(
         ),
         ring=excitations.structure.ring,
     )
-    denominators_singles = spaces.denominators(singles_structure)
+    denominators_singles = spaces.denominators(singles_structure, (OCCUPIED, VIRTUAL))
     if guess is None:
         doubles = excitations / denominators_doubles
         singles = BlockTensor.zeros(

@@ -140,11 +140,10 @@ def second_order(reference: ScfResult, fitted: FittedOrbitalTensors) -> Mp2Resul
     is its conjugate over the denominators, and ``E₂ = ¼ Σ <ij||ab> t2``
     divided by the number of cells in the supercell of the mesh.
     """
-    integrals = fitted.antisymmetrized(
-        (Space.OCCUPIED, Space.OCCUPIED, Space.VIRTUAL, Space.VIRTUAL)
-    )
-    excitations = integrals.conj()
-    amplitudes = excitations / fitted.spaces.denominators(excitations.structure)
+    slots = (Space.OCCUPIED, Space.OCCUPIED, Space.VIRTUAL, Space.VIRTUAL)
+    excitations = fitted.antisymmetrized(slots).conj()
+    amplitudes = excitations / fitted.spaces.denominators(excitations.structure, slots)
+    integrals = fitted.antisymmetrized(slots)
     pairing = contract("ijab,ijab->", integrals, amplitudes).scalar
     xp = array_namespace(pairing)
     return Mp2Result(

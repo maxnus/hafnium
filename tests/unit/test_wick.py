@@ -6,15 +6,24 @@ from pathlib import Path
 import pytest
 
 import hafnium.cc._ccsd_equations as generated
-from hafnium.cc.generator.ccsd import (
+import hafnium.cc._ccsd_pt_equations as generated_ccsd_pt
+from hafnium.cc.generator.emit import (
+    ccsd_module_source,
+    ccsd_pt_module_source,
+    function_source,
+    orbits,
+    permutations_of,
+    program,
+)
+from hafnium.cc.generator.equations import (
     DummyIndices,
     Equation,
     Projection,
     ccsd_equations,
+    ccsd_pt_equations,
     hamiltonian_strings,
     singles_cluster,
 )
-from hafnium.cc.generator.emit import module_source, orbits, program
 from hafnium.cc.generator.wick import (
     Factor,
     Index,
@@ -22,7 +31,7 @@ from hafnium.cc.generator.wick import (
     Operator,
     OperatorString,
     Term,
-    connected_expectation,
+    expectation,
     full_contractions,
 )
 from hafnium.correlated import Space
@@ -38,9 +47,11 @@ def equations() -> dict[str, Equation]:
 
 
 def test_committed_equations_are_current() -> None:
-    """The generated module is regenerated to detect drift (PLAN §5.5)."""
+    """The generated modules are regenerated to detect drift (PLAN §5.5)."""
     source = Path(generated.__file__).read_text(encoding="utf-8")
-    assert source == module_source()
+    assert source == ccsd_module_source()
+    source = Path(generated_ccsd_pt.__file__).read_text(encoding="utf-8")
+    assert source == ccsd_pt_module_source()
 
 
 def test_energy_is_the_known_expression(equations: dict[str, Equation]) -> None:
@@ -142,9 +153,7 @@ def test_disconnected_terms_are_dropped() -> None:
     terms = Term.merge(
         term
         for one_body in hamiltonian_strings(dummies)[:4]
-        for term in connected_expectation(
-            [bra, one_body, singles_cluster(dummies)], 1, [2]
-        )
+        for term in expectation([bra, one_body, singles_cluster(dummies)], 1, [2])
     )
     assert sorted(str(t) for t in terms) == [
         "-1 f[j,i] t1[j,a]",
@@ -156,14 +165,17 @@ def test_disconnected_terms_are_dropped() -> None:
     two = [bra, f_ov, singles_cluster(dummies), singles_cluster(dummies)]
     # The two equivalent contractions of ``T1 T1`` double the term; the
     # ``1/2!`` of the exponential is applied by the equation.
-    connected = Term.merge(connected_expectation(two, 1, [2, 3]))
+    connected = Term.merge(expectation(two, 1, [2, 3]))
     assert [str(t) for t in connected] == ["-2 f[j,b] t1[i,b] t1[j,a]"]
-    # Dropping the requirement admits the product of the energy with ``t1[i,a]``.
-    unlinked = Term.merge(connected_expectation(two, 1, []))
+    # Dropping the requirement admits the product of the energy with ``t1[i,a]``,
+    # which is the disconnected term alone.
+    unlinked = Term.merge(expectation(two, 1, []))
     assert sorted(str(t) for t in unlinked) == [
         "-2 f[j,b] t1[i,b] t1[j,a]",
         "2 f[j,b] t1[i,a] t1[j,b]",
     ]
+    disconnected = Term.merge(expectation(two, 1, [2, 3], connected=False))
+    assert [str(t) for t in disconnected] == ["2 f[j,b] t1[i,a] t1[j,b]"]
 
 
 def test_canonical_form_merges_equal_terms_and_cancels_opposite_ones() -> None:
@@ -230,4 +242,73 @@ def test_program_contracts_pairwise_over_shared_indices() -> None:
     ) == ['x = v[VIR, VIR, OCC, OCC].permute("abij->ijab")']
     assert program(Term(Fraction(1), (Factor(Kind.FOCK, (I, A)),)), "ia") == [
         "x = f[OCC, VIR]"
+    ]
+
+
+def test_triples_equations_have_the_textbook_terms() -> None:
+    """``W`` and ``V`` of (T): two orbits of nine images each (ADR-0033)."""
+    equations = ccsd_pt_equations()
+    connected = equations["connected_triples"]
+    assert connected.free == "ijkabc"
+    terms = {str(term) for term in connected.terms}
+    assert len(terms) == 18
+    assert {"1 v[b,c,j,d] t2[i,k,a,d]", "-1 v[l,c,j,k] t2[i,l,a,b]"} <= terms
+    groups = orbits(connected)
+    assert [len(group.cosets) for group in groups] == [9, 9]
+    assert sum(parity for group in groups for _, parity in group.cosets) == 2
+    disconnected = equations["disconnected_triples"]
+    terms = {str(term) for term in disconnected.terms}
+    assert len(terms) == 18
+    assert {"1 v[b,c,j,k] t1[i,a]", "1 f[a,i] t2[j,k,b,c]"} <= terms
+    assert [len(group.cosets) for group in orbits(disconnected)] == [9, 9]
+    # Only the three-cycles of the occupied indices appear with their own
+    # inverses: the image under one is the representative over the windows
+    # of the other.
+    source = function_source(connected)
+    assert source.count("_windowed(") == 36
+    assert source.count('x.permute("ijkabc->kijabc")') == source.count(
+        'x.permute("ijkabc->jkiabc")'
+    )
+    assert "f = h.fock" not in source
+    assert "f, v = h.fock, h.integrals" in function_source(disconnected)
+
+
+def test_permutations_carry_their_parities() -> None:
+    assert permutations_of("") == (((), 1),)
+    assert permutations_of("ia") == (((), 1),)
+    doubles = permutations_of("ijab")
+    assert doubles[0] == ((), 1)
+    assert dict(doubles) == {
+        (): 1,
+        (("i", "j"), ("j", "i")): -1,
+        (("a", "b"), ("b", "a")): -1,
+        (("i", "j"), ("j", "i"), ("a", "b"), ("b", "a")): 1,
+    }
+    triples = permutations_of("ijkabc")
+    assert len(triples) == 36
+    assert sum(parity for _, parity in triples) == 0
+    assert (
+        (("i", "j"), ("j", "k"), ("k", "i")),
+        1,
+    ) in triples
+
+
+def test_windowed_program_restricts_the_operands() -> None:
+    d = Index(V, "d")
+    term = Term(
+        Fraction(1),
+        (
+            Factor(Kind.INTEGRAL, (B, Index(V, "c"), d, K)),
+            Factor(Kind.DOUBLES, (I, J, A, d)),
+        ),
+    )
+    lines = program(term, "ijkabc", {"i": "j", "j": "i", "k": "k"})
+    # The call is split over lines as the formatter would split it.
+    assert lines[0] == "x = contract("
+    assert lines[-1] == ")"
+    statement = "".join(line.strip() for line in lines)
+    assert "_windowed(v[VIR, VIR, VIR, OCC], (None, None, None, k))" in statement
+    assert "_windowed(t2, (j, i, None, None))" in statement
+    assert program(term, "ijkabc") == [
+        'x = contract("bcdk,ijad->ijkabc", v[VIR, VIR, VIR, OCC], t2)'
     ]

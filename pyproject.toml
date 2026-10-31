@@ -110,6 +110,7 @@ max-args = 7
 [tool.ruff.lint.per-file-ignores]
 "hafnium/backend/**" = ["TID251"]
 "hafnium/cc/_ccsd_equations.py" = ["PLR0915"]  # one generated function per equation
+"hafnium/cc/_ccsd_pt_equations.py" = ["PLR0915", "ARG001"]  # same, one signature for both
 "hafnium/**/*.pyi" = ["TID251"]
 "stubs/**" = ["N801"]  # stubs mirror third-party names
 "tests/**" = ["TID251", "D"]

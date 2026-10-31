@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -219,27 +220,54 @@ class OrbitalSpaces:
         """
         return self.coefficients(space).materialized(orbitals=True)
 
-    def denominators(self, structure: TensorStructure) -> BlockTensor:
+    def denominators(
+        self, structure: TensorStructure, spaces: Sequence[Space]
+    ) -> BlockTensor:
         """``Σ_occupied ε − Σ_virtual ε`` over the axes of ``structure``.
 
-        Every axis runs over the occupied or the virtual orbitals; the
-        orbital energies of occupied indices enter with a plus, those of
-        virtual indices with a minus, so that for the axes ``[i, j, a, b]``
-        the result is ``ε_i + ε_j − ε_a − ε_b``.
+        ``spaces`` names the space every axis runs over, or is a window
+        of; the orbital energies of occupied indices enter with a plus,
+        those of virtual indices with a minus, so that for the axes
+        ``[i, j, a, b]`` of the spaces ``(OCCUPIED, OCCUPIED, VIRTUAL,
+        VIRTUAL)`` the result is ``ε_i + ε_j − ε_a − ε_b``. The spaces are
+        given rather than read off the axes, since an axis of as many
+        orbitals as the other space, or a window of them, fits both.
+
+        Raises
+        ------
+        StructureError
+            If an axis does not run over the space named for it.
         """
-        spaces_of_axes = [self.space_of(axis) for axis in structure.axes]
-        signs = [1.0 if space is Space.OCCUPIED else -1.0 for space in spaces_of_axes]
+        if len(spaces) != structure.n_axes:
+            raise StructureError(
+                f"a {structure.n_axes}-index tensor needs one space per axis, got "
+                f"{len(spaces)}"
+            )
+        for position, (axis, space) in enumerate(
+            zip(structure.axes, spaces, strict=True)
+        ):
+            if not axis.is_window_of(self.axis(space, conjugated=axis.conjugated)):
+                raise StructureError(
+                    f"axis {position} does not run over the {space.value} orbitals "
+                    "of this state"
+                )
+        signs = [1.0 if space is Space.OCCUPIED else -1.0 for space in spaces]
         xp = array_namespace(*self.occupied_energies.blocks)
         dtype = dtype_for(xp, structure.ring)
 
         def build(key: Key) -> Array:
             total: Array | None = None
             for position, (space, sign, sector) in enumerate(
-                zip(spaces_of_axes, signs, key, strict=True)
+                zip(spaces, signs, key, strict=True)
             ):
+                axis = structure.axes[position]
+                start = axis.starts[sector]
+                energies = self.sector_energies(space, sector)
                 shape = [1] * len(key)
                 shape[position] = -1
-                term = sign * xp.reshape(self.sector_energies(space, sector), shape)
+                term = sign * xp.reshape(
+                    energies[start : start + axis.sizes[sector]], shape
+                )
                 total = term if total is None else total + term
             assert total is not None
             return xp.astype(xp.broadcast_to(total, structure.shape(key)), dtype)
@@ -273,22 +301,6 @@ class OrbitalSpaces:
             return xp.astype(xp.eye(shape[0]) * xp.expand_dims(energies, axis=0), dtype)
 
         return BlockTensor.from_function(structure, build)
-
-    def space_of(self, axis: TensorAxis) -> Space:
-        """Which space ``axis`` runs over, whatever its conjugation.
-
-        Raises
-        ------
-        StructureError
-            If the axis runs over neither space of these orbitals.
-        """
-        for space in Space:
-            if axis.same_space(self.axis(space, conjugated=axis.conjugated)):
-                return space
-        raise StructureError(
-            "the axis runs over neither the occupied nor the virtual orbitals of "
-            "this state"
-        )
 
 
 def _split_occupations(
