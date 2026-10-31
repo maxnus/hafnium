@@ -46,7 +46,16 @@ index runs over part of a space.
   operand to the windows of the letters it carries; the image of a term
   under a permutation ``g`` of the occupied indices is the representative
   evaluated over the windows of ``g(l)`` and permuted by ``g⁻¹``, so each
-  coset of an orbit is one contraction instead of a permuted copy. The
+  coset of an orbit is one contraction instead of a permuted copy. When
+  the stabilizer of a term is the product of its occupied and its
+  virtual parts, which holds for every term of the triples, the sum over
+  the cosets factors as ``Σ_τ ε(τ) τ Σ_σ ε(σ) σ``: the three occupied
+  images are contracted and summed, and the virtual antisymmetrizer is
+  applied to the sum as two permuted copies, once for every orbit that
+  shares it, which cuts the contractions of a batch from 36 to 12 and
+  the passes over the batch tensor from 72 to about 20; an orbit whose
+  stabilizer does not factor (one of the CCSD doubles) keeps the image by
+  image form. The
   occupied axis is cut into windows of a number of orbitals per sector,
   by default the largest number whose batch of triples is estimated to
   fit a memory limit, and the correction is summed over the triples
@@ -82,20 +91,24 @@ index runs over part of a space.
   the helium cell's correction by 8 μHartree per cell; the comparison
   evaluates PySCF's (T) with the diagonal of the Fock matrix of the
   equations, which is what ``KRCCSD`` keeps with ``keep_exxdiv``.
-- On 16 cores the (T) step of water in def2-SVP takes 0.3–2 s in the
-  three real classes against PySCF's 0.03 s (restricted, spin-adapted
-  and compiled), 0.2 s (unrestricted) and 0.9 s (generalized); the
-  generalized class pays the Python loop over the blocks of the window
-  tensors and the permuted copies, batched over the windows the memory
-  limit allows. For the helium cell over 3×1×1 the step takes 1.4 s
-  (restricted), 1.2 s (unrestricted) and 5.6 s (generalized) against
-  PySCF's KRCCSD(T) at 1.2 s and KGCCSD(T) at 8.0 s.
-- A batch costs eighteen contractions of a block tensor over three
-  windows with a block of the integrals or the amplitudes, the
-  ``o³v⁴`` count of the standard algorithm, plus eighteen outer products
-  for ``V``; with windows of one orbital the Python loop over the blocks
-  dominates for small systems, so the memory limit, not the smallest
-  window, is the default.
+- On 16 cores the (T) step of water in def2-SVP takes 0.3 s
+  (restricted), 0.2 s (unrestricted) and 0.9 s (generalized) against
+  PySCF's 0.03 s (restricted, spin-adapted and compiled), 0.2 s
+  (unrestricted) and 0.9 s (generalized, spin-orbital); the restricted
+  gap is the spin adaptation and the compiled per-triple kernel. For
+  the helium cell over 3×1×1 the step takes 0.5 s (restricted), 0.3 s
+  (unrestricted) and 1.4 s (generalized) against PySCF's KRCCSD(T) at
+  1.2 s and KGCCSD(T) at 8.0 s. Before the factored antisymmetrizer the
+  times were two to four times longer, with sixty percent of the time
+  in the additions of the permuted copies.
+- A batch costs six contractions of a block tensor over three windows
+  with a block of the integrals or the amplitudes, the ``o³v⁴`` count of
+  the standard algorithm, plus six outer products for ``V`` and the
+  permuted copies of the antisymmetrizers; the passes over the batch
+  tensor, not the contractions, take most of the time, so the default
+  memory limit trades the number of batches against their size.
 - Later: windows over the virtual axes for the ``<vv||vv>``-free
-  ladder, the stabilizer of a term's occupied pair to halve the cosets,
-  the Λ equations, and the spin-adapted (T) if measured to matter.
+  ladder, one virtual antisymmetrizer per equation by choosing the
+  representative of every orbit with its antisymmetric virtual pair in
+  the same slots (two of the twenty passes of a batch), the Λ
+  equations, and the spin-adapted (T) if measured to matter.

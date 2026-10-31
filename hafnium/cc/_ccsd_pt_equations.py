@@ -56,109 +56,40 @@ def connected_triples(
         _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, j)),
         _windowed(t2, (k, None, None, None)),
     )
-    r = -x
+    s = -x
     x = contract(
         "laij,klbc->ijkabc",
         _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, k)),
         _windowed(t2, (j, None, None, None)),
     )
-    r = r + x.permute("ijkabc->ikjabc")
+    s = s + x.permute("ijkabc->ikjabc")
     x = contract(
         "laij,klbc->ijkabc",
         _windowed(v[OCC, VIR, OCC, OCC], (None, None, j, k)),
         _windowed(t2, (i, None, None, None)),
     )
-    r = r - x.permute("ijkabc->kijabc")
-    x = contract(
-        "laij,klbc->ijkabc",
-        _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, j)),
-        _windowed(t2, (k, None, None, None)),
-    )
-    r = r + x.permute("ijkabc->ijkbac")
-    x = contract(
-        "laij,klbc->ijkabc",
-        _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, k)),
-        _windowed(t2, (j, None, None, None)),
-    )
-    r = r - x.permute("ijkabc->ikjbac")
-    x = contract(
-        "laij,klbc->ijkabc",
-        _windowed(v[OCC, VIR, OCC, OCC], (None, None, j, k)),
-        _windowed(t2, (i, None, None, None)),
-    )
-    r = r + x.permute("ijkabc->kijbac")
-    x = contract(
-        "laij,klbc->ijkabc",
-        _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, j)),
-        _windowed(t2, (k, None, None, None)),
-    )
-    r = r - x.permute("ijkabc->ijkbca")
-    x = contract(
-        "laij,klbc->ijkabc",
-        _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, k)),
-        _windowed(t2, (j, None, None, None)),
-    )
-    r = r + x.permute("ijkabc->ikjbca")
-    x = contract(
-        "laij,klbc->ijkabc",
-        _windowed(v[OCC, VIR, OCC, OCC], (None, None, j, k)),
-        _windowed(t2, (i, None, None, None)),
-    )
-    r = r - x.permute("ijkabc->kijbca")
+    s = s - x.permute("ijkabc->kijabc")
+    r = s - s.permute("ijkabc->ijkbac") + s.permute("ijkabc->ijkbca")
     x = contract(
         "abid,jkcd->ijkabc",
         _windowed(v[VIR, VIR, OCC, VIR], (None, None, i, None)),
         _windowed(t2, (j, k, None, None)),
     )
-    r = r - x
+    s = -x
     x = contract(
         "abid,jkcd->ijkabc",
         _windowed(v[VIR, VIR, OCC, VIR], (None, None, j, None)),
         _windowed(t2, (i, k, None, None)),
     )
-    r = r + x.permute("ijkabc->jikabc")
+    s = s + x.permute("ijkabc->jikabc")
     x = contract(
         "abid,jkcd->ijkabc",
         _windowed(v[VIR, VIR, OCC, VIR], (None, None, k, None)),
         _windowed(t2, (i, j, None, None)),
     )
-    r = r - x.permute("ijkabc->jkiabc")
-    x = contract(
-        "abid,jkcd->ijkabc",
-        _windowed(v[VIR, VIR, OCC, VIR], (None, None, i, None)),
-        _windowed(t2, (j, k, None, None)),
-    )
-    r = r + x.permute("ijkabc->ijkacb")
-    x = contract(
-        "abid,jkcd->ijkabc",
-        _windowed(v[VIR, VIR, OCC, VIR], (None, None, j, None)),
-        _windowed(t2, (i, k, None, None)),
-    )
-    r = r - x.permute("ijkabc->jikacb")
-    x = contract(
-        "abid,jkcd->ijkabc",
-        _windowed(v[VIR, VIR, OCC, VIR], (None, None, k, None)),
-        _windowed(t2, (i, j, None, None)),
-    )
-    r = r + x.permute("ijkabc->jkiacb")
-    x = contract(
-        "abid,jkcd->ijkabc",
-        _windowed(v[VIR, VIR, OCC, VIR], (None, None, i, None)),
-        _windowed(t2, (j, k, None, None)),
-    )
-    r = r - x.permute("ijkabc->ijkcab")
-    x = contract(
-        "abid,jkcd->ijkabc",
-        _windowed(v[VIR, VIR, OCC, VIR], (None, None, j, None)),
-        _windowed(t2, (i, k, None, None)),
-    )
-    r = r + x.permute("ijkabc->jikcab")
-    x = contract(
-        "abid,jkcd->ijkabc",
-        _windowed(v[VIR, VIR, OCC, VIR], (None, None, k, None)),
-        _windowed(t2, (i, j, None, None)),
-    )
-    r = r - x.permute("ijkabc->jkicab")
+    s = s - x.permute("ijkabc->jkiabc")
+    x = s - s.permute("ijkabc->ijkacb") + s.permute("ijkabc->ijkcab")
+    r = r + x
     return r
 
 
@@ -180,107 +111,38 @@ def disconnected_triples(
         _windowed(f[VIR, OCC], (None, i)),
         _windowed(t2, (j, k, None, None)),
     )
-    r = x
+    s = x
     x = contract(
         "ai,jkbc->ijkabc",
         _windowed(f[VIR, OCC], (None, j)),
         _windowed(t2, (i, k, None, None)),
     )
-    r = r - x.permute("ijkabc->jikabc")
+    s = s - x.permute("ijkabc->jikabc")
     x = contract(
         "ai,jkbc->ijkabc",
         _windowed(f[VIR, OCC], (None, k)),
         _windowed(t2, (i, j, None, None)),
     )
-    r = r + x.permute("ijkabc->jkiabc")
-    x = contract(
-        "ai,jkbc->ijkabc",
-        _windowed(f[VIR, OCC], (None, i)),
-        _windowed(t2, (j, k, None, None)),
-    )
-    r = r - x.permute("ijkabc->ijkbac")
-    x = contract(
-        "ai,jkbc->ijkabc",
-        _windowed(f[VIR, OCC], (None, j)),
-        _windowed(t2, (i, k, None, None)),
-    )
-    r = r + x.permute("ijkabc->jikbac")
-    x = contract(
-        "ai,jkbc->ijkabc",
-        _windowed(f[VIR, OCC], (None, k)),
-        _windowed(t2, (i, j, None, None)),
-    )
-    r = r - x.permute("ijkabc->jkibac")
-    x = contract(
-        "ai,jkbc->ijkabc",
-        _windowed(f[VIR, OCC], (None, i)),
-        _windowed(t2, (j, k, None, None)),
-    )
-    r = r + x.permute("ijkabc->ijkbca")
-    x = contract(
-        "ai,jkbc->ijkabc",
-        _windowed(f[VIR, OCC], (None, j)),
-        _windowed(t2, (i, k, None, None)),
-    )
-    r = r - x.permute("ijkabc->jikbca")
-    x = contract(
-        "ai,jkbc->ijkabc",
-        _windowed(f[VIR, OCC], (None, k)),
-        _windowed(t2, (i, j, None, None)),
-    )
-    r = r + x.permute("ijkabc->jkibca")
+    s = s + x.permute("ijkabc->jkiabc")
+    r = s - s.permute("ijkabc->ijkbac") + s.permute("ijkabc->ijkbca")
     x = contract(
         "abij,kc->ijkabc",
         _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, j)),
         _windowed(t1, (k, None)),
     )
+    s = x
+    x = contract(
+        "abij,kc->ijkabc",
+        _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, k)),
+        _windowed(t1, (j, None)),
+    )
+    s = s - x.permute("ijkabc->ikjabc")
+    x = contract(
+        "abij,kc->ijkabc",
+        _windowed(v[VIR, VIR, OCC, OCC], (None, None, j, k)),
+        _windowed(t1, (i, None)),
+    )
+    s = s + x.permute("ijkabc->kijabc")
+    x = s - s.permute("ijkabc->ijkacb") + s.permute("ijkabc->ijkcab")
     r = r + x
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, k)),
-        _windowed(t1, (j, None)),
-    )
-    r = r - x.permute("ijkabc->ikjabc")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, j, k)),
-        _windowed(t1, (i, None)),
-    )
-    r = r + x.permute("ijkabc->kijabc")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, j)),
-        _windowed(t1, (k, None)),
-    )
-    r = r - x.permute("ijkabc->ijkacb")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, k)),
-        _windowed(t1, (j, None)),
-    )
-    r = r + x.permute("ijkabc->ikjacb")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, j, k)),
-        _windowed(t1, (i, None)),
-    )
-    r = r - x.permute("ijkabc->kijacb")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, j)),
-        _windowed(t1, (k, None)),
-    )
-    r = r + x.permute("ijkabc->ijkcab")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, i, k)),
-        _windowed(t1, (j, None)),
-    )
-    r = r - x.permute("ijkabc->ikjcab")
-    x = contract(
-        "abij,kc->ijkabc",
-        _windowed(v[VIR, VIR, OCC, OCC], (None, None, j, k)),
-        _windowed(t1, (i, None)),
-    )
-    r = r + x.permute("ijkabc->kijcab")
     return r
