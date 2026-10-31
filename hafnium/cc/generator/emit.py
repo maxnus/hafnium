@@ -25,9 +25,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from itertools import combinations, permutations
 
-from hafnium.cc.generator.ccsd import ccsd_equations
-from hafnium.cc.generator.ccsd_t import ccsd_t_equations
-from hafnium.cc.generator.equations import Equation
+from hafnium.cc.generator.equations import Equation, ccsd_equations, ccsd_pt_equations
 from hafnium.cc.generator.wick import LABELS, SPACE_NAMES, Kind, Term
 from hafnium.correlated import Space
 
@@ -468,9 +466,9 @@ def ccsd_module_source() -> str:
     return prelude + "\n" + _constants(equations) + CCSD_HELPERS + functions
 
 
-def ccsd_t_module_source() -> str:
-    """Write the complete source of :mod:`hafnium.cc._ccsd_t_equations`."""
-    equations = ccsd_t_equations()
+def ccsd_pt_module_source() -> str:
+    """Write the complete source of :mod:`hafnium.cc._ccsd_pt_equations`."""
+    equations = ccsd_pt_equations()
     prelude = PRELUDE.format(
         title="The triples of the (T) correction",
         adr="ADR-0033",

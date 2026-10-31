@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hafnium.cc.generator.emit import ccsd_module_source, ccsd_t_module_source
+from hafnium.cc.generator.emit import ccsd_module_source, ccsd_pt_module_source
 
 PACKAGE = Path(__file__).resolve().parent.parent
 TARGETS = {
     PACKAGE / "_ccsd_equations.py": ccsd_module_source,
-    PACKAGE / "_ccsd_t_equations.py": ccsd_t_module_source,
+    PACKAGE / "_ccsd_pt_equations.py": ccsd_pt_module_source,
 }
 """The generated modules and the functions that write their source."""
 

@@ -6,8 +6,8 @@ equations the generator of ADR-0032 derives and writes once
 (:func:`df_ccsd`, :func:`ccsd_from_df_tensor`,
 :func:`ccsd_from_periodic_fitting`, :func:`solve_ccsd`), and CCSD(T)
 with the correction from the same generator over batches of occupied
-triples (ADR-0033; :func:`df_ccsd_t`, :func:`ccsd_t_from_df_tensor`,
-:func:`ccsd_t_from_periodic_fitting`, :func:`solve_ccsd_t`, or
+triples (ADR-0033; :func:`df_ccsd_pt`, :func:`ccsd_pt_from_df_tensor`,
+:func:`ccsd_pt_from_periodic_fitting`, :func:`solve_ccsd_pt`, or
 :func:`triples_correction` for existing amplitudes).
 """
 
@@ -20,13 +20,13 @@ from hafnium.cc.ccsd import (
     df_ccsd,
     solve_ccsd,
 )
-from hafnium.cc.ccsd_t import (
-    CcsdTResult,
+from hafnium.cc.ccsd_pt import (
+    CcsdPtResult,
     TriplesOptions,
-    ccsd_t_from_df_tensor,
-    ccsd_t_from_periodic_fitting,
-    df_ccsd_t,
-    solve_ccsd_t,
+    ccsd_pt_from_df_tensor,
+    ccsd_pt_from_periodic_fitting,
+    df_ccsd_pt,
+    solve_ccsd_pt,
     triples_correction,
 )
 from hafnium.cc.diis import AmplitudeDiis
@@ -36,17 +36,17 @@ __all__ = [
     "AmplitudeDiis",
     "CcsdIteration",
     "CcsdOptions",
+    "CcsdPtResult",
     "CcsdResult",
-    "CcsdTResult",
     "NormalOrderedHamiltonian",
     "TriplesOptions",
     "ccsd_from_df_tensor",
     "ccsd_from_periodic_fitting",
-    "ccsd_t_from_df_tensor",
-    "ccsd_t_from_periodic_fitting",
+    "ccsd_pt_from_df_tensor",
+    "ccsd_pt_from_periodic_fitting",
     "df_ccsd",
-    "df_ccsd_t",
+    "df_ccsd_pt",
     "solve_ccsd",
-    "solve_ccsd_t",
+    "solve_ccsd_pt",
     "triples_correction",
 ]

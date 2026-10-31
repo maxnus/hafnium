@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.cc import CcsdOptions, CcsdTResult, ccsd_t_from_periodic_fitting
+from hafnium.cc import CcsdOptions, CcsdPtResult, ccsd_pt_from_periodic_fitting
 from hafnium.integrals import density_fitting_k
 from hafnium.integrals.periodic import overlap_k
 from hafnium.integrals.periodic.exchange import madelung_constant
@@ -42,7 +42,7 @@ OPTIONS = CcsdOptions(energy_tolerance=1e-12, amplitude_tolerance=1e-10)
 
 def compute(
     name: str, basis_name: str, kind: str, exchange_correction: bool
-) -> tuple[Cell, BasisSet, BasisSet, KPoints, CcsdTResult]:
+) -> tuple[Cell, BasisSet, BasisSet, KPoints, CcsdPtResult]:
     cell = CELLS[name]()
     basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
     auxiliary = BasisSet.for_atoms(cell, AUXILIARY, library=LIBRARY)
@@ -62,11 +62,11 @@ def compute(
         basis,
         auxiliary,
         mesh,
-        ccsd_t_from_periodic_fitting(reference, fitting, options=OPTIONS),
+        ccsd_pt_from_periodic_fitting(reference, fitting, options=OPTIONS),
     )
 
 
-def check_against(result: CcsdTResult, expected: dict[str, Any]) -> None:
+def check_against(result: CcsdPtResult, expected: dict[str, Any]) -> None:
     assert result.reference_energy == pytest.approx(
         expected["reference_energy"], abs=ENERGY_TOL
     )

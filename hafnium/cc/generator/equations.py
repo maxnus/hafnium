@@ -8,8 +8,21 @@ terms in which every cluster operator is contracted with the Hamiltonian
 or the others. The general indices of ``H_N`` are expanded into occupied
 and virtual ones, so that the terms refer to the blocks ``f[oo]``,
 ``f[ov]``, ... and ``v[oovv]``, ... of the Hamiltonian.
-:mod:`hafnium.cc.generator.ccsd` and :mod:`hafnium.cc.generator.ccsd_t`
-state the equations of the two methods in these terms.
+The equations of the methods are stated in these terms at the end.
+:func:`ccsd_equations` (ADR-0032) derives
+
+- ``E = <Φ| H_N e^T |Φ>_C``,
+- ``0 = <Φ_i^a| H_N e^T |Φ>_C`` with ``<Φ_i^a| = <Φ| a†_i a_a``,
+- ``0 = <Φ_ij^ab| H_N e^T |Φ>_C`` with ``<Φ_ij^ab| = <Φ| a†_i a†_j a_b a_a``,
+
+the subscript marking the terms in which every cluster operator is
+contracted with the Hamiltonian, ``e^T`` expanded into the products
+``T1^m T2^n / (m! n!)`` with no more operators than the projection and
+the Hamiltonian can contract. :func:`ccsd_pt_equations` (ADR-0033)
+derives the connected triples ``W = <Φ_ijk^abc| H_N T2 |Φ>_C`` and the
+disconnected ``V = <Φ_ijk^abc| H_N (T1 + T2) |Φ>`` of the (T) correction
+``1/36 Σ conj(W + V) W / D`` (:mod:`hafnium.cc.ccsd_pt`), with
+``<Φ_ijk^abc| = <Φ| a†_i a†_j a†_k a_c a_b a_a``.
 """
 
 from __future__ import annotations
@@ -207,3 +220,39 @@ class Projection:
         """Derive ``<Φ_μ| H_N e^T |Φ>_C`` as merged canonical terms."""
         # The projection and the Hamiltonian contract at most 4 + 4 operators.
         return self.expectation(self.name, cluster_products(len(self.operators) + 4))
+
+
+def ccsd_equations() -> dict[str, Equation]:
+    """Derive the energy, singles and doubles equations of CCSD, by name."""
+    return {
+        projection.name: projection.equation()
+        for projection in (
+            Projection.energy(),
+            Projection.singles(),
+            Projection.doubles(),
+        )
+    }
+
+
+def ccsd_pt_equations() -> dict[str, Equation]:
+    """Derive the connected and the disconnected triples of (T), by name.
+
+    ``connected_triples`` is ``<Φ_ijk^abc| H_N T2 |Φ>_C``, the triples
+    the doubles generate through the two-electron part of the
+    Hamiltonian, and ``disconnected_triples`` the terms of
+    ``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` in which the cluster operator is not
+    contracted with the Hamiltonian: the singles with ``<bc||jk>`` and the
+    doubles with ``f[vo]``, which vanishes for a canonical reference.
+    """
+    projection = Projection.triples()
+    one = Fraction(1)
+    return {
+        "connected_triples": projection.expectation(
+            "connected_triples", [(one, [doubles_cluster])]
+        ),
+        "disconnected_triples": projection.expectation(
+            "disconnected_triples",
+            [(one, [singles_cluster]), (one, [doubles_cluster])],
+            connected=False,
+        ),
+    }
