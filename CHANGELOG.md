@@ -339,5 +339,13 @@ uses [Semantic Versioning](https://semver.org/).
   the Fock matrix by default, which its `KUCCSD` and `KGCCSD` cannot
   keep, so the open-shell k-point classes are checked against each other
   and by band folding. The ring of `OrbitalSpaces` is complex over a mesh
-  with points that time reversal does not leave invariant.
+  with points that time reversal does not leave invariant. A block
+  contraction is one `tensordot` per pair of blocks, with the operands
+  ordered to spare the permutation of the product, and the keys, stored
+  keys and derivations of a tensor structure are memoized over its axes,
+  which halves the time of the CCSD iteration over a 3×3×1 mesh; the
+  CCSD step takes 0.2–0.5 s for water in def2-SVP in every class (PySCF
+  0.4–1.2 s), 63 s for benzene in def2-SVP against PySCF's spin-adapted
+  RCCSD at 18 s, and 34 s for the helium cell over 3×3×1 against KRCCSD
+  at 10 s.
 

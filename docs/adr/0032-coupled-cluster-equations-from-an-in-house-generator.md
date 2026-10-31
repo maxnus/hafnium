@@ -89,7 +89,14 @@ the fitted tensor; and how the amplitude iteration converges.
 - The full ``<vv||vv>`` block costs ``n_v⁴`` words, 20 GB for benzene in
   def2-SVP as a generalized state, so the generic path serves small and
   medium systems until the DF-driven ladder lands; the recomputed
-  intermediates cost a constant factor on the ``o³v³`` terms.
+  intermediates cost a constant factor on the ``o³v³`` terms. On 16
+  cores the CCSD step takes 0.2–0.5 s for water in def2-SVP in every
+  class (PySCF 0.4–1.2 s), 63 s for benzene in def2-SVP as a restricted
+  state against PySCF's spin-adapted, hand-optimized RCCSD at 18 s, the
+  factor the plan foresaw for the spin-orbital route, and 34 s for the
+  helium cell over a 3×3×1 mesh against KRCCSD at 10 s, where the Python
+  loop over the 276 000 block products of an iteration dominates and
+  batching the blocks of a k-point structure is the lever.
 - Later: (T) from the same generator with batching over the occupied
   triples, the Λ equations and EOM-CC, common-subexpression elimination
   and a path optimizer across terms, the spin-adapted RCCSD fast path if
