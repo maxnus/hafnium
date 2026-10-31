@@ -22,7 +22,12 @@ the Hamiltonian can contract. :func:`ccsd_pt_equations` (ADR-0033)
 derives the connected triples ``W = <Φ_ijk^abc| H_N T2 |Φ>_C`` and the
 disconnected ``V = <Φ_ijk^abc| H_N (T1 + T2) |Φ>`` of the (T) correction
 ``1/36 Σ conj(W + V) W / D`` (:mod:`hafnium.cc.ccsd_pt`), with
-``<Φ_ijk^abc| = <Φ| a†_i a†_j a†_k a_c a_b a_a``.
+``<Φ_ijk^abc| = <Φ| a†_i a†_j a†_k a_c a_b a_a``. :func:`ccsd_lambda_equations`
+(ADR-0034) derives the Λ equations ``0 = <Φ| (1 + Λ) (H_N e^T)_C |Φ_μ>``
+of the de-excitation operators ``Λ1 = Σ l1[i, a] a†_i a_a`` and
+``Λ2 = ¼ Σ l2[i, j, a, b] a†_i a†_j a_b a_a``, the ket the adjoint of
+each projection and the unlinked terms left out, and the blocks of the
+one-particle density ``<Φ| (1 + Λ) ({p† q} e^T)_C |Φ>``.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from itertools import product
 from math import factorial
 
 from hafnium.cc.generator.wick import (
+    LABELS,
     Factor,
     Index,
     Kind,
@@ -110,6 +116,35 @@ def doubles_cluster(dummies: DummyIndices) -> OperatorString:
     )
 
 
+def lambda_singles_cluster(dummies: DummyIndices) -> OperatorString:
+    """``Λ1 = Σ l1[i, a] a†_i a_a``, the de-excitation adjoint to ``T1``."""
+    i, a = dummies.new(Space.OCCUPIED), dummies.new(Space.VIRTUAL)
+    return OperatorString(
+        Fraction(1),
+        Factor(Kind.LAMBDA_SINGLES, (i, a)),
+        (Operator(i, True), Operator(a, False)),
+    )
+
+
+def lambda_doubles_cluster(dummies: DummyIndices) -> OperatorString:
+    """``Λ2 = ¼ Σ l2[i, j, a, b] a†_i a†_j a_b a_a``, adjoint to ``T2``."""
+    i, j = dummies.new(Space.OCCUPIED), dummies.new(Space.OCCUPIED)
+    a, b = dummies.new(Space.VIRTUAL), dummies.new(Space.VIRTUAL)
+    return OperatorString(
+        Fraction(1, 4),
+        Factor(Kind.LAMBDA_DOUBLES, (i, j, a, b)),
+        (Operator(i, True), Operator(j, True), Operator(b, False), Operator(a, False)),
+    )
+
+
+DE_EXCITATIONS: tuple[Cluster | None, ...] = (
+    None,
+    lambda_singles_cluster,
+    lambda_doubles_cluster,
+)
+"""``1 + Λ1 + Λ2``, the bra of the Λ functional, ``None`` for the one."""
+
+
 def cluster_products(max_operators: int) -> list[tuple[Fraction, list[Cluster]]]:
     """List ``T1^m T2^n / (m! n!)`` up to ``max_operators`` operators.
 
@@ -125,15 +160,19 @@ def cluster_products(max_operators: int) -> list[tuple[Fraction, list[Cluster]]]
 
 @dataclass(frozen=True, slots=True)
 class Equation:
-    """The merged canonical terms of ``<Φ_μ| H_N e^T |Φ>_C``.
+    """The merged canonical terms of an expectation value with free indices.
 
     ``free`` holds the labels of the free indices in the order of the
-    result's axes, ``"ijab"`` for the doubles residual ``[i, j, a, b]``.
+    result's axes, ``"ijab"`` for the doubles residual ``[i, j, a, b]``;
+    ``antisymmetric`` says that the result changes sign under the odd
+    permutations of its occupied and of its virtual free indices, as a
+    residual does and a density block does not.
     """
 
     name: str
     free: str
     terms: tuple[Term, ...]
+    antisymmetric: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +260,107 @@ class Projection:
         # The projection and the Hamiltonian contract at most 4 + 4 operators.
         return self.expectation(self.name, cluster_products(len(self.operators) + 4))
 
+    @property
+    def ket(self) -> tuple[Operator, ...]:
+        """``|Φ_μ>`` as the operators of the ket, the adjoint of the bra."""
+        return tuple(
+            Operator(op.index, not op.creation) for op in reversed(self.operators)
+        )
+
+    def lambda_equation(self) -> Equation:
+        """Derive ``<Φ| (1 + Λ) (H_N e^T)_C |Φ_μ>`` linked, as merged canonical terms.
+
+        The equation of the de-excitation amplitudes of this projection
+        (ADR-0034): the ket is the adjoint of the bra, ``Λ = Λ1 + Λ2``
+        stands to the left of the Hamiltonian, and the unlinked terms, in
+        which the Hamiltonian with its cluster operators closes on itself
+        and an amplitude multiplies the energy, are left out. The result
+        has the free indices of the projection and the structure of the
+        de-excitation amplitudes.
+        """
+        dummies = DummyIndices()
+        ket = OperatorString(Fraction(1), None, self.ket)
+        terms: list[Term] = []
+        for left in DE_EXCITATIONS:
+            # The quasi-annihilators of Λ and of the Hamiltonian, at most
+            # four, contract every quasi-creator of the ket and the clusters.
+            products = cluster_products(_n_operators(left) + 4 - len(self.operators))
+            for hamiltonian in hamiltonian_strings(dummies):
+                terms.extend(
+                    _de_excited(left, hamiltonian, products, ket, dummies, linked=True)
+                )
+        return Equation(f"lambda_{self.name}", self.free, tuple(Term.merge(terms)))
+
+
+def _n_operators(cluster: Cluster | None) -> int:
+    """Count the operators of a cluster string, none for ``None``."""
+    return 0 if cluster is None else len(cluster(DummyIndices()).operators)
+
+
+def _de_excited(
+    left: Cluster | None,
+    operator: OperatorString,
+    products: Sequence[tuple[Fraction, Sequence[Cluster]]],
+    ket: OperatorString | None,
+    dummies: DummyIndices,
+    *,
+    linked: bool,
+) -> list[Term]:
+    """Terms of ``<Φ| left operator Σ products ket |Φ>`` connected to ``operator``.
+
+    ``left`` is a de-excitation or ``None`` for the one, ``ket`` an
+    excitation or ``None`` for the reference; the clusters of every
+    product must be contracted with ``operator``, and with ``linked`` the
+    terms in which they close on it are dropped (:func:`expectation`).
+    """
+    terms: list[Term] = []
+    for coefficient, clusters in products:
+        strings = [operator, *(cluster(dummies) for cluster in clusters)]
+        if ket is not None:
+            strings.append(ket)
+        position = 0
+        if left is not None:
+            strings.insert(0, left(dummies))
+            position = 1
+        end = len(strings) - (ket is not None)
+        terms.extend(
+            Term(term.coefficient * coefficient, term.factors)
+            for term in expectation(
+                strings, position, range(position + 1, end), linked=linked
+            )
+        )
+    return terms
+
+
+def density_block(p: Space, q: Space) -> Equation:
+    """Derive ``<Φ| (1 + Λ) ({p† q} e^T)_C |Φ>`` over the spaces of ``p`` and ``q``.
+
+    The block of the one-particle density of CCSD (ADR-0034) that the
+    normal-ordered ``{p† q}`` contributes, as the tensor ``[p, q]`` with
+    ``q`` conjugated, so that it pairs with ``f[p, q]`` in a trace,
+    without the occupations of the reference; it is not antisymmetric in
+    its indices.
+    """
+    first = Index(p, LABELS[p][0], True)
+    second = Index(q, LABELS[q][1 if q is p else 0], True)
+    operator = OperatorString.normal_ordered(
+        Fraction(1), None, (Operator(first, True), Operator(second, False))
+    )
+    creators = sum(op.creates_quasiparticle for op in operator.operators)
+    dummies = DummyIndices()
+    terms: list[Term] = []
+    for left in DE_EXCITATIONS:
+        # The quasi-annihilators of Λ and of the operator contract every
+        # quasi-creator of the operator and the clusters.
+        products = cluster_products(max(_n_operators(left) + 2 - 2 * creators, 0))
+        terms.extend(_de_excited(left, operator, products, None, dummies, linked=False))
+    return Equation(
+        f"density_{p.value}_{q.value}",
+        first.label + second.label,
+        tuple(Term.merge(terms)),
+        antisymmetric=False,
+    )
+
 
 def ccsd_equations() -> dict[str, Equation]:
     """Derive the energy, singles and doubles equations of CCSD, by name."""
@@ -256,3 +396,18 @@ def ccsd_pt_equations() -> dict[str, Equation]:
             connected=False,
         ),
     }
+
+
+def ccsd_lambda_equations() -> dict[str, Equation]:
+    """Derive the Λ equations of CCSD and the blocks of its density, by name.
+
+    ``lambda_singles`` and ``lambda_doubles`` are the residuals of the
+    de-excitation amplitudes, ``density_<p>_<q>`` the blocks of
+    ``<Φ| (1 + Λ) ({p† q} e^T)_C |Φ>`` over the spaces of ``p`` and ``q``.
+    """
+    equations = [
+        Projection.singles().lambda_equation(),
+        Projection.doubles().lambda_equation(),
+        *(density_block(p, q) for p, q in product(Space, repeat=2)),
+    ]
+    return {equation.name: equation for equation in equations}

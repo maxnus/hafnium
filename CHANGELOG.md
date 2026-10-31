@@ -396,4 +396,32 @@ uses [Semantic Versioning](https://semver.org/).
   flag, `cluster_products` lists cluster builders, and
   `ccsd_module_source` and `ccsd_pt_module_source` replace
   `module_source`.
+- The Λ equations of CCSD and its one-particle density (M8, part five,
+  ADR-0034): the generator derives the Λ equations as the linked terms
+  of `<Φ| (1 + Λ) (H_N e^T)_C |Φ_μ>` (`Projection.lambda_equation`, the
+  ket the adjoint of the bra, `expectation` with `linked` dropping the
+  terms in which the Hamiltonian with its clusters closes on itself) and
+  the blocks of the one-particle density `<Φ| (1 + Λ) ({p† q} e^T)_C |Φ>`
+  (`density_block`, an `Equation` without antisymmetry), and writes
+  `hafnium.cc._ccsd_lambda_equations`, whose residual functions take the
+  de-excitation amplitudes `l1`, `l2` and whose `one_particle_density`
+  returns the blocks by their spaces; every generated function now
+  declares its variables first, since the type checker follows at most
+  64 assignments of an undeclared one. `solve_lambda` iterates the
+  equations, linear in Λ, from the
+  conjugate amplitudes with the DIIS of the amplitude iteration and the
+  tolerances of `CcsdOptions`, and forms the Hermitian part of the
+  density in the atomic basis through `OrbitalSpaces.to_atomic_basis`;
+  `df_ccsd_lambda`, `ccsd_lambda_from_df_tensor`,
+  `ccsd_lambda_from_periodic_fitting` and `solve_ccsd_lambda` run CCSD
+  and the Λ equations and return a `CcsdLambdaResult`, a `CcsdResult`
+  with `lambda_singles`, `lambda_doubles` and `density`;
+  `natural_orbitals` inverts `density_matrix`. The density agrees across
+  the eight classes, with point-group sectors and over k-points, is the
+  derivative of the correlation energy with respect to the orbital
+  energies, equals the full-CI density for two electrons, folds onto the
+  supercell at Γ, and its natural occupations match PySCF's after
+  `solve_lambda` and `make_rdm1` for RHF, UHF and GHF references to
+  1e-10 (PySCF has no Λ over k-points). The CCSD iteration measures its
+  update by `AmplitudeDiis.overlap`.
 

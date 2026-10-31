@@ -1,13 +1,17 @@
 """The equation generator: Wick contractions, canonical terms, the emitted program."""
 
+import ast
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
 import hafnium.cc._ccsd_equations as generated
+import hafnium.cc._ccsd_lambda_equations as generated_ccsd_lambda
 import hafnium.cc._ccsd_pt_equations as generated_ccsd_pt
 from hafnium.cc.generator.emit import (
+    VARIABLES,
+    ccsd_lambda_module_source,
     ccsd_module_source,
     ccsd_pt_module_source,
     function_source,
@@ -20,8 +24,10 @@ from hafnium.cc.generator.equations import (
     Equation,
     Projection,
     ccsd_equations,
+    ccsd_lambda_equations,
     ccsd_pt_equations,
     hamiltonian_strings,
+    lambda_singles_cluster,
     singles_cluster,
 )
 from hafnium.cc.generator.wick import (
@@ -52,6 +58,8 @@ def test_committed_equations_are_current() -> None:
     assert source == ccsd_module_source()
     source = Path(generated_ccsd_pt.__file__).read_text(encoding="utf-8")
     assert source == ccsd_pt_module_source()
+    source = Path(generated_ccsd_lambda.__file__).read_text(encoding="utf-8")
+    assert source == ccsd_lambda_module_source()
 
 
 def test_energy_is_the_known_expression(equations: dict[str, Equation]) -> None:
@@ -352,3 +360,125 @@ def test_windowed_program_restricts_the_operands() -> None:
     assert program(term, "ijkabc") == [
         'x = contract("bcdk,ijad->ijkabc", v[VIR, VIR, VIR, OCC], t2)'
     ]
+
+
+@pytest.fixture(scope="module")
+def lambda_equations() -> dict[str, Equation]:
+    return ccsd_lambda_equations()
+
+
+def test_lambda_equations_have_the_textbook_terms(
+    lambda_equations: dict[str, Equation],
+) -> None:
+    """The linear terms of the Λ equations, and no amplitude times the energy."""
+    singles = lambda_equations["lambda_singles"]
+    assert singles.free == "ia"
+    assert singles.antisymmetric
+    terms = {str(term) for term in singles.terms}
+    assert len(terms) == 59
+    assert {
+        "1 f[i,a]",
+        "1 f[b,a] l1[i,b]",
+        "-1 f[i,j] l1[j,a]",
+        "-1 v[i,b,j,a] l1[j,b]",
+        "-1/2 v[b,c,j,a] l2[i,j,b,c]",
+        "-1/2 v[i,b,j,k] l2[j,k,a,b]",
+    } <= terms
+    # The unlinked products ``λ_i^a E`` are left out.
+    assert not any(term.endswith("f[j,b] t1[j,b] l1[i,a]") for term in terms)
+    assert not any(term.endswith("v[j,k,b,c] t2[j,k,b,c] l1[i,a]") for term in terms)
+    doubles = lambda_equations["lambda_doubles"]
+    assert doubles.free == "ijab"
+    assert len(doubles.terms) == 69
+    groups = orbits(doubles)
+    helpers = {str(group.term): group.antisymmetrizer for group in groups}
+    assert helpers["1 v[i,j,a,b]"] == ""
+    assert helpers["1/2 v[c,d,a,b] l2[i,j,c,d]"] == ""
+    assert helpers["1/2 v[i,j,k,l] l2[k,l,a,b]"] == ""
+    assert helpers["1 f[i,a] l1[j,b]"] == "_minus_both"
+    assert helpers["1 f[i,k] l2[j,k,a,b]"] == "_minus_ij"
+    assert helpers["-1 f[c,a] l2[i,j,b,c]"] == "_minus_ab"
+    assert sum(len(group.cosets) for group in groups) == 69
+
+
+def test_density_blocks_are_the_textbook_expressions(
+    lambda_equations: dict[str, Equation],
+) -> None:
+    """The blocks of ``<Φ| (1 + Λ) {p† q} e^T |Φ>`` and their lack of antisymmetry."""
+    blocks = {
+        name: equation
+        for name, equation in lambda_equations.items()
+        if name.startswith("density")
+    }
+    assert all(not equation.antisymmetric for equation in blocks.values())
+    assert {name: e.free for name, e in blocks.items()} == {
+        "density_occupied_occupied": "ij",
+        "density_occupied_virtual": "ia",
+        "density_virtual_occupied": "ai",
+        "density_virtual_virtual": "ab",
+    }
+    assert [str(t) for t in blocks["density_virtual_occupied"].terms] == ["1 l1[i,a]"]
+    assert {str(t) for t in blocks["density_occupied_occupied"].terms} == {
+        "-1 t1[i,a] l1[j,a]",
+        "-1/2 t2[i,k,a,b] l2[j,k,a,b]",
+    }
+    assert {str(t) for t in blocks["density_virtual_virtual"].terms} == {
+        "1 t1[i,b] l1[i,a]",
+        "1/2 t2[i,j,b,c] l2[i,j,a,c]",
+    }
+    occupied_virtual = {str(t) for t in blocks["density_occupied_virtual"].terms}
+    assert len(occupied_virtual) == 5
+    assert {"1 t1[i,a]", "1 t2[i,j,a,b] l1[j,b]"} <= occupied_virtual
+    # Without antisymmetry every term is an orbit of its own.
+    groups = orbits(blocks["density_occupied_occupied"])
+    assert len(groups) == 2
+    assert all(group.antisymmetrizer == "" for group in groups)
+
+
+def test_linked_expectation_drops_the_closed_hamiltonian() -> None:
+    """``<Φ| Λ1 f T1 |Φ_i^a>``: ``λ_i^a f_me t_m^e`` is unlinked, the rest linked."""
+    dummies = DummyIndices()
+    projection = Projection.singles()
+    m, e = dummies.new(O), dummies.new(V)
+    fock = OperatorString(
+        Fraction(1), Factor(Kind.FOCK, (m, e)), (Operator(m, True), Operator(e, False))
+    )
+    strings = [
+        lambda_singles_cluster(dummies),
+        fock,
+        singles_cluster(dummies),
+        OperatorString(Fraction(1), None, projection.ket),
+    ]
+    unlinked = {str(t) for t in Term.merge(expectation(strings, 1, [2]))}
+    linked = {str(t) for t in Term.merge(expectation(strings, 1, [2], linked=True))}
+    assert unlinked - linked == {"1 f[j,b] t1[j,b] l1[i,a]"}
+    assert linked == {"-1 f[i,b] t1[j,b] l1[j,a]", "-1 f[j,a] t1[j,b] l1[i,b]"}
+
+
+def test_generated_functions_declare_their_variables() -> None:
+    """Every generated function declares the variables it assigns before using them.
+
+    Pyright infers an undeclared variable's type from at most 64
+    assignments, which the singles residual of the Λ equations exceeds.
+    """
+    longest = 0
+    for module in (generated, generated_ccsd_pt, generated_ccsd_lambda):
+        assert module.__file__ is not None
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+                continue
+            assigned: dict[str, int] = {}
+            declared: list[str] = []
+            for statement in node.body:
+                if isinstance(statement, ast.AnnAssign) and statement.value is None:
+                    assert isinstance(statement.target, ast.Name)
+                    declared.append(statement.target.id)
+                elif isinstance(statement, ast.Assign):
+                    for target in statement.targets:
+                        if isinstance(target, ast.Name):
+                            assigned[target.id] = assigned.get(target.id, 0) + 1
+            variables = [name for name in VARIABLES if name in assigned]
+            assert declared == variables, node.name
+            longest = max(longest, *assigned.values())
+    assert longest > 64

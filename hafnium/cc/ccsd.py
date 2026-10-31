@@ -241,7 +241,8 @@ def solve_ccsd(
             doubles_residual(hamiltonian, singles, doubles) / denominators_doubles
         )
         change = correlation - history[-1].correlation_energy if history else math.inf
-        norm = math.sqrt(_squared_norm(update_singles) + _squared_norm(update_doubles))
+        update = (update_singles, update_doubles)
+        norm = math.sqrt(AmplitudeDiis.overlap(update, update))
         history.append(CcsdIteration(index, correlation, change, norm))
         # The first iteration has no energy change to judge; the update does.
         converged = norm < options.amplitude_tolerance and (
@@ -251,10 +252,7 @@ def solve_ccsd(
             return CcsdResult(
                 reference.energy, correlation, singles, doubles, True, tuple(history)
             )
-        diis = diis.push(
-            (singles + update_singles, doubles + update_doubles),
-            (update_singles, update_doubles),
-        )
+        diis = diis.push((singles + update_singles, doubles + update_doubles), update)
         singles, doubles = diis.extrapolate()
     result = CcsdResult(
         reference.energy,
@@ -312,11 +310,3 @@ def _real(value: BlockTensor) -> float:
     scalar = value.scalar
     xp = array_namespace(scalar)
     return float(xp.real(scalar))
-
-
-def _squared_norm(tensor: BlockTensor) -> float:
-    total = 0.0
-    for block in tensor.blocks:
-        xp = array_namespace(block)
-        total += float(xp.sum(xp.abs(block) ** 2))
-    return total

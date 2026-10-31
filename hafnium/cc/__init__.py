@@ -8,7 +8,10 @@ equations the generator of ADR-0032 derives and writes once
 with the correction from the same generator over batches of occupied
 triples (ADR-0033; :func:`df_ccsd_pt`, :func:`ccsd_pt_from_df_tensor`,
 :func:`ccsd_pt_from_periodic_fitting`, :func:`solve_ccsd_pt`, or
-:func:`triples_correction` for existing amplitudes).
+:func:`triples_correction` for existing amplitudes), and the Λ equations
+of CCSD with its one-particle density (ADR-0034; :func:`df_ccsd_lambda`,
+:func:`ccsd_lambda_from_df_tensor`, :func:`ccsd_lambda_from_periodic_fitting`,
+:func:`solve_ccsd_lambda`, or :func:`solve_lambda` for an existing result).
 """
 
 from hafnium.cc.ccsd import (
@@ -19,6 +22,15 @@ from hafnium.cc.ccsd import (
     ccsd_from_periodic_fitting,
     df_ccsd,
     solve_ccsd,
+)
+from hafnium.cc.ccsd_lambda import (
+    CcsdLambdaResult,
+    LambdaIteration,
+    ccsd_lambda_from_df_tensor,
+    ccsd_lambda_from_periodic_fitting,
+    df_ccsd_lambda,
+    solve_ccsd_lambda,
+    solve_lambda,
 )
 from hafnium.cc.ccsd_pt import (
     CcsdPtResult,
@@ -35,18 +47,25 @@ from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
 __all__ = [
     "AmplitudeDiis",
     "CcsdIteration",
+    "CcsdLambdaResult",
     "CcsdOptions",
     "CcsdPtResult",
     "CcsdResult",
+    "LambdaIteration",
     "NormalOrderedHamiltonian",
     "TriplesOptions",
     "ccsd_from_df_tensor",
     "ccsd_from_periodic_fitting",
+    "ccsd_lambda_from_df_tensor",
+    "ccsd_lambda_from_periodic_fitting",
     "ccsd_pt_from_df_tensor",
     "ccsd_pt_from_periodic_fitting",
     "df_ccsd",
+    "df_ccsd_lambda",
     "df_ccsd_pt",
     "solve_ccsd",
+    "solve_ccsd_lambda",
     "solve_ccsd_pt",
+    "solve_lambda",
     "triples_correction",
 ]

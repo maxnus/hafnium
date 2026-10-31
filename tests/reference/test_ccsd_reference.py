@@ -1,4 +1,4 @@
-"""DF-CCSD(T) energies against PySCF's density-fitted CCSD(T), and stored data."""
+"""DF-CCSD(T) energies and CCSD densities against PySCF, and stored data."""
 
 import json
 from importlib import resources
@@ -7,14 +7,23 @@ from typing import Any
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.cc import CcsdOptions, CcsdPtResult, df_ccsd_pt
+from hafnium.cc import (
+    CcsdLambdaResult,
+    CcsdOptions,
+    CcsdPtResult,
+    solve_ccsd_pt,
+    solve_lambda,
+)
+from hafnium.correlated import FittedOrbitalTensors
 from hafnium.molecule import Molecule
 from hafnium.scf import DensityFittedCoulombExchange, Hamiltonian, ScfOptions, solve_scf
+from hafnium.structured import BlockMatrix
 from hafnium.symmetry import SymmetrySpec
+from tests.densities import natural_occupations
 from tests.hamiltonians import ENGINE
 from tests.reference.test_scf_reference import MOLECULES
 from tests.shell_tables import LIBRARY
-from tests.tolerances import CCSD_ENERGY_TOL, ENERGY_TOL
+from tests.tolerances import CCSD_ENERGY_TOL, ENERGY_TOL, NATURAL_OCCUPATION_TOL
 
 AUXILIARY = "def2-universal-jkfit"
 # (molecule, basis, class): closed shells in the restricted and generalized
@@ -34,9 +43,13 @@ TIGHT = ScfOptions(energy_tolerance=1e-13, gradient_tolerance=1e-9)
 OPTIONS = CcsdOptions(energy_tolerance=1e-12, amplitude_tolerance=1e-10)
 
 
-def compute(
-    name: str, basis_name: str, kind: str
-) -> tuple[Molecule, BasisSet, BasisSet, CcsdPtResult]:
+Computed = tuple[
+    Molecule, BasisSet, BasisSet, CcsdPtResult, CcsdLambdaResult, BlockMatrix
+]
+
+
+def compute(name: str, basis_name: str, kind: str) -> Computed:
+    """DF-CCSD(T) and the Λ density of one case, with the overlap of the state."""
     molecule = MOLECULES[name]
     basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
     auxiliary = BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY)
@@ -47,15 +60,20 @@ def compute(
     reference = solve_scf(
         hamiltonian, SymmetrySpec.from_name(kind.upper()), options=TIGHT
     )
+    fitted = FittedOrbitalTensors.build(ENGINE, basis, molecule, auxiliary, reference)
+    result = solve_ccsd_pt(reference, fitted, OPTIONS)
     return (
         molecule,
         basis,
         auxiliary,
-        df_ccsd_pt(ENGINE, basis, molecule, auxiliary, reference, options=OPTIONS),
+        result,
+        solve_lambda(fitted, result, OPTIONS),
+        hamiltonian.metric(reference.structure),
     )
 
 
-def check_against(result: CcsdPtResult, expected: dict[str, Any]) -> None:
+def check_against(computed: Computed, expected: dict[str, Any]) -> None:
+    _, _, _, result, with_lambda, overlap = computed
     assert result.reference_energy == pytest.approx(
         expected["reference_energy"], abs=ENERGY_TOL
     )
@@ -65,6 +83,9 @@ def check_against(result: CcsdPtResult, expected: dict[str, Any]) -> None:
     assert result.triples_correction == pytest.approx(
         expected["triples_correction"], abs=CCSD_ENERGY_TOL
     )
+    assert natural_occupations(with_lambda.density, overlap) == pytest.approx(
+        expected["natural_occupations"], abs=NATURAL_OCCUPATION_TOL
+    )
 
 
 @pytest.mark.reference
@@ -72,8 +93,9 @@ def check_against(result: CcsdPtResult, expected: dict[str, Any]) -> None:
 def test_df_ccsd_matches_pyscf(name: str, basis_name: str, kind: str) -> None:
     from tests.reference.pyscf_oracle import ccsd_reference
 
-    molecule, basis, auxiliary, result = compute(name, basis_name, kind)
-    check_against(result, ccsd_reference(molecule, basis, auxiliary, kind))
+    computed = compute(name, basis_name, kind)
+    molecule, basis, auxiliary = computed[:3]
+    check_against(computed, ccsd_reference(molecule, basis, auxiliary, kind))
 
 
 @pytest.mark.reference
@@ -87,5 +109,4 @@ def test_df_ccsd_matches_stored_data(name: str, basis_name: str, kind: str) -> N
     assert stored["provenance"]["program"] == "pyscf"
     assert stored["provenance"]["method"] == kind
     assert stored["provenance"]["auxiliary"] == AUXILIARY
-    _, _, _, result = compute(name, basis_name, kind)
-    check_against(result, stored)
+    check_against(compute(name, basis_name, kind), stored)

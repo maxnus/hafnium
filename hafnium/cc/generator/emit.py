@@ -24,12 +24,17 @@ every orbit that shares them.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from itertools import combinations, permutations
 
-from hafnium.cc.generator.equations import Equation, ccsd_equations, ccsd_pt_equations
+from hafnium.cc.generator.equations import (
+    Equation,
+    ccsd_equations,
+    ccsd_lambda_equations,
+    ccsd_pt_equations,
+)
 from hafnium.cc.generator.wick import LABELS, SPACE_NAMES, Kind, Term
 from hafnium.correlated import Space
 
@@ -41,6 +46,9 @@ EXTENT = {Space.OCCUPIED: 10, Space.VIRTUAL: 40}
 
 Permutation = tuple[tuple[str, str], ...]
 """The free indices a permutation moves, as pairs ``(from, to)``."""
+
+IDENTITY: tuple[tuple[Permutation, int], ...] = (((), 1),)
+"""The group of the identity alone, for a result without antisymmetry."""
 
 
 def permutations_of(free: str) -> tuple[tuple[Permutation, int], ...]:
@@ -128,6 +136,16 @@ triples ``<Φ_ijk^abc| H_N T2 |Φ>_C`` and the disconnected ones
 ``[i, j, k, a, b, c]``, so that the triples are evaluated a batch of
 occupied indices at a time."""
 
+LAMBDA_DESCRIPTION = """The functions
+take the normal-ordered Hamiltonian of a reference in its orbital basis,
+the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md §3
+and the de-excitation amplitudes ``l1[i, a]`` and ``l2[i, j, a, b]``,
+and return the residuals ``<Φ| (1 + Λ) H_N e^T |Φ_i^a>`` and
+``<Φ| (1 + Λ) H_N e^T |Φ_ij^ab>`` of the Λ equations, linked, as tensors
+of the structure of the de-excitation amplitudes, and the blocks of the
+one-particle density ``<Φ| (1 + Λ) {p† q} e^T |Φ>`` by the spaces of
+``p`` and ``q``."""
+
 CCSD_HELPERS = '''
 
 def _minus_ij(x: BlockTensor) -> BlockTensor:
@@ -159,6 +177,12 @@ def _windowed(x: BlockTensor, windows: tuple[TensorAxis | None, ...]) -> BlockTe
 ATTRIBUTES = {Kind.FOCK: "fock", Kind.INTEGRAL: "integrals"}
 """The attribute of the Hamiltonian each of its kinds is read from."""
 
+TYPES = {"h": "NormalOrderedHamiltonian"}
+"""The annotation of an operand of a function, a block tensor when not listed."""
+
+LAMBDA_OPERANDS = ("h", "t1", "t2", "l1", "l2")
+"""The operands of a function of the Λ equations."""
+
 
 @dataclass(frozen=True, slots=True)
 class Signature:
@@ -166,6 +190,8 @@ class Signature:
 
     function: str
     docstring: str
+    operands: tuple[str, ...] = ("h", "t1", "t2")
+    """The names of the parameters, the Hamiltonian ``h`` and the tensors."""
     windowed: str = ""
     """The free indices the function takes a window each for."""
 
@@ -186,13 +212,23 @@ SIGNATURES = {
         "connected_triples",
         "``<Φ_ijk^abc| H_N T2 |Φ>`` connected, as ``[i, j, k, a, b, c]``.\n\n"
         "The occupied indices run over the windows ``i``, ``j`` and ``k``.",
-        "ijk",
+        windowed="ijk",
     ),
     "disconnected_triples": Signature(
         "disconnected_triples",
         "``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` disconnected, as ``[i, j, k, a, b, c]``."
         "\n\nThe occupied indices run over the windows ``i``, ``j`` and ``k``.",
-        "ijk",
+        windowed="ijk",
+    ),
+    "lambda_singles": Signature(
+        "lambda_singles_residual",
+        "``<Φ| (1 + Λ) H_N e^T |Φ_i^a>`` linked, as the tensor ``[i, a]``.",
+        LAMBDA_OPERANDS,
+    ),
+    "lambda_doubles": Signature(
+        "lambda_doubles_residual",
+        "``<Φ| (1 + Λ) H_N e^T |Φ_ij^ab>`` linked, as the tensor ``[i, j, a, b]``.",
+        LAMBDA_OPERANDS,
     ),
 }
 
@@ -237,7 +273,8 @@ def orbits(equation: Equation) -> list[Orbit]:
     checked; the orbit is then ``c Σ_cosets ε(g) g(x)`` over the images
     with distinct canonical forms, ``x`` the representative evaluated.
     The images under the occupied and under the virtual permutations
-    alone are collected the same way, for the factored form.
+    alone are collected the same way, for the factored form. A result
+    without antisymmetry, a density block, has one orbit per term.
 
     Raises
     ------
@@ -248,11 +285,18 @@ def orbits(equation: Equation) -> list[Orbit]:
     by_key = {term.key: term for term in equation.terms}
     done: set[tuple[object, ...]] = set()
     result: list[Orbit] = []
+    occupied, virtual = _letters_of(equation.free)
+    if equation.antisymmetric:
+        group = permutations_of(equation.free)
+        within = (_permutations_within(occupied), _permutations_within(virtual))
+    else:
+        group = IDENTITY
+        within = (IDENTITY, IDENTITY)
     for term in sorted(equation.terms, key=lambda t: t.key):
         if term.key in done:
             continue
         cosets: list[tuple[Permutation, int]] = []
-        for permutation, parity in permutations_of(equation.free):
+        for permutation, parity in group:
             image = term.substituted(dict(permutation)).canonical()
             expected = parity * image.coefficient
             actual = by_key.get(image.key)
@@ -265,13 +309,12 @@ def orbits(equation: Equation) -> list[Orbit]:
             if image.key not in done:
                 done.add(image.key)
                 cosets.append((permutation, parity))
-        occupied, virtual = _letters_of(equation.free)
         result.append(
             Orbit(
                 term,
                 tuple(cosets),
-                _cosets_within(term, _permutations_within(occupied)),
-                _cosets_within(term, _permutations_within(virtual)),
+                _cosets_within(term, within[0]),
+                _cosets_within(term, within[1]),
             )
         )
     return result
@@ -300,12 +343,14 @@ class _Operand:
     expression: str
 
 
+def _space_of(letter: str) -> Space:
+    return Space.OCCUPIED if letter in LABELS[Space.OCCUPIED] else Space.VIRTUAL
+
+
 def _cost(a: str, b: str) -> int:
     cost = 1
     for letter in set(a) | set(b):
-        cost *= EXTENT[
-            Space.OCCUPIED if letter in LABELS[Space.OCCUPIED] else Space.VIRTUAL
-        ]
+        cost *= EXTENT[_space_of(letter)]
     return cost
 
 
@@ -393,6 +438,14 @@ def program(
 
 LINE_LENGTH = 88
 """The line length of the formatter the generated modules are checked with."""
+
+VARIABLES = (*INTERMEDIATES, "s", "r")
+"""The variables of a generated function, in the order they are declared.
+
+Pyright infers the type of an undeclared variable from its assignments
+and gives up beyond 64 of them, which the longer equations exceed, so
+every function declares the variables it assigns first.
+"""
 
 FUNCTION_INDENT = 4
 """Indentation of the statements of a function, which the lines leave out."""
@@ -508,30 +561,60 @@ def _windowed_lines(orbits_: list[Orbit], equation: Equation) -> list[str]:
     return lines
 
 
-def function_source(equation: Equation) -> str:
-    """Write the Python function evaluating the terms of ``equation``."""
-    signature = SIGNATURES[equation.name]
-    parameters = ["h: NormalOrderedHamiltonian", "t1: BlockTensor", "t2: BlockTensor"]
-    parameters += [f"{letter}: TensorAxis" for letter in signature.windowed]
-    lines = [f"def {signature.function}("]
-    if signature.windowed:
-        lines.extend(f"    {parameter}," for parameter in parameters)
-    else:
-        lines.append(f"    {', '.join(parameters)}")
-    lines.append(") -> BlockTensor:")
-    if "\n" in signature.docstring:
-        lines.append('    """' + signature.docstring.replace("\n\n", "\n\n    "))
-        lines.append('    """')
-    else:
-        lines.append(f'    """{signature.docstring}"""')
-    kinds = {factor.kind for term in equation.terms for factor in term.factors}
+def _definition(name: str, parameters: list[str], returns: str) -> list[str]:
+    """Write ``def name(parameters) -> returns:`` as the formatter would.
+
+    One line when it fits, else the parameters on one indented line, else
+    one parameter per line with a trailing comma.
+    """
+    one = f"def {name}({', '.join(parameters)}) -> {returns}:"
+    if len(one) <= LINE_LENGTH:
+        return [one]
+    hugged = ", ".join(parameters)
+    if FUNCTION_INDENT + len(hugged) <= LINE_LENGTH:
+        return [f"def {name}(", f"    {hugged}", f") -> {returns}:"]
+    return [f"def {name}(", *(f"    {p}," for p in parameters), f") -> {returns}:"]
+
+
+def _docstring_lines(docstring: str) -> list[str]:
+    """Write ``docstring`` indented as the body of a function."""
+    if "\n" not in docstring:
+        return [f'    """{docstring}"""']
+    first, *rest = docstring.split("\n")
+    return [
+        f'    """{first}',
+        *(f"    {line}" if line else "" for line in rest),
+        '    """',
+    ]
+
+
+def _hamiltonian_lines(terms: Iterable[Term]) -> list[str]:
+    """Write the line reading the parts of the Hamiltonian the ``terms`` use."""
+    kinds = {factor.kind for term in terms for factor in term.factors}
     names = [kind for kind in (Kind.FOCK, Kind.INTEGRAL) if kind in kinds]
-    lines.append(
+    if not names:
+        return []
+    return [
         "    "
         + ", ".join(kind.value for kind in names)
         + " = "
         + ", ".join(f"h.{ATTRIBUTES[kind]}" for kind in names)
-    )
+    ]
+
+
+def _declaration_lines(body: Iterable[str]) -> list[str]:
+    """Declare the variables the statements of ``body`` assign (:data:`VARIABLES`)."""
+    assigned = {line.partition(" = ")[0] for line in body}
+    return [f"{name}: BlockTensor" for name in VARIABLES if name in assigned]
+
+
+def function_source(equation: Equation) -> str:
+    """Write the Python function evaluating the terms of ``equation``."""
+    signature = SIGNATURES[equation.name]
+    parameters = [
+        f"{name}: {TYPES.get(name, 'BlockTensor')}" for name in signature.operands
+    ]
+    parameters += [f"{letter}: TensorAxis" for letter in signature.windowed]
     groups = orbits(equation)
     body = (
         _windowed_lines(groups, equation)
@@ -542,8 +625,45 @@ def function_source(equation: Equation) -> str:
             for line in _helper_lines(orbit, equation, position == 0)
         ]
     )
-    lines.extend(f"    {line}" for line in body)
+    lines = _definition(signature.function, parameters, "BlockTensor")
+    lines.extend(_docstring_lines(signature.docstring))
+    lines.extend(_hamiltonian_lines(equation.terms))
+    lines.extend(f"    {line}" for line in (*_declaration_lines(body), *body))
     lines.append("    return r")
+    return "\n".join(lines) + "\n"
+
+
+def density_source(blocks: Sequence[Equation]) -> str:
+    """Write the function evaluating the density ``blocks`` into a mapping by spaces."""
+    lines = _definition(
+        "one_particle_density",
+        [f"{name}: BlockTensor" for name in ("t1", "t2", "l1", "l2")],
+        "dict[tuple[Space, Space], BlockTensor]",
+    )
+    lines.extend(
+        _docstring_lines(
+            "``<Φ| (1 + Λ) {p† q} e^T |Φ>`` connected, by the spaces of ``p`` and "
+            "``q``.\n\nEach block is the tensor ``[p, q]`` with ``q`` conjugated, "
+            "pairing with\n``f[p, q]`` in a trace, without the occupations of the "
+            "reference."
+        )
+    )
+    lines.append("    blocks: dict[tuple[Space, Space], BlockTensor] = {}")
+    bodies = [
+        [
+            line
+            for position, orbit in enumerate(orbits(equation))
+            for line in _helper_lines(orbit, equation, position == 0)
+        ]
+        for equation in blocks
+    ]
+    declared = _declaration_lines(line for body in bodies for line in body)
+    lines.extend(f"    {line}" for line in declared)
+    for equation, body in zip(blocks, bodies, strict=True):
+        lines.extend(f"    {line}" for line in body)
+        spaces = ", ".join(SPACE_NAMES[_space_of(letter)] for letter in equation.free)
+        lines.append(f"    blocks[{spaces}] = r")
+    lines.append("    return blocks")
     return "\n".join(lines) + "\n"
 
 
@@ -607,3 +727,22 @@ def ccsd_pt_module_source() -> str:
         for name in ("connected_triples", "disconnected_triples")
     )
     return prelude + "\n" + _constants(equations) + TRIPLES_HELPERS + functions
+
+
+def ccsd_lambda_module_source() -> str:
+    """Write the complete source of :mod:`hafnium.cc._ccsd_lambda_equations`."""
+    equations = ccsd_lambda_equations()
+    prelude = PRELUDE.format(
+        title="The Λ equations of CCSD and its one-particle density",
+        adr="ADR-0034",
+        description=LAMBDA_DESCRIPTION,
+        imports="contract",
+    )
+    residuals = "".join(
+        "\n\n" + function_source(equations[name])
+        for name in ("lambda_singles", "lambda_doubles")
+    )
+    density = "\n\n" + density_source(
+        [equation for equation in equations.values() if not equation.antisymmetric]
+    )
+    return prelude + "\n" + _constants(equations) + CCSD_HELPERS + residuals + density

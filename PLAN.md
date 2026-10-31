@@ -1096,9 +1096,18 @@ and the correction is summed over triples of windows under a memory
 limit; (T) for all eight classes with point-group sectors and over
 k-points, equal across the classes, zero for two electrons, matching
 PySCF's CCSD(T) for RHF, UHF and GHF and its k-point KRCCSD(T) and
-KGCCSD(T) to 1e-10 Hartree. Next: the Λ equations; later the DF-driven
-ladder with windows over the virtual axes, the point operations of a
-space group as further generators over the wedge.
+KGCCSD(T) to 1e-10 Hartree. Part five done 2026-10-31 (ADR-0034): the
+generator derives the Λ equations as the linked terms of
+``<Φ| (1 + Λ) (H_N e^T)_C |Φ_μ>`` and the blocks of the one-particle
+density as ``<Φ| (1 + Λ) ({p† q} e^T)_C |Φ>``, iterated like the
+amplitudes and transformed to the atomic basis over the structure of
+the reference; for all eight classes with point-group sectors and over
+k-points, the density is the derivative of the energy with respect to
+the orbital energies, equals the full-CI density for two electrons, and
+its natural occupations match PySCF's for RHF, UHF and GHF to 1e-10.
+Next: M9; later within M8 the two-particle density for gradients, the
+DF-driven ladder with windows over the virtual axes, the point
+operations of a space group as further generators over the wedge.
 
 **M9 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
 `custom_vjp` from derivative integrals, libxc `custom_jvp`, implicit

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
-from hafnium.backend import Array, array_namespace
+from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.errors import InputError, StructureError
 from hafnium.scf.driver import ScfResult
 from hafnium.structured import (
@@ -20,7 +20,7 @@ from hafnium.structured import (
     TensorStructure,
 )
 from hafnium.structured.tensor import Key
-from hafnium.structured.validation import dtype_for
+from hafnium.structured.validation import cast_to_ring, dtype_for
 
 OCCUPATION_TOLERANCE = 1e-8
 """Deviation of an occupation number from zero or one that still counts as integer."""
@@ -301,6 +301,92 @@ class OrbitalSpaces:
             return xp.astype(xp.eye(shape[0]) * xp.expand_dims(energies, axis=0), dtype)
 
         return BlockTensor.from_function(structure, build)
+
+    def to_atomic_basis(
+        self, blocks: Mapping[tuple[Space, Space], BlockTensor]
+    ) -> BlockMatrix:
+        """Transform an operator from the orbital basis to the atomic basis.
+
+        ``blocks`` holds ``X[p, q]`` by the spaces of its two indices, ``p``
+        conjugated as in the blocks of the Fock operator
+        (:meth:`fock_block`), a block left out being zero; the result is
+        ``C X C†`` over the structure of the state, as the density of
+        :class:`~hafnium.scf.ScfResult` is ``C n C†``, the block at every
+        stored point formed from the sectors of that point.
+
+        Raises
+        ------
+        StructureError
+            If a block does not run over the spaces it is keyed by.
+        """
+        structure = self.structure
+        for (p, q), tensor in blocks.items():
+            axes = (self.axis(p, conjugated=True), self.axis(q, conjugated=False))
+            if tensor.structure.axes != axes:
+                raise StructureError(
+                    f"the block ({p.value}, {q.value}) does not run over those "
+                    "orbitals of this state, conjugated then unconjugated"
+                )
+        xp = array_namespace(*self.occupied.blocks)
+        dtype = xp.result_type(
+            *(c.dtype for c in self.occupied.blocks),
+            *(block.dtype for tensor in blocks.values() for block in tensor.blocks),
+        )
+        indices = [k for k, block in enumerate(structure.blocks) if block.is_stored]
+        n_kpt = 1 if structure.k_axis is None else structure.k_axis.n_kpt
+        sizes = {space: self.sizes(space) for space in Space}
+        result: list[Array] = []
+        for position, block in enumerate(structure.stored_blocks):
+            occupied = self.occupied.blocks[position]
+            virtual = self.virtual.blocks[position]
+            stored = structure.stored_kpoints(block)
+            if stored is None:
+                array = _transformed(
+                    blocks, sizes, indices[position], occupied, virtual, dtype
+                )
+            else:
+                array = xp.stack(
+                    [
+                        _transformed(
+                            blocks,
+                            sizes,
+                            indices[position] * n_kpt + kpoint,
+                            occupied[local],
+                            virtual[local],
+                            dtype,
+                        )
+                        for local, kpoint in enumerate(stored)
+                    ],
+                    axis=0,
+                )
+            result.append(cast_to_ring(xp, array, structure.storage_ring(block)))
+        return BlockMatrix(structure, tuple(result))
+
+
+def _transformed(
+    blocks: Mapping[tuple[Space, Space], BlockTensor],
+    sizes: Mapping[Space, tuple[int, ...]],
+    sector: int,
+    occupied: Array,
+    virtual: Array,
+    dtype: object,
+) -> Array:
+    """``C X C†`` at one sector, ``C`` the occupied then virtual coefficients."""
+    xp = array_namespace(occupied, virtual)
+    key = (sector, sector)
+    rows: list[Array] = []
+    for p in Space:
+        row: list[Array] = []
+        for q in Space:
+            shape = (sizes[p][sector], sizes[q][sector])
+            tensor = blocks.get((p, q))
+            if tensor is None or not all(shape) or not tensor.structure.is_allowed(key):
+                row.append(xp.zeros(shape, dtype=dtype))
+            else:
+                row.append(xp.astype(tensor.block(key), dtype))
+        rows.append(xp.concat(row, axis=1))
+    coefficients = xp.concat([occupied, virtual], axis=-1)
+    return coefficients @ xp.concat(rows, axis=0) @ adjoint(coefficients)
 
 
 def _split_occupations(

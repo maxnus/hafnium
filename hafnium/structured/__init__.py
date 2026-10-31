@@ -19,7 +19,7 @@ of a structure, whose blocks are selected by the conservation of spin and
 irrep charges and contracted with :func:`contract` (ADR-0030).
 """
 
-from hafnium.structured.density import density_matrix
+from hafnium.structured.density import density_matrix, natural_orbitals
 from hafnium.structured.kaxis import KAxis, KDerivation, KPointOperations
 from hafnium.structured.kramers import (
     is_kramers_symmetric,
@@ -61,6 +61,7 @@ __all__ = [
     "is_kramers_symmetric",
     "kramers_adapt_eigenvectors",
     "kramers_symmetrize",
+    "natural_orbitals",
     "time_reverse",
     "time_reverse_operator",
 ]

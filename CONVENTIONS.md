@@ -197,7 +197,14 @@ Spin never appears as an explicit index in method code; it is part of the
   `f[i, a]` with `i` conjugated and `v[OCC, OCC, VIR, VIR]` for
   `<ij||ab>` with `i` and `j` conjugated; the amplitudes are `t1[i, a]` and `t2[i, j, a, b]` with the
   virtual indices conjugated, and the residuals `<Φ_i^a| H_N e^T |Φ>` and
-  `<Φ_ij^ab| H_N e^T |Φ>` share their structure.
+  `<Φ_ij^ab| H_N e^T |Φ>` share their structure. The de-excitation
+  amplitudes of the Λ equations (ADR-0034) are `l1[i, a]` and
+  `l2[i, j, a, b]` with the occupied indices conjugated, the structure
+  of the conjugate amplitudes, which the residuals
+  `<Φ| (1 + Λ) H_N e^T |Φ_i^a>` and `<Φ| (1 + Λ) H_N e^T |Φ_ij^ab>` share;
+  the CCSD density is `D[p, q] = <a†_q a_p>` like the mean-field density,
+  its generated blocks `<Φ| (1 + Λ) {p† q} e^T |Φ>` pairing with
+  `f[p, q]` in a trace.
 - DF tensor: `B[P, u, v]` with the metric already absorbed, so that
   `(uv|wx) ≈ Σ_P B[P, u, v] B[P, w, x]`. Over k-points the tensor lives in
   the eigenbasis of the metric of each momentum transfer and carries the

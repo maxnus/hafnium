@@ -59,6 +59,8 @@ def energy(
 ) -> BlockTensor:
     """``<Φ| H_N e^T |Φ>`` connected, as a tensor without axes."""
     f, v = h.fock, h.integrals
+    x: BlockTensor
+    r: BlockTensor
     x = contract("ia,ia->", f[OCC, VIR], t1)
     r = x
     x = contract("ijab,ia->jb", v[OCC, OCC, VIR, VIR], t1)
@@ -74,6 +76,8 @@ def singles_residual(
 ) -> BlockTensor:
     """``<Φ_i^a| H_N e^T |Φ>`` connected, as the tensor ``[i, a]``."""
     f, v = h.fock, h.integrals
+    x: BlockTensor
+    r: BlockTensor
     x = contract("ji,ja->ia", f[OCC, OCC], t1)
     r = -x
     x = contract("jb,ib->ji", f[OCC, VIR], t1)
@@ -118,6 +122,8 @@ def doubles_residual(
 ) -> BlockTensor:
     """``<Φ_ij^ab| H_N e^T |Φ>`` connected, as the tensor ``[i, j, a, b]``."""
     f, v = h.fock, h.integrals
+    x: BlockTensor
+    r: BlockTensor
     x = contract("ki,jkab->ijab", f[OCC, OCC], t2)
     r = _minus_ij(x)
     x = contract("kc,ic->ki", f[OCC, VIR], t1)
