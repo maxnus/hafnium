@@ -15,7 +15,11 @@ The triples of (T) are evaluated over windows of the occupied axis
 (ADR-0033): the function takes one window per occupied free index, the
 operands are restricted to the windows of the letters they carry, and
 the image of a term under a permutation of the occupied indices is the
-term evaluated over the permuted windows and then permuted.
+term evaluated over the permuted windows and then permuted. When the
+stabilizer of a term is the product of its occupied and its virtual
+parts, the sum over its images factors: the occupied images are summed
+first and the virtual permutations are applied to the sum, once for
+every orbit that shares them.
 """
 
 from __future__ import annotations
@@ -48,21 +52,35 @@ def permutations_of(free: str) -> tuple[tuple[Permutation, int], ...]:
     the virtual letters, the identity first; the parity is the product
     of the parities.
     """
-    occupied = [c for c in free if c in LABELS[Space.OCCUPIED]]
-    virtual = [c for c in free if c in LABELS[Space.VIRTUAL]]
-    result: list[tuple[Permutation, int]] = []
-    for virtual_image in permutations(virtual):
-        for occupied_image in permutations(occupied):
-            moved = tuple(
+    occupied, virtual = _letters_of(free)
+    return tuple(
+        ((*occupied_moved, *virtual_moved), occupied_parity * virtual_parity)
+        for virtual_moved, virtual_parity in _permutations_within(virtual)
+        for occupied_moved, occupied_parity in _permutations_within(occupied)
+    )
+
+
+def _letters_of(free: str) -> tuple[str, str]:
+    """Split the free indices into the occupied and the virtual letters."""
+    return (
+        "".join(c for c in free if c in LABELS[Space.OCCUPIED]),
+        "".join(c for c in free if c in LABELS[Space.VIRTUAL]),
+    )
+
+
+def _permutations_within(letters: str) -> tuple[tuple[Permutation, int], ...]:
+    """List the permutations of ``letters`` alone with parities, identity first."""
+    return tuple(
+        (
+            tuple(
                 (source, target)
-                for source, target in (
-                    *zip(occupied, occupied_image, strict=True),
-                    *zip(virtual, virtual_image, strict=True),
-                )
+                for source, target in zip(letters, image, strict=True)
                 if source != target
-            )
-            result.append((moved, _parity(occupied_image) * _parity(virtual_image)))
-    return tuple(result)
+            ),
+            _parity(image),
+        )
+        for image in permutations(letters)
+    )
 
 
 def _parity(image: tuple[str, ...]) -> int:
@@ -183,15 +201,33 @@ SIGNATURES = {
 
 @dataclass(frozen=True, slots=True)
 class Orbit:
-    """A representative term and the coset representatives of its images."""
+    """A representative term and the coset representatives of its images.
+
+    ``cosets`` are representatives under the permutations of all free
+    indices, ``occupied_cosets`` and ``virtual_cosets`` under those of
+    the occupied and of the virtual indices alone.
+    """
 
     term: Term
     cosets: tuple[tuple[Permutation, int], ...]
+    occupied_cosets: tuple[tuple[Permutation, int], ...]
+    virtual_cosets: tuple[tuple[Permutation, int], ...]
 
     @property
     def antisymmetrizer(self) -> str:
         """Name of the helper applying the coset representatives, empty for none."""
         return ANTISYMMETRIZERS[frozenset(p for p, _ in self.cosets)]
+
+    @property
+    def factored(self) -> bool:
+        """Whether the images are the occupied images permuted by the virtual ones.
+
+        That is the case when the stabilizer of the term is the product
+        of its occupied and its virtual parts, so that the sum over the
+        cosets factors as ``Σ_τ ε(τ) τ Σ_σ ε(σ) σ``; the number of
+        cosets is then the product of the two counts.
+        """
+        return len(self.cosets) == len(self.occupied_cosets) * len(self.virtual_cosets)
 
 
 def orbits(equation: Equation) -> list[Orbit]:
@@ -202,6 +238,8 @@ def orbits(equation: Equation) -> list[Orbit]:
     image of a term under ``g`` is fixed by the term's own, which is
     checked; the orbit is then ``c Σ_cosets ε(g) g(x)`` over the images
     with distinct canonical forms, ``x`` the representative evaluated.
+    The images under the occupied and under the virtual permutations
+    alone are collected the same way, for the factored form.
 
     Raises
     ------
@@ -229,8 +267,30 @@ def orbits(equation: Equation) -> list[Orbit]:
             if image.key not in done:
                 done.add(image.key)
                 cosets.append((permutation, parity))
-        result.append(Orbit(term, tuple(cosets)))
+        occupied, virtual = _letters_of(equation.free)
+        result.append(
+            Orbit(
+                term,
+                tuple(cosets),
+                _cosets_within(term, _permutations_within(occupied)),
+                _cosets_within(term, _permutations_within(virtual)),
+            )
+        )
     return result
+
+
+def _cosets_within(
+    term: Term, group: tuple[tuple[Permutation, int], ...]
+) -> tuple[tuple[Permutation, int], ...]:
+    """Return the permutations of ``group`` with distinct images of ``term``."""
+    seen: set[tuple[object, ...]] = set()
+    cosets: list[tuple[Permutation, int]] = []
+    for permutation, parity in group:
+        key = term.substituted(dict(permutation)).canonical().key
+        if key not in seen:
+            seen.add(key)
+            cosets.append((permutation, parity))
+    return tuple(cosets)
 
 
 # ------------------------------------------------------------------ programs
@@ -355,37 +415,97 @@ def _call(head: str, arguments: list[str]) -> list[str]:
     return [f"{head}(", *(f"    {argument}," for argument in arguments), ")"]
 
 
-def _accumulation(coefficient: Fraction, value: str, first: bool) -> str:
+def _accumulation(
+    coefficient: Fraction, value: str, first: bool, target: str = "r"
+) -> str:
     magnitude = abs(coefficient)
     if magnitude != 1:
         value = f"{float(magnitude)!r} * {value}"
     if first:
-        return f"r = {'-' if coefficient < 0 else ''}{value}"
-    return f"r = r {'-' if coefficient < 0 else '+'} {value}"
+        return f"{target} = {'-' if coefficient < 0 else ''}{value}"
+    return f"{target} = {target} {'-' if coefficient < 0 else '+'} {value}"
 
 
-def _orbit_lines(orbit: Orbit, equation: Equation, first: bool) -> list[str]:
-    """Write the statements adding an orbit to ``r``."""
-    signature = SIGNATURES[equation.name]
-    if not signature.windowed:
-        lines = program(orbit.term, equation.free)
-        value = f"{orbit.antisymmetrizer}(x)" if orbit.antisymmetrizer else "x"
-        return [*lines, _accumulation(orbit.term.coefficient, value, first)]
+def _permuted(name: str, permutation: Permutation, free: str) -> str:
+    """Write the image of the tensor ``name`` under ``permutation``.
+
+    The image under ``g`` carries the label ``g(l)`` where the original
+    carries ``l``, so the axis of ``m`` is taken from the slot of
+    ``g⁻¹(m)``.
+    """
+    inverse = {target: source for source, target in permutation}
+    image = "".join(inverse.get(letter, letter) for letter in free)
+    return name if image == free else f'{name}.permute("{free}->{image}")'
+
+
+def _helper_lines(orbit: Orbit, equation: Equation, first: bool) -> list[str]:
+    """Write the statements adding an orbit to ``r`` through a permutation helper."""
+    lines = program(orbit.term, equation.free)
+    value = f"{orbit.antisymmetrizer}(x)" if orbit.antisymmetrizer else "x"
+    return [*lines, _accumulation(orbit.term.coefficient, value, first)]
+
+
+def _image_lines(
+    orbit: Orbit,
+    equation: Equation,
+    cosets: tuple[tuple[Permutation, int], ...],
+    target: str,
+    first: bool,
+) -> list[str]:
+    """Write the images of an orbit's representative under ``cosets`` into ``target``.
+
+    Each image is the representative evaluated over the windows of the
+    permuted letters and permuted back, added with its parity.
+    """
+    windowed = SIGNATURES[equation.name].windowed
     lines: list[str] = []
-    for permutation, parity in orbit.cosets:
-        # The image under ``g`` carries the label ``g(l)`` where the
-        # representative carries ``l``, so it is the representative over
-        # the windows of ``g(l)`` with the axis of ``m`` taken from the
-        # slot of ``g⁻¹(m)``.
+    for permutation, parity in cosets:
         mapping = dict(permutation)
-        inverse = {target: source for source, target in permutation}
-        windows = {letter: mapping.get(letter, letter) for letter in signature.windowed}
+        windows = {letter: mapping.get(letter, letter) for letter in windowed}
         lines.extend(program(orbit.term, equation.free, windows))
-        image = "".join(inverse.get(letter, letter) for letter in equation.free)
-        value = (
-            "x" if image == equation.free else f'x.permute("{equation.free}->{image}")'
+        value = _permuted("x", permutation, equation.free)
+        lines.append(
+            _accumulation(orbit.term.coefficient * parity, value, first, target)
         )
-        lines.append(_accumulation(orbit.term.coefficient * parity, value, first))
+        first = False
+    return lines
+
+
+def _windowed_lines(orbits_: list[Orbit], equation: Equation) -> list[str]:
+    """Write the statements of an equation evaluated over windows.
+
+    The orbits whose stabilizer factors are summed over their occupied
+    images into ``s``, grouped by their virtual cosets, and the virtual
+    antisymmetrizer of a group is applied to ``s`` once, as permuted
+    copies; the other orbits are evaluated image by image into ``r``.
+    """
+    groups: dict[tuple[Permutation, ...], list[Orbit]] = {}
+    plain: list[Orbit] = []
+    for orbit in orbits_:
+        if orbit.factored:
+            key = tuple(permutation for permutation, _ in orbit.virtual_cosets)
+            groups.setdefault(key, []).append(orbit)
+        else:
+            plain.append(orbit)
+    lines: list[str] = []
+    first = True
+    for members in groups.values():
+        for position, orbit in enumerate(members):
+            lines.extend(
+                _image_lines(orbit, equation, orbit.occupied_cosets, "s", position == 0)
+            )
+        # The identity comes first among the cosets, so the sum starts
+        # with ``s`` itself.
+        expression = " ".join(
+            f"{'-' if parity < 0 else '+'} {_permuted('s', permutation, equation.free)}"
+            for permutation, parity in members[0].virtual_cosets
+        ).removeprefix("+ ")
+        lines.extend(
+            [f"r = {expression}"] if first else [f"x = {expression}", "r = r + x"]
+        )
+        first = False
+    for orbit in plain:
+        lines.extend(_image_lines(orbit, equation, orbit.cosets, "r", first))
         first = False
     return lines
 
@@ -414,10 +534,17 @@ def function_source(equation: Equation) -> str:
         + " = "
         + ", ".join(f"h.{ATTRIBUTES[kind]}" for kind in names)
     )
-    for position, orbit in enumerate(orbits(equation)):
-        lines.extend(
-            f"    {line}" for line in _orbit_lines(orbit, equation, position == 0)
-        )
+    groups = orbits(equation)
+    body = (
+        _windowed_lines(groups, equation)
+        if signature.windowed
+        else [
+            line
+            for position, orbit in enumerate(groups)
+            for line in _helper_lines(orbit, equation, position == 0)
+        ]
+    )
+    lines.extend(f"    {line}" for line in body)
     lines.append("    return r")
     return "\n".join(lines) + "\n"
 
