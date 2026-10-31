@@ -98,6 +98,12 @@ def test_doubles_equation_has_the_thirty_one_orbits(
     assert helpers["-1 f[a,c] t2[i,j,b,c]"] == "_minus_ab"
     assert helpers["-1 v[k,a,i,c] t2[j,k,b,c]"] == "_minus_both"
     assert sum(len(group.cosets) for group in groups) == 63
+    # The term symmetric under the simultaneous swap of both pairs alone
+    # has a stabilizer that is no product, so its images do not factor.
+    factored = {str(group.term): group.factored for group in groups}
+    assert not factored["1 v[k,l,c,d] t2[i,k,a,c] t2[j,l,b,d]"]
+    assert sum(not value for value in factored.values()) == 1
+    assert factored["1 f[k,i] t2[j,k,a,b]"]
     assert all(
         {"", "_minus_ij", "_minus_ab", "_minus_both"} >= {g.antisymmetrizer}
         for g in groups
@@ -261,16 +267,50 @@ def test_triples_equations_have_the_textbook_terms() -> None:
     assert len(terms) == 18
     assert {"1 v[b,c,j,k] t1[i,a]", "1 f[a,i] t2[j,k,b,c]"} <= terms
     assert [len(group.cosets) for group in orbits(disconnected)] == [9, 9]
-    # Only the three-cycles of the occupied indices appear with their own
-    # inverses: the image under one is the representative over the windows
-    # of the other.
+    # Every stabilizer is a transposition of occupied times one of virtual
+    # indices, so the images factor: three occupied images summed, then
+    # the virtual antisymmetrizer applied to the sum.
+    for group in (*groups, *orbits(disconnected)):
+        assert group.factored
+        assert len(group.occupied_cosets) == len(group.virtual_cosets) == 3
+        assert group.occupied_cosets[0] == group.virtual_cosets[0] == ((), 1)
     source = function_source(connected)
-    assert source.count("_windowed(") == 36
-    assert source.count('x.permute("ijkabc->kijabc")') == source.count(
-        'x.permute("ijkabc->jkiabc")'
-    )
+    assert source.count("contract(") == 6
+    assert source.count("_windowed(") == 12
+    assert 'r = s - s.permute("ijkabc->ijkbac") + s.permute("ijkabc->ijkbca")' in source
     assert "f = h.fock" not in source
     assert "f, v = h.fock, h.integrals" in function_source(disconnected)
+
+
+def test_unfactored_orbit_over_windows_is_written_image_by_image() -> None:
+    """A stabilizer that is no product keeps the per-image form after the groups."""
+    l, m = Index(O, "l"), Index(O, "m")
+    c, d, e = Index(V, "c", True), Index(V, "d"), Index(V, "e")
+    # Symmetric under the simultaneous swap of ``i, j`` with ``a, b`` alone.
+    term = Term(
+        Fraction(1),
+        (
+            Factor(Kind.INTEGRAL, (l, m, d, e)),
+            Factor(Kind.DOUBLES, (I, l, A, d)),
+            Factor(Kind.DOUBLES, (J, m, B, e)),
+            Factor(Kind.SINGLES, (K, c)),
+        ),
+    )
+    images = [
+        Term(term.coefficient * parity, term.substituted(dict(g)).factors)
+        for g, parity in permutations_of("ijkabc")
+    ]
+    equation = Equation("connected_triples", "ijkabc", tuple(Term.merge(images)))
+    (orbit,) = orbits(equation)
+    assert not orbit.factored
+    assert len(orbit.cosets) == 18
+    assert len(orbit.occupied_cosets) == len(orbit.virtual_cosets) == 6
+    source = function_source(equation)
+    assert source.count("contract(") == 3 * 18
+    assert "s = " not in source
+    assert source.count("r = r ") == 17
+    # Every image coincides with one other, so the merged coefficient is two.
+    assert "    r = 2.0 * x\n" in source or "    r = -2.0 * x\n" in source
 
 
 def test_permutations_carry_their_parities() -> None:

@@ -378,10 +378,15 @@ uses [Semantic Versioning](https://semver.org/).
   and KGCCSD(T) without the exchange correction to 1e-10 Hartree (PySCF
   has no (T) for KUCCSD, and its KGCCSD shifts the occupied orbital
   energies of the denominators by the Madelung constant, which the
-  comparison undoes). On 16 cores the (T) step of water in def2-SVP
-  takes 0.3–2 s against PySCF's 0.03–0.9 s, and that of the helium cell
-  over 3×1×1 1.2–5.6 s against PySCF's 1.2 s (KRCCSD) and 8.0 s
-  (KGCCSD). `OrbitalSpaces.denominators` takes the space of
+  comparison undoes). The antisymmetrizer of an orbit whose stabilizer
+  is the product of its occupied and its virtual parts is factored: the
+  occupied images are summed and the virtual permutations applied to
+  the sum once per group of orbits, so a batch of triples takes 12
+  contractions instead of 36 and a third of the passes over its tensor.
+  On 16 cores the (T) step of water in def2-SVP takes 0.2–0.9 s against
+  PySCF's 0.03–0.9 s, and that of the helium cell over 3×1×1 0.3–1.4 s
+  against PySCF's 1.2 s (KRCCSD) and 8.0 s (KGCCSD).
+  `OrbitalSpaces.denominators` takes the space of
   every axis from the caller (`space_of` removed), which also fixes the
   MP2 denominators of a state with as many virtual as occupied orbitals
   (H₂ in STO-3G), where the virtual axis was read as occupied;
