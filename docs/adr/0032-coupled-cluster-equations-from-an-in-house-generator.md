@@ -84,8 +84,10 @@ the fitted tensor; and how the amplitude iteration converges.
   the Fock matrix by default and ``KUCCSD`` and ``KGCCSD`` cannot keep it,
   which shifts their correlation energy by 5 mHartree per cell for the
   helium test cell against their own ``KMP2``; the comparison sets
-  ``keep_exxdiv`` on ``KRCCSD`` and leaves the open-shell classes to the
-  cross-class and folding tests.
+  ``keep_exxdiv`` on ``KRCCSD`` and switches the correction off on both
+  sides for the other two classes (a Madelung constant of zero in
+  Hafnium's exchange term, ``exxdiv=None`` in PySCF), where all three
+  agree with PySCF to 1e-10 per cell.
 - The full ``<vv||vv>`` block costs ``n_v⁴`` words, 20 GB for benzene in
   def2-SVP as a generalized state, so the generic path serves small and
   medium systems until the DF-driven ladder lands; the recomputed

@@ -1087,8 +1087,8 @@ with the fitted tensor between every pair of orbital spaces assembling
 the antisymmetrized integrals of any block, shared with MP2; the
 amplitude iteration with DIIS; CCSD for all eight classes with
 point-group sectors and over k-points from the same program, equal to
-FCI for two electrons and matching PySCF's DF-CCSD and KRCCSD to 1e-11
-Hartree. Next: (T) from the same generator with batching over the
+FCI for two electrons and matching PySCF's DF-CCSD and k-point CCSD in
+all three classes to 1e-10 Hartree. Next: (T) from the same generator with batching over the
 occupied triples, then the Λ equations; later the DF-driven ladder, the
 point operations of a space group as further generators over the wedge.
 

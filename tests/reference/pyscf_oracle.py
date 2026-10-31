@@ -333,41 +333,56 @@ def ccsd_reference(
 
 
 def kccsd_reference(
-    cell: Cell, basis: BasisSet, auxiliary: BasisSet, kpoints: KPoints, kind: str
+    cell: Cell,
+    basis: BasisSet,
+    auxiliary: BasisSet,
+    kpoints: KPoints,
+    kind: str,
+    *,
+    exchange_correction: bool = True,
 ) -> dict[str, float]:
-    """Density-fitted ``kind`` (``"krhf"``) k-point HF and CCSD energies per cell.
+    """Density-fitted ``kind`` k-point HF and CCSD energies per cell.
 
-    PySCF's ``KRCCSD`` with Gaussian density fitting in the same auxiliary
-    basis, the reference converged to a gradient of 1e-10 and the
-    amplitudes to a norm of 1e-10. By default PySCF's k-point CCSD
-    classes rebuild the Fock matrix without the Ewald exchange correction
-    of the mean field (``exxdiv=None``) and only shift the orbital
-    energies of the denominators by the Madelung constant for
-    convergence, so their energy is that of a Hamiltonian whose occupied
-    orbital energies differ from the reference's, 5 mHartree per cell
-    here, while ``KMP2`` keeps the corrected energies; ``keep_exxdiv``
-    makes ``KRCCSD`` use the mean field's Fock matrix as Hafnium does.
-    ``KUCCSD`` and ``KGCCSD`` have no such option, so only the restricted
-    class is served.
+    PySCF's ``KRCCSD``, ``KUCCSD`` or ``KGCCSD`` (``"krhf"``, ``"kuhf"``,
+    ``"kghf"``) with Gaussian density fitting in the same auxiliary basis,
+    the reference converged to a gradient of 1e-10 and the amplitudes to
+    a norm of 1e-10. By default PySCF's k-point CCSD classes rebuild the
+    Fock matrix without the Ewald exchange correction of the mean field
+    (``exxdiv=None``) and only shift the orbital energies of the
+    denominators by the Madelung constant for convergence, so their
+    energy is that of a Hamiltonian whose occupied orbital energies differ
+    from the reference's, 5 mHartree per cell for the helium test cell,
+    while ``KMP2`` keeps the corrected energies. ``keep_exxdiv`` makes
+    ``KRCCSD`` use the mean field's Fock matrix as Hafnium does; ``KUCCSD``
+    and ``KGCCSD`` have no such option, so they are compared without the
+    correction on either side (``exchange_correction`` false, PySCF's
+    ``exxdiv=None`` in the mean field too), where the three classes agree.
     """
     pbc_scf: Any = pytest.importorskip("pyscf.pbc.scf")
     pbc_cc: Any = pytest.importorskip("pyscf.pbc.cc")
-    if kind != "krhf":
+    if kind != "krhf" and exchange_correction:
         raise ValueError(
-            "PySCF keeps the exchange correction in the Fock matrix of KRCCSD only"
+            "PySCF keeps the exchange correction in the Fock matrix of KRCCSD only; "
+            "compare the other classes without it"
         )
     reference = pyscf_cell(cell, basis)
     kpts = np.asarray(kpoints.cartesian(cell.lattice))
-    mean_field = pbc_scf.KRHF(reference, kpts=kpts).density_fit(
-        auxbasis=basis_input(cell, auxiliary)
-    )
+    method = {"krhf": pbc_scf.KRHF, "kuhf": pbc_scf.KUHF, "kghf": pbc_scf.KGHF}[kind]
+    mean_field = method(
+        reference, kpts=kpts, exxdiv="ewald" if exchange_correction else None
+    ).density_fit(auxbasis=basis_input(cell, auxiliary))
     mean_field.conv_tol = 1e-13
     mean_field.conv_tol_grad = 1e-10
     mean_field.max_cycle = 300
     reference_energy = float(mean_field.kernel())
     assert mean_field.converged
-    coupled_cluster = pbc_cc.KRCCSD(mean_field)
-    coupled_cluster.keep_exxdiv = True
+    coupled_cluster = {
+        "krhf": pbc_cc.KRCCSD,
+        "kuhf": pbc_cc.KUCCSD,
+        "kghf": pbc_cc.KGCCSD,
+    }[kind](mean_field)
+    if kind == "krhf":
+        coupled_cluster.keep_exxdiv = True
     coupled_cluster.conv_tol = 1e-12
     coupled_cluster.conv_tol_normt = 1e-10
     coupled_cluster.max_cycle = 200

@@ -337,8 +337,8 @@ uses [Semantic Versioning](https://semver.org/).
   DF-CCSD (RHF, UHF, GHF) and `KRCCSD` with `keep_exxdiv` to 3e-11
   Hartree; PySCF's k-point CCSD drops the Ewald exchange correction from
   the Fock matrix by default, which its `KUCCSD` and `KGCCSD` cannot
-  keep, so the open-shell k-point classes are checked against each other
-  and by band folding. The ring of `OrbitalSpaces` is complex over a mesh
+  keep, so those two are compared with the correction switched off on
+  both sides, where all three k-point classes agree with PySCF to 1e-10. The ring of `OrbitalSpaces` is complex over a mesh
   with points that time reversal does not leave invariant. A block
   contraction is one `tensordot` per pair of blocks, with the operands
   ordered to spare the permutation of the product, and the keys, stored

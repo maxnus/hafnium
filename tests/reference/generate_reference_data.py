@@ -10,7 +10,7 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``fitting_<cell>_<basis>.json``, ``kscf_<cell>_<basis>.json``,
 ``dft_<molecule>_<basis>.json``, ``mp2_<molecule>_<basis>.json``,
 ``kmp2_<cell>_<basis>.json``, ``ccsd_<molecule>_<basis>.json`` and
-``kccsd_<cell>_<basis>.json`` with the PySCF values and their provenance.
+``kccsd_<cell>_<basis>_<class>.json`` with the PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -473,23 +473,29 @@ def record_ccsd() -> None:
 
 
 def record_k_point_ccsd() -> None:
-    """Write the k-point density-fitted CCSD cases."""
-    for name, basis_name, kind in KCCSD_CASES:
+    """Write the k-point density-fitted CCSD cases, one file per class."""
+    for name, basis_name, kind, exchange_correction in KCCSD_CASES:
         cell = KSCF_CELLS[name]()
         basis = BasisSet.for_atoms(cell, basis_name, library=LIBRARY)
         auxiliary = BasisSet.for_atoms(cell, KSCF_AUXILIARY, library=LIBRARY)
         mesh = KSCF_MESHES[name]
-        reference = kccsd_reference(cell, basis, auxiliary, mesh, kind)
+        reference = kccsd_reference(
+            cell, basis, auxiliary, mesh, kind, exchange_correction=exchange_correction
+        )
+        exxdiv = "ewald" if exchange_correction else "None"
+        keep = " with keep_exxdiv=True" if kind == "krhf" else ""
         record(
             "kccsd",
             cell,
             name,
-            basis_name,
-            f"pbc.scf.{kind.upper()}.density_fit with conv_tol=1e-13, "
-            "conv_tol_grad=1e-10, then pbc.cc.KRCCSD with keep_exxdiv=True in the "
-            "same auxiliary basis with conv_tol=1e-12, conv_tol_normt=1e-10; Bohr",
+            f"{basis_name}_{kind}",
+            f"pbc.scf.{kind.upper()}(exxdiv={exxdiv}).density_fit with "
+            f"conv_tol=1e-13, conv_tol_grad=1e-10, then pbc.cc.{kind[1].upper()}CCSD"
+            f"{keep} in the same auxiliary basis with conv_tol=1e-12, "
+            "conv_tol_normt=1e-10; Bohr",
             {key: np.asarray(value) for key, value in reference.items()},
             method=kind,
+            exchange_correction=exchange_correction,
             auxiliary=KSCF_AUXILIARY,
             mesh=list(mesh.mesh_size()),
             charge=cell.charge,
