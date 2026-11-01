@@ -34,7 +34,12 @@ from hafnium.symmetry import SymmetrySpec
 from tests.hamiltonians import ENGINE
 from tests.molecules import ammonia_tilted, water
 from tests.shell_tables import LIBRARY
-from tests.tolerances import GRADIENT_FINITE_DIFFERENCE_TOL, GRADIENT_TOL, INTEGRAL_TOL
+from tests.tolerances import (
+    FITTED_ENERGY_SOLVE_TOL,
+    GRADIENT_FINITE_DIFFERENCE_TOL,
+    GRADIENT_TOL,
+    INTEGRAL_TOL,
+)
 
 AUXILIARY = "def2-universal-jkfit"
 STEP = 1e-4
@@ -302,7 +307,9 @@ def test_fixed_density_energy_differentiates_to_the_analytic_gradient() -> None:
         charges = np.asarray(molecule.nuclear_charges)
         energy = fixed_density_energy(integrals, spinor, charges, xp)
         positions = xp.asarray(molecule.positions_array())
-        assert float(energy(positions)) == pytest.approx(state.energy, abs=1e-9)
+        assert float(energy(positions)) == pytest.approx(
+            state.energy, abs=FITTED_ENERGY_SOLVE_TOL
+        )
         gradient = jax.grad(energy)(positions)
     np.testing.assert_allclose(np.asarray(gradient), expected, atol=GRADIENT_TOL)
 
