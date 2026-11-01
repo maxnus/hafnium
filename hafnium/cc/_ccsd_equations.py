@@ -13,7 +13,7 @@ without axes and the residuals ``<Φ_i^a| H_N e^T |Φ>`` and
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 from hafnium.structured import BlockTensor, contract
 
 OCC, VIR = Space.OCCUPIED, Space.VIRTUAL

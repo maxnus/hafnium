@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from hafnium.correlated import FittedOrbitalTensors, Space
+from hafnium.orbitals import FittedOrbitalTensors, Space
 from hafnium.structured import BlockTensor
 
 FockBlock = tuple[Space, Space]
@@ -42,10 +42,10 @@ class NormalOrderedHamiltonian:
         """Form the blocks an equation reads from the fitted tensors.
 
         The Fock blocks are those of the canonical orbitals of the
-        reference (:meth:`~hafnium.correlated.OrbitalSpaces.fock_block`)
+        reference (:meth:`~hafnium.orbitals.OrbitalSpaces.fock_block`)
         over the ring of the fitted tensors, the integral blocks the
         antisymmetrized ones of
-        :meth:`~hafnium.correlated.FittedOrbitalTensors.antisymmetrized`.
+        :meth:`~hafnium.orbitals.FittedOrbitalTensors.antisymmetrized`.
         """
         return cls(
             {

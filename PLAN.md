@@ -179,7 +179,9 @@ hafnium/                   Python package
   grid/                  DFT grids (Python orchestration of Rust kernels)
   xc/                    functional registry, libxc binding
   scf/                   SCF driver, hf, ks, guesses, convergence, stability
-  correlated/            orbital spaces, integrals in the orbital basis, shared by mp and cc
+  orbitals/              the orbital basis of a converged state: occupied and
+                         virtual spaces as tensor axes, the fitted integrals in
+                         that basis; shared by mp and cc
   mp/                    DF-MP2
   cc/                    CCSD, (T); generated contraction code + generator
   properties/            dipoles, population analysis, gradients

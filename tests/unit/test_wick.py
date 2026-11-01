@@ -40,7 +40,7 @@ from hafnium.cc.generator.wick import (
     expectation,
     full_contractions,
 )
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 
 O, V = Space.OCCUPIED, Space.VIRTUAL
 I, J, K = (Index(O, label, True) for label in "ijk")

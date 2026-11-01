@@ -48,7 +48,7 @@ from hafnium.cc.generator.wick import (
     Term,
     expectation,
 )
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 
 Cluster = Callable[["DummyIndices"], OperatorString]
 """A cluster operator, built over fresh dummy indices."""

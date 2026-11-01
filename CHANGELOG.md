@@ -287,7 +287,7 @@ uses [Semantic Versioning](https://semver.org/).
   two-operand `contract` in einsum notation (ADR-0030); `IrrepSectors`
   carries the characters of its irreps, and a spinor block of a
   `BlockMatrix` needs an even number of rows only, so orbital
-  coefficients with an odd column count are valid. The `correlated`
+  coefficients with an odd column count are valid. The `orbitals`
   package splits a converged state into its orbital spaces
   (`OrbitalSpaces`), brings the fitted tensor to the orbital basis with
   the auxiliary basis symmetry-adapted (`transform_df_tensor`) and forms

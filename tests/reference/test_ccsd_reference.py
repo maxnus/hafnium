@@ -14,8 +14,8 @@ from hafnium.cc import (
     solve_ccsd_pt,
     solve_lambda,
 )
-from hafnium.correlated import FittedOrbitalTensors
 from hafnium.molecule import Molecule
+from hafnium.orbitals import FittedOrbitalTensors
 from hafnium.scf import DensityFittedCoulombExchange, Hamiltonian, ScfOptions, solve_scf
 from hafnium.structured import BlockMatrix
 from hafnium.symmetry import SymmetrySpec

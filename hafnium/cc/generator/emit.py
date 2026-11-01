@@ -36,7 +36,7 @@ from hafnium.cc.generator.equations import (
     ccsd_pt_equations,
 )
 from hafnium.cc.generator.wick import LABELS, SPACE_NAMES, Kind, Term
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 
 INTERMEDIATES = ("x", "y", "z", "w")
 """Names of the intermediates of a term's program, the result in the first."""
@@ -114,7 +114,7 @@ test regenerates it to detect drift. {description}
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 from hafnium.structured import BlockTensor, {imports}
 
 OCC, VIR = Space.OCCUPIED, Space.VIRTUAL

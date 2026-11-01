@@ -36,12 +36,12 @@ from hafnium.cc._ccsd_lambda_equations import (
 from hafnium.cc.ccsd import CcsdOptions, CcsdResult, solve_ccsd
 from hafnium.cc.diis import AmplitudeDiis
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.integrals import IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
 from hafnium.molecule import Cell, Molecule
+from hafnium.orbitals import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.scf import ScfResult
 from hafnium.structured import BlockMatrix, BlockTensor, IrrepSectors, TensorStructure
 from hafnium.structured.validation import dtype_for

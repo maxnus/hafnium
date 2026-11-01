@@ -27,7 +27,7 @@ from enum import Enum
 from fractions import Fraction
 from itertools import permutations, product
 
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 
 LABELS = {Space.OCCUPIED: "ijklmn", Space.VIRTUAL: "abcdef"}
 """The labels of the indices of each space, free ones first."""

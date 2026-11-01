@@ -23,10 +23,10 @@ from hafnium.cc import (
     triples_correction,
 )
 from hafnium.cc.ccsd_pt import window_size
-from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.molecule import Molecule
 from hafnium.mp import mp2_from_df_tensor
+from hafnium.orbitals import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.scf import (
     DensityFittedCoulombExchange,
     Hamiltonian,

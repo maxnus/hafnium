@@ -15,7 +15,7 @@ occupied indices at a time.
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 from hafnium.structured import BlockTensor, TensorAxis, contract
 
 OCC, VIR = Space.OCCUPIED, Space.VIRTUAL

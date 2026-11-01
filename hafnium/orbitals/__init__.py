@@ -1,6 +1,7 @@
-"""What the correlated methods share: orbital spaces and integrals in the orbital basis.
+"""The orbital basis of a mean-field state: its spaces, and the integrals in it.
 
-A converged mean-field state is split into its occupied and virtual
+What the correlated methods of :mod:`hafnium.mp` and :mod:`hafnium.cc`
+share. A converged mean-field state is split into its occupied and virtual
 canonical orbitals per stored block (:class:`OrbitalSpaces`), which define
 the axes of the block tensors of ADR-0030; the fitted integrals are
 brought to the orbital basis as a three-index block tensor
@@ -14,7 +15,7 @@ of spaces and assembles the antisymmetrized integrals ``<pq||rs>`` of any
 block from it.
 """
 
-from hafnium.correlated.integrals import (
+from hafnium.orbitals.integrals import (
     FittedOrbitalTensors,
     FittedPeriodicTensors,
     auxiliary_axis,
@@ -24,7 +25,7 @@ from hafnium.correlated.integrals import (
     transform_fitted_tensors,
     transform_periodic_fitting,
 )
-from hafnium.correlated.orbitals import OCCUPATION_TOLERANCE, OrbitalSpaces, Space
+from hafnium.orbitals.spaces import OCCUPATION_TOLERANCE, OrbitalSpaces, Space
 
 __all__ = [
     "OCCUPATION_TOLERANCE",

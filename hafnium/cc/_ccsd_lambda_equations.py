@@ -16,7 +16,7 @@ one-particle density ``<Φ| (1 + Λ) {p† q} e^T |Φ>`` by the spaces of
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 from hafnium.structured import BlockTensor, contract
 
 OCC, VIR = Space.OCCUPIED, Space.VIRTUAL

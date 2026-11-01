@@ -24,11 +24,11 @@ from dataclasses import dataclass
 
 from hafnium.backend import Array, array_namespace
 from hafnium.basis import BasisSet
-from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.integrals import IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
 from hafnium.molecule import Cell, Molecule
+from hafnium.orbitals import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.scf import ScfResult
 from hafnium.structured import BlockTensor, IrrepSectors, contract
 from hafnium.symmetry import KPoints
@@ -78,7 +78,7 @@ def df_mp2(
     """Compute the DF-MP2 energy of a converged Hartree–Fock ``reference``.
 
     The two-electron integrals are fitted as
-    :meth:`~hafnium.correlated.FittedOrbitalTensors.build` says: in the
+    :meth:`~hafnium.orbitals.FittedOrbitalTensors.build` says: in the
     ``auxiliary`` basis with the Coulomb metric, whose eigenvalues below
     ``threshold`` of the largest are dropped, adapted to the point group
     of a molecular reference over irrep sectors, with momentum transfer
@@ -104,7 +104,7 @@ def mp2_from_df_tensor(
 
     ``auxiliary`` holds the irrep sectors of the auxiliary basis when the
     reference is blocked over a point group; see
-    :func:`~hafnium.correlated.transform_df_tensor`.
+    :func:`~hafnium.orbitals.transform_df_tensor`.
     """
     fitted = FittedOrbitalTensors.from_df_tensor(
         df_tensor, OrbitalSpaces.from_scf(reference), auxiliary=auxiliary
@@ -121,7 +121,7 @@ def mp2_from_periodic_fitting(
     """Compute the DF-MP2 energy per cell of a periodic ``reference``.
 
     The fitted tensor of ``fitting`` enters the Bloch orbital basis in the
-    supercell normalization (:func:`~hafnium.correlated.transform_periodic_fitting`),
+    supercell normalization (:func:`~hafnium.orbitals.transform_periodic_fitting`),
     the second-order energy of the supercell of the mesh is summed over
     the blocks that conserve crystal momentum, and the energy per cell is
     that divided by the number of k-points.
@@ -135,7 +135,7 @@ def mp2_from_periodic_fitting(
 def second_order(reference: ScfResult, fitted: FittedOrbitalTensors) -> Mp2Result:
     """Form the second-order energy and amplitudes from the fitted tensors.
 
-    ``<ij||ab>`` is :meth:`~hafnium.correlated.FittedOrbitalTensors.antisymmetrized`
+    ``<ij||ab>`` is :meth:`~hafnium.orbitals.FittedOrbitalTensors.antisymmetrized`
     of the occupied–occupied–virtual–virtual block; ``t2 = <ab||ij> / Δ``
     is its conjugate over the denominators, and ``E₂ = ¼ Σ <ij||ab> t2``
     divided by the number of cells in the supercell of the mesh.
