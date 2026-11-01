@@ -1,12 +1,15 @@
 """Functionals: metadata, named combinations and the evaluation on densities."""
 
+# JAX's own annotations leave parts of its API unknown to a strict checker.
+# pyright: reportUnknownArgumentType=false, reportUnknownVariableType=false
+
 import dataclasses
 import math
 
 import numpy as np
 import pytest
 
-from hafnium.backend import Array
+from hafnium.backend import Array, use_backend
 from hafnium.errors import InputError
 from hafnium.xc import (
     NAMED_FUNCTIONALS,
@@ -486,4 +489,106 @@ def collinear_of_zero(density: NoncollinearDensity) -> DensityOnGrid:
         np.stack([0.5 * density.rho, 0.5 * density.rho]),
         np.stack([sigma, sigma, sigma]),
         np.stack([0.5 * density.tau, 0.5 * density.tau]),
+    )
+
+
+# ------------------------------------------------------------ the JAX rule
+
+
+def jax_density(points: Array, xp: object) -> DensityOnGrid:
+    host = density_at(points)
+    asarray = xp.asarray  # type: ignore[attr-defined]
+    return DensityOnGrid(asarray(host.rho), asarray(host.sigma), asarray(host.tau))
+
+
+@pytest.mark.parametrize("name", ["lda", "pbe", "b3lyp", "tpss"])
+def test_jax_evaluation_matches_numpy(name: str) -> None:
+    pytest.importorskip("jax")
+    functional = (
+        Functional.named(name) if name != "lda" else Functional.from_libxc("lda_x")
+    )
+    expected = evaluate_functional(functional, density_at(POINTS))
+    with use_backend("jax") as backend:
+        values = evaluate_functional(functional, jax_density(POINTS, backend.namespace))
+    for field in ("energy_per_particle", "vrho", "vsigma", "vtau"):
+        got, want = getattr(values, field), getattr(expected, field)
+        assert (got is None) == (want is None)
+        if got is not None:
+            np.testing.assert_allclose(np.asarray(got), np.asarray(want), atol=1e-13)
+
+
+@pytest.mark.parametrize("name", ["lda", "pbe", "tpss"])
+def test_jvp_matches_finite_differences_of_the_derivatives(name: str) -> None:
+    jax = pytest.importorskip("jax")
+    functional = (
+        Functional.named(name) if name != "lda" else Functional.from_libxc("lda_x")
+    )
+    rng = np.random.default_rng(11)
+    direction = rng.standard_normal(POINTS.shape) * POINTS
+
+    def stacked(points: Array) -> Array:
+        """Energy density and the derivatives the rung reads, as one ``[rows, g]``."""
+        values = evaluate_functional(functional, density_at(points))
+        rows = [
+            (points[:, 0] + points[:, 1]) * values.energy_per_particle,
+            *values.vrho,
+        ]
+        if values.vsigma is not None:
+            rows.extend(values.vsigma)
+        if values.vtau is not None:
+            rows.extend(values.vtau)
+        return np.stack(rows)
+
+    step = FINITE_DIFFERENCE_STEP
+    numeric = (
+        stacked(POINTS + step * direction) - stacked(POINTS - step * direction)
+    ) / (2.0 * step)
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+
+        def traced(points: Array) -> Array:
+            density = DensityOnGrid(
+                xp.linalg.matrix_transpose(points[:, 0:2]),
+                xp.linalg.matrix_transpose(points[:, 2:5]),
+                xp.linalg.matrix_transpose(points[:, 5:7]),
+            )
+            values = evaluate_functional(functional, density)
+            total = points[:, 0] + points[:, 1]
+            rows = [total * values.energy_per_particle, values.vrho[0], values.vrho[1]]
+            if values.vsigma is not None:
+                rows.extend(values.vsigma[k] for k in range(3))
+            if values.vtau is not None:
+                rows.extend(values.vtau[k] for k in range(2))
+            return xp.stack(rows)
+
+        _, tangent = jax.jvp(traced, (xp.asarray(POINTS),), (xp.asarray(direction),))
+        compiled = jax.jit(traced)(xp.asarray(POINTS))
+    np.testing.assert_allclose(
+        np.asarray(tangent),
+        numeric,
+        rtol=FINITE_DIFFERENCE_TOL,
+        atol=FINITE_DIFFERENCE_TOL,
+    )
+    np.testing.assert_allclose(np.asarray(compiled), stacked(POINTS), atol=1e-13)
+
+
+def test_grad_of_the_integrated_energy_is_the_potential() -> None:
+    jax = pytest.importorskip("jax")
+    functional = Functional.named("pbe")
+    weights = np.array([0.5, 1.0, 2.0, 0.25])
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        host = density_at(POINTS)
+        sigma = xp.asarray(host.sigma)
+
+        def energy(rho: Array) -> Array:
+            values = evaluate_functional(functional, DensityOnGrid(rho, sigma))
+            return xp.sum(
+                xp.asarray(weights) * (rho[0] + rho[1]) * values.energy_per_particle
+            )
+
+        gradient = jax.grad(energy)(xp.asarray(host.rho))
+    expected = evaluate_functional(functional, host)
+    np.testing.assert_allclose(
+        np.asarray(gradient), weights * expected.vrho, atol=1e-12
     )

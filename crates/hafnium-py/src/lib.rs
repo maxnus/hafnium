@@ -845,6 +845,65 @@ fn evaluate_functional<'py>(
     ))
 }
 
+/// Second derivatives of `Σ weights[i] names[i]` at every point, in libxc's
+/// packed layouts over the first axis: `(v2rho2 [3, g], v2rhosigma [6, g],
+/// v2sigma2 [6, g], v2rhotau [4, g], v2sigmatau [6, g], v2tau2 [3, g])`,
+/// `None` for the rows the rung does not read.
+#[pyfunction]
+#[pyo3(signature = (names, weights, rho, sigma=None, tau=None))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 passes the arrays by value"
+)]
+#[expect(
+    clippy::type_complexity,
+    reason = "the binding returns the six arrays of the kernel"
+)]
+fn evaluate_functional_second<'py>(
+    py: Python<'py>,
+    names: Vec<String>,
+    weights: PyReadonlyArray1<'py, f64>,
+    rho: PyReadonlyArray2<'py, f64>,
+    sigma: Option<PyReadonlyArray2<'py, f64>>,
+    tau: Option<PyReadonlyArray2<'py, f64>>,
+) -> PyResult<(
+    Bound<'py, PyArray2<f64>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+    Option<Bound<'py, PyArray2<f64>>>,
+)> {
+    let weights = weights.as_slice()?;
+    if weights.len() != names.len() {
+        return Err(PyValueError::new_err("one weight per functional name"));
+    }
+    let components: Vec<(String, f64)> = names.into_iter().zip(weights.iter().copied()).collect();
+    if rho.shape()[0] != 2 {
+        return Err(PyValueError::new_err("densities have shape [2, g]"));
+    }
+    let n = rho.shape()[1];
+    let sigma = to_rows(sigma.as_ref(), 3, n, "contracted gradients")?;
+    let tau = to_rows(tau.as_ref(), 2, n, "kinetic energy densities")?;
+    let second = xc::evaluate_functional_second(&components, rho.as_slice()?, sigma, tau)
+        .map_err(|error| value_error(&error))?;
+    let rows = |data: Vec<f64>, parts: usize| -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
+        if data.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(data.into_pyarray(py).reshape([parts, n])?))
+        }
+    };
+    Ok((
+        second.v2rho2.into_pyarray(py).reshape([3, n])?,
+        rows(second.v2rhosigma, 6)?,
+        rows(second.v2sigma2, 6)?,
+        rows(second.v2rhotau, 4)?,
+        rows(second.v2sigmatau, 6)?,
+        rows(second.v2tau2, 3)?,
+    ))
+}
+
 /// Multi-collinear evaluation of `Σ weights[i] names[i]` for a noncollinear
 /// density (ADR-0029): the energy density and the derivatives with respect
 /// to `rho [g]`, `m [3, g]`, `grad_rho [3, g]`, `grad_m [3, 3, g]`,
@@ -1188,6 +1247,7 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(partition_weights, module)?)?;
     module.add_function(wrap_pyfunction!(functional_info, module)?)?;
     module.add_function(wrap_pyfunction!(evaluate_functional, module)?)?;
+    module.add_function(wrap_pyfunction!(evaluate_functional_second, module)?)?;
     module.add_function(wrap_pyfunction!(evaluate_noncollinear, module)?)?;
     module.add_function(wrap_pyfunction!(configure_threads, module)?)?;
     Ok(())

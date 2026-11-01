@@ -155,6 +155,11 @@ def host_namespace() -> Namespace:
     return HOST_NAMESPACE
 
 
+def is_jax_array(array: object) -> bool:
+    """Whether ``array`` is a JAX array or tracer, which takes the JAX rules."""
+    return array_api_compat.is_jax_array(array)
+
+
 def from_host(array: Array) -> Array:
     """Return a host array as an array of the active backend."""
     return active_backend().from_host(array)

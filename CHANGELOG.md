@@ -447,4 +447,14 @@ uses [Semantic Versioning](https://semver.org/).
   structure as static metadata; every method, molecular and periodic,
   gives the same energies under NumPy and JAX, which the parity tests
   check, and JAX joins the development dependencies.
+- Differentiable kernels (ADR-0037): `hafnium.integrals.DifferentiableIntegrals`
+  exposes the overlap, kinetic, nuclear attraction, two- and three-centre
+  Coulomb integrals as functions of the shell centres, which follow the
+  atomic positions by a gather, with `nuclear_repulsion` beside them;
+  under JAX each is a host callback with a custom vector-Jacobian product
+  from the derivative integrals, so the integrals trace under `jit` and
+  differentiate under `grad`; the functional evaluation gains a custom
+  Jacobian-vector product from the second derivatives of `xcx`, bound as
+  `evaluate_functional_second`. The gradient of the Hartree–Fock energy
+  at fixed density equals the analytic gradient without its overlap term.
 

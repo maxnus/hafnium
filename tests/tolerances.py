@@ -184,3 +184,8 @@ GRADIENT_FINITE_DIFFERENCE_TOL = 1e-7
 # same auxiliary basis, and across the Fukutome classes: first order in the
 # residual orbital error.
 GRADIENT_TOL = 1e-7
+# A density-fitted energy assembled from an explicit solve with the fitting
+# metric against the SCF's own energy at the same density: the universal
+# JKFIT metric of water has a condition number of 2e7, so two solves that
+# round differently agree only to about that times machine epsilon.
+FITTED_ENERGY_SOLVE_TOL = 1e-8
