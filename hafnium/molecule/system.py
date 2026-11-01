@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from hafnium.backend import Array, Namespace, default_namespace
+from hafnium.backend import Array, Namespace, host_namespace
 from hafnium.errors import InputError
 from hafnium.molecule.elements import SYMBOLS, atomic_number
 from hafnium.molecule.units import ANGSTROM_IN_BOHR
@@ -186,7 +186,7 @@ class AtomicSystem:
 
     def positions_array(self, xp: Namespace | None = None) -> Array:
         """Positions as an array ``[atom, 3]`` in Bohr."""
-        xp = default_namespace() if xp is None else xp
+        xp = host_namespace() if xp is None else xp
         return xp.asarray(self.positions, dtype=xp.float64)
 
     def to_xyz(self, *, comment: str = "", unit: str = "angstrom") -> str:

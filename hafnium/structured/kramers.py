@@ -74,8 +74,9 @@ def kramers_adapt_eigenvectors(
     pairs ``(u, Θu)``. Eigenvalues closer than ``tolerance`` (relative to the
     spectral range) are treated as degenerate.
 
-    This function uses data-dependent control flow and cannot be traced by
-    JAX; the JAX backend milestone will provide a traceable variant.
+    This function uses data-dependent control flow, so it runs eagerly
+    under JAX and cannot be traced; a traceable variant belongs to the
+    automatic-differentiation milestone.
 
     Raises
     ------

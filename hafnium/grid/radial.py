@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from hafnium.backend import Array, default_namespace
+from hafnium.backend import Array, host_namespace
 from hafnium.errors import InputError
 
 TREUTLER_XI: tuple[float, ...] = (
@@ -56,7 +56,7 @@ def treutler_ahlrichs(n_points: int, xi: float = 1.0) -> tuple[Array, Array]:
     _check_count(n_points)
     if not (math.isfinite(xi) and xi > 0.0):
         raise InputError("the radial scale is a positive number")
-    xp = default_namespace()
+    xp = host_namespace()
     i = xp.arange(1, n_points + 1, dtype=xp.float64)
     step = math.pi / (n_points + 1)
     x = xp.cos(i * step)
@@ -80,7 +80,7 @@ def mura_knowles(n_points: int, far: float = 5.2) -> tuple[Array, Array]:
     _check_count(n_points)
     if not (math.isfinite(far) and far > 0.0):
         raise InputError("the radial scale is a positive number")
-    xp = default_namespace()
+    xp = host_namespace()
     x = (xp.arange(n_points, dtype=xp.float64) + 0.5) / n_points
     cube = x**3
     radii = -far * xp.log(1.0 - cube)

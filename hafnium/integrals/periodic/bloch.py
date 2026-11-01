@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable
 
-from hafnium.backend import Array, array_namespace, default_namespace
+from hafnium.backend import Array, array_namespace, from_host, host_namespace
 from hafnium.basis import BasisSet, Shell
 from hafnium.errors import InputError
 from hafnium.integrals.engine import IntegralEngine
@@ -150,7 +150,7 @@ def _primitive_terms(shells: Iterable[Shell]) -> tuple[Array, Array]:
     ``α'_i = (1 − δ) α_i``, the polynomial of the function absorbed by the
     split ``δ`` of the exponent.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     amplitudes: list[float] = []
     exponents: list[float] = []
     for shell in shells:
@@ -191,7 +191,7 @@ def _reach_matrix(
     A pair of types is evaluated once in either order, so the matrix of a
     basis with itself is exactly symmetric.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     types_a, atoms_a = _atom_types(first)
     types_b, atoms_b = _atom_types(second)
     same = types_a == types_b
@@ -286,7 +286,7 @@ def pair_reach(
     changes by less than the precision when those images are left out.
     """
     _check_precision(precision)
-    xp = default_namespace()
+    xp = host_namespace()
 
     def reach(shells_a: tuple[Shell, ...], shells_b: tuple[Shell, ...]) -> float:
         amplitudes_a, exponents_a = _primitive_terms(shells_a)
@@ -341,7 +341,7 @@ def coulomb_reach(
         raise InputError("the range-separation parameter omega is positive")
     if not (math.isfinite(spectator) and spectator > 0.0):
         raise InputError("the spectator amplitude is a positive number")
-    xp = default_namespace()
+    xp = host_namespace()
 
     def reach(shells_a: tuple[Shell, ...], shells_b: tuple[Shell, ...]) -> float:
         amplitudes_a, exponents_a = _primitive_terms(shells_a)
@@ -378,7 +378,7 @@ def periodic_amplitude(basis: BasisSet, lattice: Lattice) -> float:
     over the ``d`` periodic directions, which is at most its value at
     ``r = 0``, ``Σ_T exp(−α T²)``, summed where its terms are above ``1e-16``.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     largest = 0.0
     for shell in basis.shells:
         amplitudes, exponents = _primitive_terms([shell])
@@ -488,7 +488,9 @@ def bloch_sum(
     """Return ``Σ_T exp(i k·T) images[T]`` at every k-point as complex ``[kpt, ...]``.
 
     ``images`` holds one array per translation along its first axis, as the
-    engine returns them, and ``translations`` is ``[image, 3]`` in Bohr.
+    engine returns them, and ``translations`` is ``[image, 3]`` in Bohr. The
+    sum stays a host array like its inputs; the public one-electron
+    helpers hand their results to the active backend (ADR-0036).
     """
     xp = array_namespace(images, translations)
     if translations.ndim != 2 or translations.shape[1] != 3:
@@ -511,9 +513,10 @@ def overlap_k(
 ) -> Array:
     """Overlap matrices ``S(k)`` as complex ``[kpt, ao, ao]`` over ``kpoints``.
 
-    Code that needs several matrices of one cell calls
-    :func:`lattice_images` once and :func:`bloch_sum` on each engine
-    result, so that one image list serves them all.
+    The array belongs to the active backend (ADR-0036). Code that needs
+    several matrices of one cell calls :func:`lattice_images` once and
+    :func:`bloch_sum` on each engine result, so that one image list serves
+    them all.
     """
     return _lattice_sum(engine.overlap, basis, cell, kpoints, precision)
 
@@ -544,6 +547,7 @@ def _lattice_sum(
     require_kpoints_for_lattice(kpoints, cell.lattice)
     table = ShellTable.from_basis(basis, cell)
     translations = lattice_images(basis, cell, precision=precision)
-    return bloch_sum(
+    summed = bloch_sum(
         kernel(table, table, translations), translations, kpoints, cell.lattice
     )
+    return from_host(summed)

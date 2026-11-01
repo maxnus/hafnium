@@ -233,7 +233,7 @@ class ExchangeCorrelation:
         electrons = 0.0
         for batch in self.grid.batches(self._points_per_batch()):
             values = xp.asarray(self._values(batch, order, phases))
-            weights = self.grid.weights[batch]
+            weights = xp.asarray(self.grid.weights[batch])
             batch_density = _densities(values, spins, k_weights, self.functional)
             xc = evaluate_functional(self.functional, batch_density.on_grid)
             total = batch_density.on_grid.rho[0] + batch_density.on_grid.rho[1]
@@ -272,7 +272,7 @@ class ExchangeCorrelation:
         unconverged = 0
         for batch in self.grid.batches(self._points_per_batch()):
             values = xp.asarray(self._values(batch, order, phases))
-            weights = self.grid.weights[batch]
+            weights = xp.asarray(self.grid.weights[batch])
             on_grid = _spinor_densities(values, matrix, k_weights, self.functional)
             xc = evaluate_noncollinear(
                 self.functional, on_grid, self.noncollinear, weights=weights

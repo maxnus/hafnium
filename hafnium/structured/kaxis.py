@@ -157,7 +157,7 @@ class KPointOperations:
 
     def _for_rows(self, operation: int, k: int, array: Array) -> Array:
         xp = array_namespace(array)
-        unitary = self.unitary(operation, k)
+        unitary = xp.asarray(self.unitary(operation, k))
         rows, n = int(array.shape[-2]), self.n_functions
         if rows == n:
             return unitary

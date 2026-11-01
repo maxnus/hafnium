@@ -7,7 +7,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from hafnium.backend import Array, Namespace, array_namespace, default_namespace
+from hafnium.backend import Array, Namespace, array_namespace, host_namespace
 from hafnium.errors import InputError
 from hafnium.molecule.system import bohr_per_unit
 
@@ -141,17 +141,17 @@ class Lattice:
 
     def vectors_array(self, xp: Namespace | None = None) -> Array:
         """Return the translation vectors as an array ``[d, 3]`` in Bohr."""
-        xp = default_namespace() if xp is None else xp
+        xp = host_namespace() if xp is None else xp
         return xp.asarray(self.vectors, dtype=xp.float64)
 
     def reciprocal_vectors_array(self, xp: Namespace | None = None) -> Array:
         """Return the reciprocal vectors as an array ``[d, 3]`` in inverse Bohr."""
-        xp = default_namespace() if xp is None else xp
+        xp = host_namespace() if xp is None else xp
         return xp.asarray(self.reciprocal_vectors, dtype=xp.float64)
 
     def perpendicular_vectors_array(self, xp: Namespace | None = None) -> Array:
         """Return :attr:`perpendicular_vectors` as an array ``[3 − d, 3]``."""
-        xp = default_namespace() if xp is None else xp
+        xp = host_namespace() if xp is None else xp
         return xp.reshape(
             xp.asarray(self.perpendicular_vectors, dtype=xp.float64),
             (3 - self.dimension, 3),
@@ -191,7 +191,7 @@ class Lattice:
         """
         if not (math.isfinite(cutoff) and cutoff >= 0.0):
             raise InputError("the translation cutoff is a non-negative length")
-        xp = default_namespace()
+        xp = host_namespace()
         bounds = [
             math.floor(cutoff * math.sqrt(_dot(b, b)) / (2.0 * math.pi) + 1e-9)
             for b in self.reciprocal_vectors

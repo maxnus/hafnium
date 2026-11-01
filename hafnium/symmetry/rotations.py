@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from hafnium.backend import Array, array_namespace, default_namespace
+from hafnium.backend import Array, array_namespace, host_namespace
 from hafnium.basis import BasisSet, cartesian_components, solid_harmonic_coefficients
 from hafnium.errors import InputError, SymmetryError
 
@@ -110,7 +110,7 @@ def basis_rotation(basis: BasisSet, matrix: Array, atom_images: Sequence[int]) -
     SymmetryError
         If an atom and its image carry different shells.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     n = basis.n_functions
     offsets = basis.shell_offsets()
     shells_of = [

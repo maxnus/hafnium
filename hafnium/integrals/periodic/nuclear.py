@@ -21,7 +21,7 @@ images ``T`` of :func:`lattice_images`.
 
 from __future__ import annotations
 
-from hafnium.backend import Array, array_namespace, default_namespace
+from hafnium.backend import Array, array_namespace, from_host, host_namespace
 from hafnium.basis import BasisSet
 from hafnium.integrals.engine import CoulombKernel, IntegralEngine, PointCharges
 from hafnium.integrals.periodic.bloch import (
@@ -67,7 +67,7 @@ def nuclear_attraction_k(
     )
     translations = lattice_images(basis, cell, precision=precision)
     images = nuclear_attraction_images(engine, basis, cell, translations, separation)
-    return bloch_sum(images, translations, kpoints, cell.lattice)
+    return from_host(bloch_sum(images, translations, kpoints, cell.lattice))
 
 
 def core_hamiltonian_k(
@@ -93,7 +93,7 @@ def core_hamiltonian_k(
     images = engine.kinetic(table, table, translations) + nuclear_attraction_images(
         engine, basis, cell, translations, separation
     )
-    return bloch_sum(images, translations, kpoints, cell.lattice)
+    return from_host(bloch_sum(images, translations, kpoints, cell.lattice))
 
 
 def nuclear_attraction_images(
@@ -141,7 +141,7 @@ def _short_range_images(
     below the precision, plus the distance beyond which ``erfc(ωr)`` is;
     the kernel screens the terms of each image below the precision.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     positions = cell.positions_array(xp)
     radii = xp.asarray(atom_radii(basis, separation.precision), dtype=xp.float64)
     reach = xp.broadcast_to(

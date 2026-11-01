@@ -17,7 +17,7 @@ import functools
 import math
 from dataclasses import dataclass
 
-from hafnium.backend import Array, Namespace, array_namespace, default_namespace
+from hafnium.backend import Array, Namespace, array_namespace, host_namespace
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.integrals.periodic.bloch import DEFAULT_LATTICE_SUM_PRECISION
@@ -86,7 +86,7 @@ class PerpendicularProfile:
         """
         if not bases:
             raise InputError("a perpendicular profile takes at least one basis")
-        xp = default_namespace()
+        xp = host_namespace()
         perpendicular = cell.positions_array(xp) @ xp.linalg.matrix_transpose(
             cell.lattice.perpendicular_vectors_array(xp)
         )
@@ -209,7 +209,7 @@ class RangeSeparation:
         ``profile``, and on a chain a trapezoid rule in the polar angle
         besides. The zero vector comes first when the transfer is zero.
         """
-        xp = default_namespace()
+        xp = host_namespace()
         q = (
             xp.zeros(3, dtype=xp.float64)
             if transfer is None

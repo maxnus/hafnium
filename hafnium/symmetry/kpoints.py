@@ -14,7 +14,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from hafnium.backend import Array, Namespace, array_namespace, default_namespace
+from hafnium.backend import Array, Namespace, array_namespace, host_namespace
 from hafnium.errors import InputError
 from hafnium.molecule import Lattice
 from hafnium.structured import KAxis, KPointOperations
@@ -135,12 +135,12 @@ class KPoints:
 
     def fractional_array(self, xp: Namespace | None = None) -> Array:
         """Fractional coordinates as an array ``[kpt, d]``."""
-        xp = default_namespace() if xp is None else xp
+        xp = host_namespace() if xp is None else xp
         return xp.asarray(self.fractional, dtype=xp.float64)
 
     def weights_array(self, xp: Namespace | None = None) -> Array:
         """Weights as an array ``[kpt]``."""
-        xp = default_namespace() if xp is None else xp
+        xp = host_namespace() if xp is None else xp
         return xp.asarray(self.weights, dtype=xp.float64)
 
     def cartesian(self, lattice: Lattice) -> Array:
@@ -150,7 +150,7 @@ class KPoints:
                 f"{self.dimension}-dimensional k-points do not fit a "
                 f"{lattice.dimension}-dimensional lattice"
             )
-        xp = default_namespace()
+        xp = host_namespace()
         return self.fractional_array(xp) @ lattice.reciprocal_vectors_array(xp)
 
     def mesh_size(self) -> tuple[int, ...]:
@@ -241,7 +241,7 @@ class KPoints:
         """
         sizes = self.mesh_size()
         transfers = KPoints.mesh(sizes)
-        xp = default_namespace()
+        xp = host_namespace()
         points = self.fractional_array(xp)
         shifts = xp.asarray(
             [
@@ -303,7 +303,7 @@ class KPoints:
         InputError
             If a partner is missing from the set, or a point is duplicated.
         """
-        xp = default_namespace()
+        xp = host_namespace()
         points = self.fractional_array(xp)
         indices, counts = match_points(points, (-points) % 1.0)
         for k, count in enumerate(counts):

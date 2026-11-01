@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hafnium.backend import Array, array_namespace, default_namespace
+from hafnium.backend import Array, array_namespace, from_host, host_namespace
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.integrals.density_fitting import (
@@ -278,7 +278,7 @@ def density_fitting_k(
 
     ``separation`` carries the range-separation parameter and the precision
     of the lattice sums; by default :meth:`RangeSeparation.for_lattice` of
-    the cell's lattice.
+    the cell's lattice. The arrays belong to the active backend (ADR-0036).
     """
     builder, tables, table = _prepare(
         engine, basis, auxiliary, cell, kpoints, separation
@@ -287,7 +287,11 @@ def density_fitting_k(
     metric = builder.metric(fitting, auxiliary)
     three_center = builder.three_center(fitting, auxiliary, orbital, basis, table)
     return PeriodicDensityFitting(
-        kpoints, builder.transfers, table, metric, three_center
+        kpoints,
+        builder.transfers,
+        from_host(table),
+        from_host(metric),
+        from_host(three_center),
     )
 
 
@@ -313,7 +317,7 @@ def coulomb_fitting_k(
     three_center = builder.three_center(
         fitting, auxiliary, orbital, basis, table, coulomb_only=True
     )
-    return PeriodicCoulombFitting(kpoints, metric, three_center)
+    return PeriodicCoulombFitting(kpoints, from_host(metric), from_host(three_center))
 
 
 _ZERO_TRANSFER = 0
@@ -353,7 +357,7 @@ class _Builder:
 
     def metric(self, fitting: ShellTable, auxiliary: BasisSet) -> Array:
         """``(P^q | Q^q)`` as complex ``[q, aux, aux]``."""
-        xp = default_namespace()
+        xp = host_namespace()
         lattice = self.cell.lattice
         positions = self.cell.positions_array(xp)
         reach = coulomb_reach(
@@ -400,7 +404,7 @@ class _Builder:
         With ``coulomb_only`` the blocks of zero transfer alone,
         ``[kpt, aux, ao, ao]`` (ADR-0028).
         """
-        xp = default_namespace()
+        xp = host_namespace()
         lattice = self.cell.lattice
         positions = self.cell.positions_array(xp)
         precision = self.separation.precision
@@ -532,7 +536,7 @@ class _Builder:
         self, q: int, charge_product: float, profile: PerpendicularProfile
     ) -> ReciprocalSum:
         """Return the vectors ``q + G`` and weights of the sum at transfer ``q``."""
-        xp = default_namespace()
+        xp = host_namespace()
         lattice = self.cell.lattice
         q_cartesian = xp.asarray(self.transfers.cartesian(lattice))[q]
         return self.separation.reciprocal_sum(

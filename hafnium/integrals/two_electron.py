@@ -8,7 +8,7 @@ and the in-core exact path.
 
 from __future__ import annotations
 
-from hafnium.backend import Array, host_array
+from hafnium.backend import Array, from_host, host_array
 from hafnium.basis import BasisSet
 from hafnium.integrals.engine import CoulombKernel, IntegralEngine
 from hafnium.integrals.shell_table import ShellTable
@@ -35,13 +35,14 @@ def eri(
 
     With ``omega`` the long-range kernel ``erf(ω r) / r`` replaces ``1 / r``.
     Shell quartets whose Schwarz bound is below ``threshold`` are left at
-    zero.
+    zero. The array belongs to the active backend (ADR-0036).
     """
     table = ShellTable.from_basis(basis, molecule)
-    return engine.coulomb_four_center(
+    integrals = engine.coulomb_four_center(
         (table, table),
         (table, table),
         host_array([[[0.0] * 3] * 3]),
         kernel=CoulombKernel(omega),
         threshold=threshold,
     )[0]
+    return from_host(integrals)

@@ -410,6 +410,6 @@ class Hamiltonian:
 
 
 def _real_trace(density: BlockMatrix, operator: BlockMatrix) -> float:
-    """``Re tr(D X)`` as a host float (the JAX milestone revisits the transfer)."""
+    """``Re tr(D X)`` as a host float."""
     xp = array_namespace(*density.blocks)
     return float(xp.real(density.trace_product(operator)))
