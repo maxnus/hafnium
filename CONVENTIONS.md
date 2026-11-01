@@ -347,8 +347,15 @@ Spin never appears as an explicit index in method code; it is part of the
 ## 5. Backend rules
 
 - `import numpy` is allowed only in `hafnium/backend/` and under `tests/`.
-  Method code obtains the namespace with `xp = array_namespace(x)` or from
-  the `Backend` object and calls `xp.<function>`.
+  Method code obtains the namespace with `xp = array_namespace(x)`, or
+  with `default_namespace()` for an array not derived from inputs, which
+  is the namespace of the active `Backend` (`use_backend`, ADR-0036), and
+  calls `xp.<function>`.
+- The setup around the compiled kernels (shell tables, grids, lattice
+  images, symmetry detection) works in `host_namespace()`, and a helper
+  that returns integrals converts them with `from_host`. Metadata of a
+  structure that enters arithmetic is pulled into the namespace of the
+  block it acts on with `xp.asarray`.
 - Only the operations listed in `backend/allowed.py` may be used; a test
   greps for violations.
 - Dtype is explicit: `float64` and `complex128` only. No silent promotion

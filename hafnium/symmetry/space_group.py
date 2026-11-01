@@ -30,7 +30,7 @@ from typing import Any
 
 import spglib
 
-from hafnium.backend import Array, Namespace, array_namespace, default_namespace
+from hafnium.backend import Array, Namespace, array_namespace, host_namespace
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import Cell, atomic_number
@@ -212,7 +212,7 @@ class SpaceGroup:
                 f"{kpoints.dimension}-dimensional k-points do not fit a "
                 f"{self.dimension}-dimensional cell"
             )
-        xp = default_namespace()
+        xp = host_namespace()
         d = self.dimension
         inverse = xp.asarray(
             _integer_inverse(operation.rotation)[:d], dtype=xp.float64
@@ -254,7 +254,7 @@ def detect_space_group(
     error_module: Any = getattr(spglib, "error", None)
     if hasattr(error_module, "OLD_ERROR_HANDLING"):
         error_module.OLD_ERROR_HANDLING = False
-    xp = default_namespace()
+    xp = host_namespace()
     padded = _padded_vectors(cell, xp)
     fractional = cell.positions_array(xp) @ xp.linalg.inv(padded)
     try:
@@ -407,7 +407,7 @@ def _maps_atoms(cell: Cell, operation: SpaceGroupOperation, tolerance: float) ->
 
 def _integer_inverse(rotation: IntegerMatrix) -> IntegerMatrix:
     """Inverse of a unimodular integer matrix, exact."""
-    xp = default_namespace()
+    xp = host_namespace()
     inverse = xp.linalg.inv(xp.asarray(rotation, dtype=xp.float64))
     rounded = [[round(float(x)) for x in row] for row in inverse]
     if float(xp.max(xp.abs(inverse - xp.asarray(rounded, dtype=xp.float64)))) > 1e-8:
@@ -500,7 +500,7 @@ class SpaceGroupAdaptation:
                 f"{kpoints.dimension}-dimensional k-points do not fit a "
                 f"{cell.dimension}-dimensional cell"
             )
-        xp = default_namespace()
+        xp = host_namespace()
         atom_images: list[tuple[int, ...]] = []
         shifts: list[Array] = []
         matrices: list[Array] = []
@@ -541,7 +541,7 @@ def _atom_images(
     cell: Cell, operation: SpaceGroupOperation, index: int, tolerance: float
 ) -> tuple[tuple[int, ...], Array]:
     """Return the image atom of every atom and the lattice vector it picks up."""
-    xp = default_namespace()
+    xp = host_namespace()
     positions = cell.positions_array(xp)
     matrix = xp.asarray(operation.matrix, dtype=xp.float64)
     moved = positions @ xp.linalg.matrix_transpose(matrix) + xp.asarray(

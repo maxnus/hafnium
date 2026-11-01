@@ -373,6 +373,8 @@ jax = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
+    { name = "jax", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "jax", version = "0.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "maturin" },
     { name = "mcfun" },
     { name = "mpmath" },
@@ -404,6 +406,7 @@ provides-extras = ["jax", "cuda"]
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6" },
+    { name = "jax", specifier = ">=0.4.31" },
     { name = "maturin", specifier = ">=1.15,<2" },
     { name = "mcfun", specifier = ">=0.2.6" },
     { name = "mpmath", specifier = ">=1.3" },

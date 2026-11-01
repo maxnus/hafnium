@@ -1,13 +1,14 @@
 """One-electron integrals of a molecule in its atomic basis, and their derivatives.
 
-A derivative with respect to the centre of a basis function is given for
-the bra, ``⟨∂_A μ | O | ν⟩``; the ket derivative is its transpose for the
-symmetric operators of a molecule (ADR-0035).
+The results are arrays of the active backend (ADR-0036). A derivative with
+respect to the centre of a basis function is given for the bra,
+``⟨∂_A μ | O | ν⟩``; the ket derivative is its transpose for the symmetric
+operators of a molecule (ADR-0035).
 """
 
 from __future__ import annotations
 
-from hafnium.backend import Array, host_array
+from hafnium.backend import Array, from_host, host_array
 from hafnium.basis import BasisSet
 from hafnium.integrals.engine import CoulombKernel, IntegralEngine, PointCharges
 from hafnium.integrals.shell_table import ShellTable
@@ -26,13 +27,13 @@ def _table(basis: BasisSet, molecule: Molecule) -> ShellTable:
 def overlap(engine: IntegralEngine, basis: BasisSet, molecule: Molecule) -> Array:
     """Overlap matrix ``[ao, ao]``."""
     table = _table(basis, molecule)
-    return engine.overlap(table, table, _no_translation())[0]
+    return from_host(engine.overlap(table, table, _no_translation())[0])
 
 
 def kinetic(engine: IntegralEngine, basis: BasisSet, molecule: Molecule) -> Array:
     """Kinetic energy matrix ``[ao, ao]``."""
     table = _table(basis, molecule)
-    return engine.kinetic(table, table, _no_translation())[0]
+    return from_host(engine.kinetic(table, table, _no_translation())[0])
 
 
 def nuclear_attraction(
@@ -53,13 +54,14 @@ def nuclear_attraction(
 def _attraction(
     engine: IntegralEngine, table: ShellTable, molecule: Molecule, omega: float | None
 ) -> Array:
-    return engine.nuclear_attraction(
+    attraction = engine.nuclear_attraction(
         table,
         table,
         _no_translation(),
         PointCharges.from_system(molecule),
         kernel=CoulombKernel(omega),
     )[0]
+    return from_host(attraction)
 
 
 def core_hamiltonian(
@@ -67,7 +69,7 @@ def core_hamiltonian(
 ) -> Array:
     """Core Hamiltonian ``[ao, ao]``: kinetic energy plus nuclear attraction."""
     table = _table(basis, molecule)
-    kinetic_energy = engine.kinetic(table, table, _no_translation())[0]
+    kinetic_energy = from_host(engine.kinetic(table, table, _no_translation())[0])
     return kinetic_energy + _attraction(engine, table, molecule, None)
 
 
@@ -79,7 +81,7 @@ def overlap_derivative(
     ``⟨∂_A μ | ν⟩`` as ``[3, ao, ao]``.
     """
     table = _table(basis, molecule)
-    return engine.overlap_derivative(table, table, _no_translation())[0]
+    return from_host(engine.overlap_derivative(table, table, _no_translation())[0])
 
 
 def kinetic_derivative(
@@ -90,7 +92,7 @@ def kinetic_derivative(
     ``⟨∂_A μ | −½∇² | ν⟩`` as ``[3, ao, ao]``.
     """
     table = _table(basis, molecule)
-    return engine.kinetic_derivative(table, table, _no_translation())[0]
+    return from_host(engine.kinetic_derivative(table, table, _no_translation())[0])
 
 
 def nuclear_attraction_derivative(
@@ -115,4 +117,4 @@ def nuclear_attraction_derivative(
         PointCharges.from_system(molecule),
         kernel=CoulombKernel(omega),
     )
-    return by_center[0], by_nucleus[0]
+    return from_host(by_center[0]), from_host(by_nucleus[0])

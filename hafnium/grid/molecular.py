@@ -15,7 +15,7 @@ import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-from hafnium.backend import Array, array_namespace, default_namespace, host_array
+from hafnium.backend import Array, array_namespace, host_array, host_namespace
 from hafnium.errors import InputError
 from hafnium.grid.angular import LEBEDEV_SIZES, lebedev_degree, lebedev_grid
 from hafnium.grid.partition import (
@@ -234,7 +234,7 @@ def atomic_grid(
     ``shared_from`` the shells at that radius and beyond take the rule of
     :meth:`GridSpec.shared_angular_count`, the shared shells of a cell's atom.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     radii, radial_weights = treutler_ahlrichs(
         spec.radial_count(atomic_number), TREUTLER_XI[atomic_number]
     )
@@ -315,7 +315,7 @@ def build_molecular_grid(
     """
     spec = GridSpec() if spec is None else spec
     scheme = "becke" if spec.partition is None else spec.partition
-    xp = default_namespace()
+    xp = host_namespace()
     centers = molecule.positions_array(xp)
     radii = host_array([BRAGG_RADII[atom.atomic_number] for atom in molecule.atoms])
     adjustments = treutler_adjustment(radii) if molecule.n_atoms > 1 else None

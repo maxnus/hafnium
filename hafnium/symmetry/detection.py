@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
-from hafnium.backend import Array, array_namespace, default_namespace, eigh
+from hafnium.backend import Array, array_namespace, eigh, host_namespace
 from hafnium.errors import InputError, SymmetryError
 from hafnium.molecule import Atom, Molecule
 from hafnium.symmetry.point_group import PointGroup
@@ -203,7 +203,7 @@ class _Geometry:
 
     @classmethod
     def build(cls, molecule: Molecule, tolerance: float) -> tuple[_Geometry, Vector]:
-        xp = default_namespace()
+        xp = host_namespace()
         positions = molecule.positions_array(xp)
         charges = xp.asarray(molecule.nuclear_charges, dtype=xp.float64)
         centre = (charges @ positions) / xp.sum(charges)

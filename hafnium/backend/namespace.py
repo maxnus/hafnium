@@ -1,8 +1,8 @@
 """Discovery of the array namespace behind a set of arrays."""
 
 import array_api_compat
-import numpy
 
+from hafnium.backend.active import active_backend
 from hafnium.backend.types import Array, Namespace
 
 
@@ -17,13 +17,10 @@ def array_namespace(*arrays: Array) -> Namespace:
     return array_api_compat.array_namespace(*arrays)
 
 
-_NUMPY_NAMESPACE: Namespace = array_api_compat.array_namespace(numpy.empty(0))
-
-
 def default_namespace() -> Namespace:
-    """Return the namespace used for arrays that are not derived from inputs.
+    """Return the namespace of the active backend, for arrays not derived from inputs.
 
-    This is the same object that :func:`array_namespace` returns for NumPy
-    arrays. A configurable default is part of the backend milestone.
+    The same object :func:`array_namespace` returns for that backend's
+    arrays; see :func:`hafnium.backend.use_backend`.
     """
-    return _NUMPY_NAMESPACE
+    return active_backend().namespace

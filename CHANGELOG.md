@@ -437,4 +437,14 @@ uses [Semantic Versioning](https://semver.org/).
   reported by term; tested against finite differences of the integrals
   and of the energy, PySCF's `ip` integrals and its density-fitted RHF
   and UHF gradients.
+- JAX as a backend (ADR-0036): `hafnium.backend.use_backend("jax")` and
+  `set_backend` select the active backend through a context variable, in
+  which the integrals and every array not derived from an input are
+  created, with JAX switched to 64-bit arrays on first use; the setup
+  around the compiled kernels works in `host_namespace()` and the
+  integral helpers hand their results over with `from_host`; `BlockMatrix`,
+  `BlockVector` and `BlockTensor` are registered as pytrees with their
+  structure as static metadata; every method, molecular and periodic,
+  gives the same energies under NumPy and JAX, which the parity tests
+  check, and JAX joins the development dependencies.
 

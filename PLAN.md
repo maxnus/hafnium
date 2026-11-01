@@ -1123,7 +1123,14 @@ Hermite integrals shifted, tested against finite differences and
 libcint; the analytic gradient of density-fitted Hartree–Fock in the
 dense atomic basis at fixed density for all eight classes with
 point-group sectors, matching finite differences of the energy and
-PySCF's density-fitted gradients. Next: part two, JAX as a backend.
+PySCF's density-fitted gradients. Part two done 2026-11-01 (ADR-0036):
+JAX as a backend, selected with `use_backend`, in which the integrals
+and every new array are created while the setup around the kernels stays
+on the host; the block types registered as pytrees; every method,
+molecular and periodic, giving the same energies under NumPy and JAX.
+Next: part three, the kernels bound through `jax.ffi` with the
+derivative integrals as their vector-Jacobian products and the
+functionals with custom Jacobian-vector products.
 
 **M10 GPU.** CuPy backend validation, DF-HF and DFT on GPU, GPU
 basis-on-grid kernel, thread and memory policies. Exit: GPU results equal

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hafnium.backend import default_namespace
+from hafnium.backend import host_namespace
 from hafnium.molecule import DEFAULT_EWALD_PRECISION, Lattice, ewald_energy
 from hafnium.symmetry import KPoints
 
@@ -21,7 +21,7 @@ def madelung_constant(
     exchange energy ``−ξ N / 2`` for ``N`` electrons (ADR-0017).
     """
     supercell = lattice.supercell(kpoints.mesh_size())
-    xp = default_namespace()
+    xp = host_namespace()
     energy = ewald_energy(
         supercell,
         xp.ones(1, dtype=xp.float64),

@@ -9,10 +9,12 @@ from array_api_compat import is_numpy_namespace
 
 import hafnium
 from hafnium.backend import (
+    active_backend,
     adjoint,
     array_namespace,
     default_namespace,
     generalized_eigh,
+    host_namespace,
 )
 from hafnium.backend.allowed import ALLOWED
 from tests.tolerances import EIGEN_TOL
@@ -46,6 +48,20 @@ def test_array_namespace_of_numpy_arrays_is_numpy() -> None:
 
 def test_default_namespace_is_the_namespace_of_numpy_arrays() -> None:
     assert default_namespace() is array_namespace(np.zeros(1))
+    assert host_namespace() is default_namespace()
+    assert active_backend().name == "numpy"
+
+
+def test_the_allowed_subset_exists_on_every_backend_namespace() -> None:
+    namespaces = [host_namespace()]
+    jax = pytest.importorskip("jax")
+    namespaces.append(jax.numpy)
+    for xp in namespaces:
+        for name in sorted(ALLOWED):
+            target = xp
+            for part in name.split("."):
+                assert hasattr(target, part), f"{xp.__name__} lacks {name}"
+                target = getattr(target, part)
 
 
 def test_namespace_call_pattern_catches_chained_calls() -> None:

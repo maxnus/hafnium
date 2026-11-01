@@ -202,7 +202,7 @@ class IrrepSectors:
         columns: list[Array] = []
         total: Array | None = None
         for irrep, part in enumerate(parts):
-            basis = self.basis(irrep, spinor=spinor)
+            basis = xp.asarray(self.basis(irrep, spinor=spinor))
             if int(part.shape[-2]) != int(basis.shape[1]):
                 raise StructureError(
                     f"a block of the {self.labels[irrep]} sector has "
@@ -240,7 +240,7 @@ class IrrepSectors:
         xp = array_namespace(matrix)
         parts: list[Array] = []
         for irrep in range(self.n_irreps):
-            basis = self.basis(irrep, spinor=spinor)
+            basis = xp.asarray(self.basis(irrep, spinor=spinor))
             parts.append(xp.linalg.matrix_transpose(basis) @ matrix @ basis)
         return tuple(parts)
 

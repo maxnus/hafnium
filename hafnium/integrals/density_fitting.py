@@ -13,7 +13,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from hafnium.backend import Array, adjoint, array_namespace, eigh, host_array
+from hafnium.backend import (
+    Array,
+    adjoint,
+    array_namespace,
+    eigh,
+    from_host,
+    host_array,
+)
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError
 from hafnium.integrals.engine import CoulombKernel, IntegralEngine
@@ -60,7 +67,8 @@ class DensityFitting:
     ) -> DensityFitting:
         """Evaluate the metric and three-centre integrals of a molecule.
 
-        With ``omega`` both use the long-range kernel ``erf(ω r) / r``.
+        With ``omega`` both use the long-range kernel ``erf(ω r) / r``. The
+        arrays belong to the active backend (ADR-0036).
         """
         orbital = ShellTable.from_basis(basis, molecule)
         fitting = ShellTable.from_basis(auxiliary, molecule)
@@ -74,7 +82,7 @@ class DensityFitting:
             host_array([[[0.0] * 3, [0.0] * 3]]),
             kernel=kernel,
         )[0]
-        return cls(metric, three_center)
+        return cls(from_host(metric), from_host(three_center))
 
     @property
     def n_aux(self) -> int:
@@ -91,8 +99,7 @@ class DensityFitting:
 
         Metric eigenvalues below ``threshold`` times the largest are dropped,
         which removes near-linear dependence of the auxiliary basis; the
-        number dropped is logged, which reads the count on the host (the
-        JAX milestone revisits this).
+        number dropped is logged, which reads the count on the host.
         """
         xp = array_namespace(self.metric)
         half = inverse_square_root(self.metric, threshold)
@@ -166,7 +173,9 @@ class DensityFittingDerivatives:
             host_array([[[0.0] * 3, [0.0] * 3]]),
             kernel=kernel,
         )
-        return cls(metric[0], by_auxiliary[0], by_orbital[0])
+        return cls(
+            from_host(metric[0]), from_host(by_auxiliary[0]), from_host(by_orbital[0])
+        )
 
 
 def inverse_square_root(metric: Array, threshold: float) -> Array:
@@ -174,8 +183,7 @@ def inverse_square_root(metric: Array, threshold: float) -> Array:
 
     Eigenvalues below ``threshold`` times the largest are dropped, which
     removes near-linear dependence of the auxiliary basis; the number
-    dropped is logged, which reads the count on the host (the JAX milestone
-    revisits this).
+    dropped is logged, which reads the count on the host.
     """
     xp = array_namespace(metric)
     eigenvalues, eigenvectors = eigh(metric)

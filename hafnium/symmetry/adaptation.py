@@ -22,8 +22,8 @@ from hafnium.backend import (
     Array,
     adjoint,
     array_namespace,
-    default_namespace,
     generalized_eigh,
+    host_namespace,
 )
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
@@ -112,7 +112,7 @@ class SymmetryAdaptation:
             for operation in group.operations
         )
         _require_equal_shells(basis, atom_images)
-        xp = default_namespace()
+        xp = host_namespace()
         starts = _atom_starts(basis)
         labels = basis.function_labels()
         parities = [
@@ -219,7 +219,8 @@ class SymmetryAdaptation:
                 f"{self.n_functions} functions"
             )
         weights: list[Array] = []
-        for block in self.coefficients:
+        for host_block in self.coefficients:
+            block = xp.asarray(host_block)
             transposed = xp.linalg.matrix_transpose(block)
             components = transposed @ mo_coefficients
             metric = transposed @ overlap @ block
@@ -316,7 +317,8 @@ class SymmetryAdaptation:
         """Return ``Σ_Γ Γ ⟨p|P_Γ|q⟩`` over the orbitals, ``[mo, mo]``."""
         xp = array_namespace(mo_coefficients, overlap)
         total = None
-        for irrep, block in enumerate(self.coefficients):
+        for irrep, host_block in enumerate(self.coefficients):
+            block = xp.asarray(host_block)
             transposed = xp.linalg.matrix_transpose(block)
             components = transposed @ mo_coefficients
             metric = transposed @ overlap @ block
@@ -350,7 +352,7 @@ def _atom_images(
     system: AtomicSystem, signs: tuple[int, int, int], symbol: str, tolerance: float
 ) -> tuple[int, ...]:
     """Return the atom each atom is mapped onto by the sign operation ``signs``."""
-    xp = default_namespace()
+    xp = host_namespace()
     positions = system.positions_array(xp)
     moved = positions * xp.asarray(signs, dtype=xp.float64)
     distance = xp.linalg.vector_norm(

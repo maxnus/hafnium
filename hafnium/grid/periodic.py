@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 
-from hafnium.backend import Array, default_namespace, host_array
+from hafnium.backend import Array, host_array, host_namespace
 from hafnium.errors import InputError
 from hafnium.grid.molecular import (
     BRAGG_RADII,
@@ -41,7 +41,7 @@ def partition_centers(cell: Cell, radius: float) -> tuple[Array, Array]:
     """
     if not radius > 0.0:
         raise InputError("the partition radius is a positive length")
-    xp = default_namespace()
+    xp = host_namespace()
     centers = cell.positions_array(xp)
     differences = xp.expand_dims(centers, 1) - xp.expand_dims(centers, 0)
     extent = float(xp.max(xp.linalg.vector_norm(differences, axis=-1)))
@@ -65,7 +65,7 @@ def nearest_neighbour_distances(cell: Cell) -> Array:
     The other centre is an atom of the cell or a lattice image of any atom,
     the atom's own images included.
     """
-    xp = default_namespace()
+    xp = host_namespace()
     centers = cell.positions_array(xp)
     lengths = xp.linalg.vector_norm(cell.lattice.vectors_array(xp), axis=-1)
     positions, _ = partition_centers(cell, float(xp.max(lengths)) * 2.0)
@@ -86,7 +86,7 @@ def build_cell_grid(cell: Cell, spec: GridSpec | None = None) -> MolecularGrid:
     """
     spec = GridSpec() if spec is None else spec
     scheme = "stratmann" if spec.partition is None else spec.partition
-    xp = default_namespace()
+    xp = host_namespace()
     centers = cell.positions_array(xp)
     positions, numbers = partition_centers(cell, spec.partition_radius)
     nearest = nearest_neighbour_distances(cell)
