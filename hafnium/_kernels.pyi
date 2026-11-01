@@ -309,6 +309,27 @@ def evaluate_functional(
     follow the input layouts, ``None`` below the rung that needs them.
     """
 
+def evaluate_functional_second(
+    names: list[str],
+    weights: NDArray[np.float64],
+    rho: NDArray[np.float64],
+    sigma: NDArray[np.float64] | None = None,
+    tau: NDArray[np.float64] | None = None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+    NDArray[np.float64] | None,
+]:
+    """Return ``(v2rho2, v2rhosigma, v2sigma2, v2rhotau, v2sigmatau, v2tau2)``.
+
+    In libxc's packed layouts over the first axis, ``[3, g]``, ``[6, g]``,
+    ``[6, g]``, ``[4, g]``, ``[6, g]`` and ``[3, g]``; ``None`` for the rows
+    the rung does not read.
+    """
+
 def evaluate_noncollinear(
     names: list[str],
     weights: NDArray[np.float64],
