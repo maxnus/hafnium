@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hafnium.cc.generator.emit import (
+from hafnium.cc.generator.modules import (
     ccsd_lambda_module_source,
     ccsd_module_source,
     ccsd_pt_module_source,

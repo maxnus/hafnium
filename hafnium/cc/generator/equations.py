@@ -32,8 +32,9 @@ one-particle density ``<Φ| (1 + Λ) ({p† q} e^T)_C |Φ>``.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from fractions import Fraction
 from itertools import product
 from math import factorial
@@ -49,9 +50,6 @@ from hafnium.cc.generator.wick import (
     expectation,
 )
 from hafnium.orbitals import Space
-
-Cluster = Callable[["DummyIndices"], OperatorString]
-"""A cluster operator, built over fresh dummy indices."""
 
 
 class DummyIndices:
@@ -95,52 +93,63 @@ def hamiltonian_strings(dummies: DummyIndices) -> list[OperatorString]:
     return strings
 
 
-def singles_cluster(dummies: DummyIndices) -> OperatorString:
-    """``T1 = Σ t1[i, a] a†_a a_i``."""
-    i, a = dummies.new(Space.OCCUPIED), dummies.new(Space.VIRTUAL)
-    return OperatorString(
-        Fraction(1),
-        Factor(Kind.SINGLES, (i, a)),
-        (Operator(a, True), Operator(i, False)),
-    )
+class Cluster(Enum):
+    """The cluster operators ``T1`` and ``T2`` and their adjoints ``Λ1`` and ``Λ2``.
 
+    A member is the operator string of its amplitude kind over fresh
+    dummy indices: ``T1 = Σ t1[i, a] a†_a a_i`` and ``T2 = ¼ Σ t2[i, j, a, b]
+    a†_a a†_b a_j a_i`` excite, creating the virtual indices of the
+    amplitude and annihilating the occupied ones, and ``Λ1 = Σ l1[i, a]
+    a†_i a_a`` and ``Λ2 = ¼ Σ l2[i, j, a, b] a†_i a†_j a_b a_a`` de-excite,
+    the adjoints of the two.
+    """
 
-def doubles_cluster(dummies: DummyIndices) -> OperatorString:
-    """``T2 = ¼ Σ t2[i, j, a, b] a†_a a†_b a_j a_i``."""
-    i, j = dummies.new(Space.OCCUPIED), dummies.new(Space.OCCUPIED)
-    a, b = dummies.new(Space.VIRTUAL), dummies.new(Space.VIRTUAL)
-    return OperatorString(
-        Fraction(1, 4),
-        Factor(Kind.DOUBLES, (i, j, a, b)),
-        (Operator(a, True), Operator(b, True), Operator(j, False), Operator(i, False)),
-    )
+    SINGLES = Kind.SINGLES
+    DOUBLES = Kind.DOUBLES
+    LAMBDA_SINGLES = Kind.LAMBDA_SINGLES
+    LAMBDA_DOUBLES = Kind.LAMBDA_DOUBLES
 
+    @property
+    def kind(self) -> Kind:
+        """The kind of the amplitude tensor."""
+        return self.value
 
-def lambda_singles_cluster(dummies: DummyIndices) -> OperatorString:
-    """``Λ1 = Σ l1[i, a] a†_i a_a``, the de-excitation adjoint to ``T1``."""
-    i, a = dummies.new(Space.OCCUPIED), dummies.new(Space.VIRTUAL)
-    return OperatorString(
-        Fraction(1),
-        Factor(Kind.LAMBDA_SINGLES, (i, a)),
-        (Operator(i, True), Operator(a, False)),
-    )
+    @property
+    def rank(self) -> int:
+        """The electrons the operator moves, the occupied slots of its amplitude."""
+        return 1 if self in (Cluster.SINGLES, Cluster.LAMBDA_SINGLES) else 2
 
+    @property
+    def n_operators(self) -> int:
+        """The creation and annihilation operators of the string."""
+        return 2 * self.rank
 
-def lambda_doubles_cluster(dummies: DummyIndices) -> OperatorString:
-    """``Λ2 = ¼ Σ l2[i, j, a, b] a†_i a†_j a_b a_a``, adjoint to ``T2``."""
-    i, j = dummies.new(Space.OCCUPIED), dummies.new(Space.OCCUPIED)
-    a, b = dummies.new(Space.VIRTUAL), dummies.new(Space.VIRTUAL)
-    return OperatorString(
-        Fraction(1, 4),
-        Factor(Kind.LAMBDA_DOUBLES, (i, j, a, b)),
-        (Operator(i, True), Operator(j, True), Operator(b, False), Operator(a, False)),
-    )
+    @property
+    def excites(self) -> bool:
+        """Whether the operator excites the reference, or de-excites it."""
+        return self in (Cluster.SINGLES, Cluster.DOUBLES)
+
+    def string(self, dummies: DummyIndices) -> OperatorString:
+        """Return the operator over indices of ``dummies`` not handed out before."""
+        occupied = [dummies.new(Space.OCCUPIED) for _ in range(self.rank)]
+        virtual = [dummies.new(Space.VIRTUAL) for _ in range(self.rank)]
+        created, annihilated = (
+            (virtual, occupied) if self.excites else (occupied, virtual)
+        )
+        return OperatorString(
+            Fraction(1, factorial(self.rank) ** 2),
+            Factor(self.kind, (*occupied, *virtual)),
+            (
+                *(Operator(index, True) for index in created),
+                *(Operator(index, False) for index in reversed(annihilated)),
+            ),
+        )
 
 
 DE_EXCITATIONS: tuple[Cluster | None, ...] = (
     None,
-    lambda_singles_cluster,
-    lambda_doubles_cluster,
+    Cluster.LAMBDA_SINGLES,
+    Cluster.LAMBDA_DOUBLES,
 )
 """``1 + Λ1 + Λ2``, the bra of the Λ functional, ``None`` for the one."""
 
@@ -153,7 +162,7 @@ def cluster_products(max_operators: int) -> list[tuple[Fraction, list[Cluster]]]
     products: list[tuple[Fraction, list[Cluster]]] = []
     for n in range(max_operators // 4 + 1):
         for m in range((max_operators - 4 * n) // 2 + 1):
-            clusters: list[Cluster] = [singles_cluster] * m + [doubles_cluster] * n
+            clusters = [Cluster.SINGLES] * m + [Cluster.DOUBLES] * n
             products.append((Fraction(1, factorial(m) * factorial(n)), clusters))
     return products
 
@@ -245,7 +254,7 @@ class Projection:
                 strings = [
                     bra,
                     hamiltonian,
-                    *(cluster(dummies) for cluster in clusters),
+                    *(cluster.string(dummies) for cluster in clusters),
                 ]
                 terms.extend(
                     Term(term.coefficient * coefficient, term.factors)
@@ -284,17 +293,13 @@ class Projection:
         for left in DE_EXCITATIONS:
             # The quasi-annihilators of Λ and of the Hamiltonian, at most
             # four, contract every quasi-creator of the ket and the clusters.
-            products = cluster_products(_n_operators(left) + 4 - len(self.operators))
+            n_left = 0 if left is None else left.n_operators
+            products = cluster_products(n_left + 4 - len(self.operators))
             for hamiltonian in hamiltonian_strings(dummies):
                 terms.extend(
                     _de_excited(left, hamiltonian, products, ket, dummies, linked=True)
                 )
         return Equation(f"lambda_{self.name}", self.free, tuple(Term.merge(terms)))
-
-
-def _n_operators(cluster: Cluster | None) -> int:
-    """Count the operators of a cluster string, none for ``None``."""
-    return 0 if cluster is None else len(cluster(DummyIndices()).operators)
 
 
 def _de_excited(
@@ -315,12 +320,12 @@ def _de_excited(
     """
     terms: list[Term] = []
     for coefficient, clusters in products:
-        strings = [operator, *(cluster(dummies) for cluster in clusters)]
+        strings = [operator, *(cluster.string(dummies) for cluster in clusters)]
         if ket is not None:
             strings.append(ket)
         position = 0
         if left is not None:
-            strings.insert(0, left(dummies))
+            strings.insert(0, left.string(dummies))
             position = 1
         end = len(strings) - (ket is not None)
         terms.extend(
@@ -352,7 +357,8 @@ def density_block(p: Space, q: Space) -> Equation:
     for left in DE_EXCITATIONS:
         # The quasi-annihilators of Λ and of the operator contract every
         # quasi-creator of the operator and the clusters.
-        products = cluster_products(max(_n_operators(left) + 2 - 2 * creators, 0))
+        n_left = 0 if left is None else left.n_operators
+        products = cluster_products(max(n_left + 2 - 2 * creators, 0))
         terms.extend(_de_excited(left, operator, products, None, dummies, linked=False))
     return Equation(
         f"density_{p.value}_{q.value}",
@@ -388,11 +394,11 @@ def ccsd_pt_equations() -> dict[str, Equation]:
     one = Fraction(1)
     return {
         "connected_triples": projection.expectation(
-            "connected_triples", [(one, [doubles_cluster])]
+            "connected_triples", [(one, [Cluster.DOUBLES])]
         ),
         "disconnected_triples": projection.expectation(
             "disconnected_triples",
-            [(one, [singles_cluster]), (one, [doubles_cluster])],
+            [(one, [Cluster.SINGLES]), (one, [Cluster.DOUBLES])],
             connected=False,
         ),
     }

@@ -1,15 +1,12 @@
-"""Emit the equations as programs of pairwise contractions over block tensors.
+"""Write an equation as a Python function of pairwise contractions over block tensors.
 
-A residual is antisymmetric in its occupied free indices and in its
-virtual ones, so its terms fall into orbits under the permutations of
-those indices: a term and the images of its free indices, each image
-carrying the sign of the permutation. One term per orbit is evaluated
-and the images are its permuted copies. Within a term the factors are
-contracted two at a time in the cheapest order, with the occupied and
-virtual extents weighted as :data:`EXTENT` says, and every index is
-shared by at most two factors or free, so a pairwise
-:func:`~hafnium.structured.contract` sums exactly the indices the two
-operands share.
+Within a term the factors are contracted two at a time in the cheapest
+order, with the occupied and virtual extents weighted as :data:`EXTENT`
+says, and every index is shared by at most two factors or free, so a
+pairwise :func:`~hafnium.structured.contract` sums exactly the indices
+the two operands share. One term per orbit of the equation
+(:mod:`hafnium.cc.generator.orbits`) is evaluated and its images are
+added as permuted copies, through the helper the orbit names.
 
 The triples of (T) are evaluated over windows of the occupied axis
 (ADR-0033): the function takes one window per occupied free index, the
@@ -20,6 +17,9 @@ stabilizer of a term is the product of its occupied and its virtual
 parts, the sum over its images factors: the occupied images are summed
 first and the virtual permutations are applied to the sum, once for
 every orbit that shares them.
+
+The functions are laid out as the formatter would lay them out, so that
+the generated modules pass its check unchanged.
 """
 
 from __future__ import annotations
@@ -27,14 +27,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
-from itertools import combinations, permutations
+from itertools import combinations
 
-from hafnium.cc.generator.equations import (
-    Equation,
-    ccsd_equations,
-    ccsd_lambda_equations,
-    ccsd_pt_equations,
-)
+from hafnium.cc.generator.equations import Equation
+from hafnium.cc.generator.orbits import Cosets, Orbit, Permutation, orbits
 from hafnium.cc.generator.wick import LABELS, SPACE_NAMES, Kind, Term
 from hafnium.orbitals import Space
 
@@ -44,144 +40,11 @@ INTERMEDIATES = ("x", "y", "z", "w")
 EXTENT = {Space.OCCUPIED: 10, Space.VIRTUAL: 40}
 """Extents of the two spaces for ranking the contraction orders."""
 
-Permutation = tuple[tuple[str, str], ...]
-"""The free indices a permutation moves, as pairs ``(from, to)``."""
-
-IDENTITY: tuple[tuple[Permutation, int], ...] = (((), 1),)
-"""The group of the identity alone, for a result without antisymmetry."""
-
-
-def permutations_of(free: str) -> tuple[tuple[Permutation, int], ...]:
-    """List the permutations of the free indices ``free`` with their parities.
-
-    Every permutation of the occupied letters with every permutation of
-    the virtual letters, the identity first; the parity is the product
-    of the parities.
-    """
-    occupied, virtual = _letters_of(free)
-    return tuple(
-        ((*occupied_moved, *virtual_moved), occupied_parity * virtual_parity)
-        for virtual_moved, virtual_parity in _permutations_within(virtual)
-        for occupied_moved, occupied_parity in _permutations_within(occupied)
-    )
-
-
-def _letters_of(free: str) -> tuple[str, str]:
-    """Split the free indices into the occupied and the virtual letters."""
-    return (
-        "".join(c for c in free if c in LABELS[Space.OCCUPIED]),
-        "".join(c for c in free if c in LABELS[Space.VIRTUAL]),
-    )
-
-
-def _permutations_within(letters: str) -> tuple[tuple[Permutation, int], ...]:
-    """List the permutations of ``letters`` alone with parities, identity first."""
-    return tuple(
-        (
-            tuple(
-                (source, target)
-                for source, target in zip(letters, image, strict=True)
-                if source != target
-            ),
-            _parity(image),
-        )
-        for image in permutations(letters)
-    )
-
-
-def _parity(image: tuple[str, ...]) -> int:
-    inversions = sum(
-        1 for p, q in combinations(range(len(image)), 2) if image[p] > image[q]
-    )
-    return -1 if inversions % 2 else 1
-
-
-ANTISYMMETRIZERS: dict[frozenset[Permutation], str] = {
-    frozenset({()}): "",
-    frozenset({(), (("i", "j"), ("j", "i"))}): "_minus_ij",
-    frozenset({(), (("a", "b"), ("b", "a"))}): "_minus_ab",
-    frozenset({p for p, _ in permutations_of("ijab")}): "_minus_both",
-}
-"""The helper applying the permutations of an orbit's coset representatives."""
-
-PRELUDE = '''"""{title}, generated code ({adr}).
-
-Do not edit: ``python -m hafnium.cc.generator`` derives the terms by
-Wick's theorem and writes this program of pairwise contractions, and a
-test regenerates it to detect drift. {description}
-"""
-
-from __future__ import annotations
-
-from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.orbitals import Space
-from hafnium.structured import BlockTensor, {imports}
-
-OCC, VIR = Space.OCCUPIED, Space.VIRTUAL
-'''
-
-CCSD_DESCRIPTION = """The functions
-take the normal-ordered Hamiltonian of a reference in its orbital basis
-and the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md
-§3, and return the connected energy ``<Φ| H_N e^T |Φ>`` as a tensor
-without axes and the residuals ``<Φ_i^a| H_N e^T |Φ>`` and
-``<Φ_ij^ab| H_N e^T |Φ>`` as tensors of the structure of the amplitudes."""
-
-TRIPLES_DESCRIPTION = """The functions
-take the normal-ordered Hamiltonian of a reference in its orbital basis,
-the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md §3
-and three windows of the occupied axis, and return the connected
-triples ``<Φ_ijk^abc| H_N T2 |Φ>_C`` and the disconnected ones
-``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` over those windows as tensors
-``[i, j, k, a, b, c]``, so that the triples are evaluated a batch of
-occupied indices at a time."""
-
-LAMBDA_DESCRIPTION = """The functions
-take the normal-ordered Hamiltonian of a reference in its orbital basis,
-the amplitudes ``t1[i, a]`` and ``t2[i, j, a, b]`` of CONVENTIONS.md §3
-and the de-excitation amplitudes ``l1[i, a]`` and ``l2[i, j, a, b]``,
-and return the residuals ``<Φ| (1 + Λ) H_N e^T |Φ_i^a>`` and
-``<Φ| (1 + Λ) H_N e^T |Φ_ij^ab>`` of the Λ equations, linked, as tensors
-of the structure of the de-excitation amplitudes, and the blocks of the
-one-particle density ``<Φ| (1 + Λ) {p† q} e^T |Φ>`` by the spaces of
-``p`` and ``q``."""
-
-CCSD_HELPERS = '''
-
-def _minus_ij(x: BlockTensor) -> BlockTensor:
-    """``(1 − P(ij)) x``."""
-    return x - x.permute("ijab->jiab")
-
-
-def _minus_ab(x: BlockTensor) -> BlockTensor:
-    """``(1 − P(ab)) x``."""
-    return x - x.permute("ijab->ijba")
-
-
-def _minus_both(x: BlockTensor) -> BlockTensor:
-    """``(1 − P(ij)) (1 − P(ab)) x``."""
-    return _minus_ab(_minus_ij(x))
-'''
-
-TRIPLES_HELPERS = '''
-
-def _windowed(x: BlockTensor, windows: tuple[TensorAxis | None, ...]) -> BlockTensor:
-    """Restrict the axes of ``x`` to the windows given, ``None`` leaving one whole."""
-    for position, window in enumerate(windows):
-        if window is not None:
-            x = x.window(position, window)
-    return x
-'''
-
-
 ATTRIBUTES = {Kind.FOCK: "fock", Kind.INTEGRAL: "integrals"}
 """The attribute of the Hamiltonian each of its kinds is read from."""
 
 TYPES = {"h": "NormalOrderedHamiltonian"}
 """The annotation of an operand of a function, a block tensor when not listed."""
-
-LAMBDA_OPERANDS = ("h", "t1", "t2", "l1", "l2")
-"""The operands of a function of the Λ equations."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,144 +57,6 @@ class Signature:
     """The names of the parameters, the Hamiltonian ``h`` and the tensors."""
     windowed: str = ""
     """The free indices the function takes a window each for."""
-
-
-SIGNATURES = {
-    "energy": Signature(
-        "energy", "``<Φ| H_N e^T |Φ>`` connected, as a tensor without axes."
-    ),
-    "singles": Signature(
-        "singles_residual",
-        "``<Φ_i^a| H_N e^T |Φ>`` connected, as the tensor ``[i, a]``.",
-    ),
-    "doubles": Signature(
-        "doubles_residual",
-        "``<Φ_ij^ab| H_N e^T |Φ>`` connected, as the tensor ``[i, j, a, b]``.",
-    ),
-    "connected_triples": Signature(
-        "connected_triples",
-        "``<Φ_ijk^abc| H_N T2 |Φ>`` connected, as ``[i, j, k, a, b, c]``.\n\n"
-        "The occupied indices run over the windows ``i``, ``j`` and ``k``.",
-        windowed="ijk",
-    ),
-    "disconnected_triples": Signature(
-        "disconnected_triples",
-        "``<Φ_ijk^abc| H_N (T1 + T2) |Φ>`` disconnected, as ``[i, j, k, a, b, c]``."
-        "\n\nThe occupied indices run over the windows ``i``, ``j`` and ``k``.",
-        windowed="ijk",
-    ),
-    "lambda_singles": Signature(
-        "lambda_singles_residual",
-        "``<Φ| (1 + Λ) H_N e^T |Φ_i^a>`` linked, as the tensor ``[i, a]``.",
-        LAMBDA_OPERANDS,
-    ),
-    "lambda_doubles": Signature(
-        "lambda_doubles_residual",
-        "``<Φ| (1 + Λ) H_N e^T |Φ_ij^ab>`` linked, as the tensor ``[i, j, a, b]``.",
-        LAMBDA_OPERANDS,
-    ),
-}
-
-
-@dataclass(frozen=True, slots=True)
-class Orbit:
-    """A representative term and the coset representatives of its images.
-
-    ``cosets`` are representatives under the permutations of all free
-    indices, ``occupied_cosets`` and ``virtual_cosets`` under those of
-    the occupied and of the virtual indices alone.
-    """
-
-    term: Term
-    cosets: tuple[tuple[Permutation, int], ...]
-    occupied_cosets: tuple[tuple[Permutation, int], ...]
-    virtual_cosets: tuple[tuple[Permutation, int], ...]
-
-    @property
-    def antisymmetrizer(self) -> str:
-        """Name of the helper applying the coset representatives, empty for none."""
-        return ANTISYMMETRIZERS[frozenset(p for p, _ in self.cosets)]
-
-    @property
-    def factored(self) -> bool:
-        """Whether the images are the occupied images permuted by the virtual ones.
-
-        That is the case when the stabilizer of the term is the product
-        of its occupied and its virtual parts, so that the sum over the
-        cosets factors as ``Σ_τ ε(τ) τ Σ_σ ε(σ) σ``; the number of
-        cosets is then the product of the two counts.
-        """
-        return len(self.cosets) == len(self.occupied_cosets) * len(self.virtual_cosets)
-
-
-def orbits(equation: Equation) -> list[Orbit]:
-    """Group the terms of ``equation`` by the permutations of its free indices.
-
-    The residual ``R`` satisfies ``R = ε(g) g(R)`` for every permutation
-    ``g`` of its antisymmetric index pairs, so the coefficient of the
-    image of a term under ``g`` is fixed by the term's own, which is
-    checked; the orbit is then ``c Σ_cosets ε(g) g(x)`` over the images
-    with distinct canonical forms, ``x`` the representative evaluated.
-    The images under the occupied and under the virtual permutations
-    alone are collected the same way, for the factored form. A result
-    without antisymmetry, a density block, has one orbit per term.
-
-    Raises
-    ------
-    ValueError
-        If a term lacks an image, or an image has another coefficient
-        than the antisymmetry of the residual requires.
-    """
-    by_key = {term.key: term for term in equation.terms}
-    done: set[tuple[object, ...]] = set()
-    result: list[Orbit] = []
-    occupied, virtual = _letters_of(equation.free)
-    if equation.antisymmetric:
-        group = permutations_of(equation.free)
-        within = (_permutations_within(occupied), _permutations_within(virtual))
-    else:
-        group = IDENTITY
-        within = (IDENTITY, IDENTITY)
-    for term in sorted(equation.terms, key=lambda t: t.key):
-        if term.key in done:
-            continue
-        cosets: list[tuple[Permutation, int]] = []
-        for permutation, parity in group:
-            image = term.substituted(dict(permutation)).canonical()
-            expected = parity * image.coefficient
-            actual = by_key.get(image.key)
-            if actual is None or actual.coefficient != expected:
-                raise ValueError(
-                    "the residual is not antisymmetric: the image of a term under "
-                    f"{permutation} has coefficient {actual and actual.coefficient}, "
-                    f"expected {expected}"
-                )
-            if image.key not in done:
-                done.add(image.key)
-                cosets.append((permutation, parity))
-        result.append(
-            Orbit(
-                term,
-                tuple(cosets),
-                _cosets_within(term, within[0]),
-                _cosets_within(term, within[1]),
-            )
-        )
-    return result
-
-
-def _cosets_within(
-    term: Term, group: tuple[tuple[Permutation, int], ...]
-) -> tuple[tuple[Permutation, int], ...]:
-    """Return the permutations of ``group`` with distinct images of ``term``."""
-    seen: set[tuple[object, ...]] = set()
-    cosets: list[tuple[Permutation, int]] = []
-    for permutation, parity in group:
-        key = term.substituted(dict(permutation)).canonical().key
-        if key not in seen:
-            seen.add(key)
-            cosets.append((permutation, parity))
-    return tuple(cosets)
 
 
 # ------------------------------------------------------------------ programs
@@ -499,16 +224,17 @@ def _helper_lines(orbit: Orbit, equation: Equation, first: bool) -> list[str]:
 def _image_lines(
     orbit: Orbit,
     equation: Equation,
-    cosets: tuple[tuple[Permutation, int], ...],
+    windowed: str,
+    cosets: Cosets,
     target: str,
     first: bool,
 ) -> list[str]:
     """Write the images of an orbit's representative under ``cosets`` into ``target``.
 
     Each image is the representative evaluated over the windows of the
-    permuted letters and permuted back, added with its parity.
+    free indices ``windowed``, permuted, and permuted back, added with
+    its parity.
     """
-    windowed = SIGNATURES[equation.name].windowed
     lines: list[str] = []
     for permutation, parity in cosets:
         mapping = dict(permutation)
@@ -522,8 +248,10 @@ def _image_lines(
     return lines
 
 
-def _windowed_lines(orbits_: list[Orbit], equation: Equation) -> list[str]:
-    """Write the statements of an equation evaluated over windows.
+def _windowed_lines(
+    orbits_: list[Orbit], equation: Equation, windowed: str
+) -> list[str]:
+    """Write the statements of an equation evaluated over the windows ``windowed``.
 
     The orbits whose stabilizer factors are summed over their occupied
     images into ``s``, grouped by their virtual cosets, and the virtual
@@ -543,7 +271,9 @@ def _windowed_lines(orbits_: list[Orbit], equation: Equation) -> list[str]:
     for members in groups.values():
         for position, orbit in enumerate(members):
             lines.extend(
-                _image_lines(orbit, equation, orbit.occupied_cosets, "s", position == 0)
+                _image_lines(
+                    orbit, equation, windowed, orbit.occupied_cosets, "s", position == 0
+                )
             )
         # The identity comes first among the cosets, so the sum starts
         # with ``s`` itself.
@@ -556,7 +286,7 @@ def _windowed_lines(orbits_: list[Orbit], equation: Equation) -> list[str]:
         )
         first = False
     for orbit in plain:
-        lines.extend(_image_lines(orbit, equation, orbit.cosets, "r", first))
+        lines.extend(_image_lines(orbit, equation, windowed, orbit.cosets, "r", first))
         first = False
     return lines
 
@@ -608,16 +338,19 @@ def _declaration_lines(body: Iterable[str]) -> list[str]:
     return [f"{name}: BlockTensor" for name in VARIABLES if name in assigned]
 
 
-def function_source(equation: Equation) -> str:
-    """Write the Python function evaluating the terms of ``equation``."""
-    signature = SIGNATURES[equation.name]
+def _parameters(signature: Signature) -> list[str]:
+    """Write the annotated parameters of a function: its operands, then its windows."""
     parameters = [
         f"{name}: {TYPES.get(name, 'BlockTensor')}" for name in signature.operands
     ]
-    parameters += [f"{letter}: TensorAxis" for letter in signature.windowed]
+    return parameters + [f"{letter}: TensorAxis" for letter in signature.windowed]
+
+
+def function_source(equation: Equation, signature: Signature) -> str:
+    """Write the Python function ``signature`` evaluating the terms of ``equation``."""
     groups = orbits(equation)
     body = (
-        _windowed_lines(groups, equation)
+        _windowed_lines(groups, equation, signature.windowed)
         if signature.windowed
         else [
             line
@@ -625,7 +358,7 @@ def function_source(equation: Equation) -> str:
             for line in _helper_lines(orbit, equation, position == 0)
         ]
     )
-    lines = _definition(signature.function, parameters, "BlockTensor")
+    lines = _definition(signature.function, _parameters(signature), "BlockTensor")
     lines.extend(_docstring_lines(signature.docstring))
     lines.extend(_hamiltonian_lines(equation.terms))
     lines.extend(f"    {line}" for line in (*_declaration_lines(body), *body))
@@ -633,21 +366,18 @@ def function_source(equation: Equation) -> str:
     return "\n".join(lines) + "\n"
 
 
-def density_source(blocks: Sequence[Equation]) -> str:
-    """Write the function evaluating the density ``blocks`` into a mapping by spaces."""
+def density_source(blocks: Sequence[Equation], signature: Signature) -> str:
+    """Write the function ``signature`` evaluating ``blocks`` into a mapping by spaces.
+
+    The function returns ``dict[tuple[Space, Space], BlockTensor]`` with
+    the tensor of each equation under the spaces of its free indices.
+    """
     lines = _definition(
-        "one_particle_density",
-        [f"{name}: BlockTensor" for name in ("t1", "t2", "l1", "l2")],
+        signature.function,
+        _parameters(signature),
         "dict[tuple[Space, Space], BlockTensor]",
     )
-    lines.extend(
-        _docstring_lines(
-            "``<Φ| (1 + Λ) {p† q} e^T |Φ>`` connected, by the spaces of ``p`` and "
-            "``q``.\n\nEach block is the tensor ``[p, q]`` with ``q`` conjugated, "
-            "pairing with\n``f[p, q]`` in a trace, without the occupations of the "
-            "reference."
-        )
-    )
+    lines.extend(_docstring_lines(signature.docstring))
     lines.append("    blocks: dict[tuple[Space, Space], BlockTensor] = {}")
     bodies = [
         [
@@ -665,84 +395,3 @@ def density_source(blocks: Sequence[Equation]) -> str:
         lines.append(f"    blocks[{spaces}] = r")
     lines.append("    return blocks")
     return "\n".join(lines) + "\n"
-
-
-def _constants(equations: Mapping[str, Equation]) -> str:
-    """Write the blocks of the Hamiltonian the equations read as constants."""
-    fock: set[tuple[Space, ...]] = set()
-    integrals: set[tuple[Space, ...]] = set()
-    for equation in equations.values():
-        for term in equation.terms:
-            for factor in term.factors:
-                if factor.kind is Kind.FOCK:
-                    fock.add(factor.slots)
-                elif factor.kind is Kind.INTEGRAL:
-                    integrals.add(factor.slots)
-
-    def listed(name: str, blocks: set[tuple[Space, ...]]) -> str:
-        entries = [
-            "(" + ", ".join(SPACE_NAMES[s] for s in block) + ")"
-            for block in sorted(blocks, key=lambda b: [s.value for s in b])
-        ]
-        # A tuple of one entry stays on one line, as the formatter keeps it.
-        if len(entries) == 1:
-            return f"{name} = ({entries[0]},)\n"
-        return f"{name} = (\n" + "".join(f"    {e},\n" for e in entries) + ")\n"
-
-    return (
-        listed("FOCK_BLOCKS", fock)
-        + '"""The blocks of the Fock operator the equations read."""\n'
-        + listed("INTEGRAL_BLOCKS", integrals)
-        + '"""The blocks of the antisymmetrized integrals the equations read."""\n'
-    )
-
-
-def ccsd_module_source() -> str:
-    """Write the complete source of :mod:`hafnium.cc._ccsd_equations`."""
-    equations = ccsd_equations()
-    prelude = PRELUDE.format(
-        title="The spin-orbital CCSD equations",
-        adr="ADR-0032",
-        description=CCSD_DESCRIPTION,
-        imports="contract",
-    )
-    functions = "".join(
-        "\n\n" + function_source(equations[name])
-        for name in ("energy", "singles", "doubles")
-    )
-    return prelude + "\n" + _constants(equations) + CCSD_HELPERS + functions
-
-
-def ccsd_pt_module_source() -> str:
-    """Write the complete source of :mod:`hafnium.cc._ccsd_pt_equations`."""
-    equations = ccsd_pt_equations()
-    prelude = PRELUDE.format(
-        title="The triples of the (T) correction",
-        adr="ADR-0033",
-        description=TRIPLES_DESCRIPTION,
-        imports="TensorAxis, contract",
-    )
-    functions = "".join(
-        "\n\n" + function_source(equations[name])
-        for name in ("connected_triples", "disconnected_triples")
-    )
-    return prelude + "\n" + _constants(equations) + TRIPLES_HELPERS + functions
-
-
-def ccsd_lambda_module_source() -> str:
-    """Write the complete source of :mod:`hafnium.cc._ccsd_lambda_equations`."""
-    equations = ccsd_lambda_equations()
-    prelude = PRELUDE.format(
-        title="The Λ equations of CCSD and its one-particle density",
-        adr="ADR-0034",
-        description=LAMBDA_DESCRIPTION,
-        imports="contract",
-    )
-    residuals = "".join(
-        "\n\n" + function_source(equations[name])
-        for name in ("lambda_singles", "lambda_doubles")
-    )
-    density = "\n\n" + density_source(
-        [equation for equation in equations.values() if not equation.antisymmetric]
-    )
-    return prelude + "\n" + _constants(equations) + CCSD_HELPERS + residuals + density

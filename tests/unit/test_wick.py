@@ -9,17 +9,9 @@ import pytest
 import hafnium.cc._ccsd_equations as generated
 import hafnium.cc._ccsd_lambda_equations as generated_ccsd_lambda
 import hafnium.cc._ccsd_pt_equations as generated_ccsd_pt
-from hafnium.cc.generator.emit import (
-    VARIABLES,
-    ccsd_lambda_module_source,
-    ccsd_module_source,
-    ccsd_pt_module_source,
-    function_source,
-    orbits,
-    permutations_of,
-    program,
-)
+from hafnium.cc.generator.emit import VARIABLES, function_source, program
 from hafnium.cc.generator.equations import (
+    Cluster,
     DummyIndices,
     Equation,
     Projection,
@@ -27,9 +19,14 @@ from hafnium.cc.generator.equations import (
     ccsd_lambda_equations,
     ccsd_pt_equations,
     hamiltonian_strings,
-    lambda_singles_cluster,
-    singles_cluster,
 )
+from hafnium.cc.generator.modules import (
+    SIGNATURES,
+    ccsd_lambda_module_source,
+    ccsd_module_source,
+    ccsd_pt_module_source,
+)
+from hafnium.cc.generator.orbits import orbits, permutations_of
 from hafnium.cc.generator.wick import (
     Factor,
     Index,
@@ -157,6 +154,38 @@ def test_normal_ordering_carries_the_sign() -> None:
     assert string.operators[:2] == (Operator(k, False), Operator(m, False))
 
 
+def test_cluster_operators_are_the_excitations_and_their_adjoints() -> None:
+    """``T`` creates the virtual indices of its amplitude, ``Λ`` the occupied ones."""
+    doubles = Cluster.DOUBLES.string(DummyIndices())
+    assert doubles.coefficient == Fraction(1, 4)
+    assert doubles.factor is not None
+    assert doubles.factor.kind is Kind.DOUBLES
+    assert doubles.factor.slots == (O, O, V, V)
+    i, j, a, b = doubles.factor.indices
+    assert doubles.operators == (
+        Operator(a, True),
+        Operator(b, True),
+        Operator(j, False),
+        Operator(i, False),
+    )
+    assert Cluster.SINGLES.string(DummyIndices()).coefficient == Fraction(1)
+    # The adjoint reverses the string and swaps creation with annihilation.
+    for cluster, adjoint in (
+        (Cluster.SINGLES, Cluster.LAMBDA_SINGLES),
+        (Cluster.DOUBLES, Cluster.LAMBDA_DOUBLES),
+    ):
+        excitation = cluster.string(DummyIndices())
+        de_excitation = adjoint.string(DummyIndices())
+        assert cluster.n_operators == adjoint.n_operators == len(excitation.operators)
+        assert de_excitation.coefficient == excitation.coefficient
+        assert de_excitation.factor is not None
+        assert excitation.factor is not None
+        assert de_excitation.factor.slots == excitation.factor.slots
+        assert [(op.index.label, op.creation) for op in de_excitation.operators] == [
+            (op.index.label, not op.creation) for op in reversed(excitation.operators)
+        ]
+
+
 def test_disconnected_terms_are_dropped() -> None:
     """``<Φ_i^a| f_N T1 T1 |Φ>`` keeps only the terms with both T1 linked to f."""
     dummies = DummyIndices()
@@ -167,7 +196,9 @@ def test_disconnected_terms_are_dropped() -> None:
     terms = Term.merge(
         term
         for one_body in hamiltonian_strings(dummies)[:4]
-        for term in expectation([bra, one_body, singles_cluster(dummies)], 1, [2])
+        for term in expectation(
+            [bra, one_body, Cluster.SINGLES.string(dummies)], 1, [2]
+        )
     )
     assert sorted(str(t) for t in terms) == [
         "-1 f[j,i] t1[j,a]",
@@ -176,7 +207,8 @@ def test_disconnected_terms_are_dropped() -> None:
     f_ov = hamiltonian_strings(dummies)[1]
     assert f_ov.factor is not None
     assert f_ov.factor.slots == (O, V)
-    two = [bra, f_ov, singles_cluster(dummies), singles_cluster(dummies)]
+    singles = Cluster.SINGLES
+    two = [bra, f_ov, singles.string(dummies), singles.string(dummies)]
     # The two equivalent contractions of ``T1 T1`` double the term; the
     # ``1/2!`` of the exponential is applied by the equation.
     connected = Term.merge(expectation(two, 1, [2, 3]))
@@ -282,12 +314,13 @@ def test_triples_equations_have_the_textbook_terms() -> None:
         assert group.factored
         assert len(group.occupied_cosets) == len(group.virtual_cosets) == 3
         assert group.occupied_cosets[0] == group.virtual_cosets[0] == ((), 1)
-    source = function_source(connected)
+    source = function_source(connected, SIGNATURES["connected_triples"])
     assert source.count("contract(") == 6
     assert source.count("_windowed(") == 12
     assert 'r = s - s.permute("ijkabc->ijkbac") + s.permute("ijkabc->ijkbca")' in source
     assert "f = h.fock" not in source
-    assert "f, v = h.fock, h.integrals" in function_source(disconnected)
+    source = function_source(disconnected, SIGNATURES["disconnected_triples"])
+    assert "f, v = h.fock, h.integrals" in source
 
 
 def test_unfactored_orbit_over_windows_is_written_image_by_image() -> None:
@@ -313,7 +346,7 @@ def test_unfactored_orbit_over_windows_is_written_image_by_image() -> None:
     assert not orbit.factored
     assert len(orbit.cosets) == 18
     assert len(orbit.occupied_cosets) == len(orbit.virtual_cosets) == 6
-    source = function_source(equation)
+    source = function_source(equation, SIGNATURES["connected_triples"])
     assert source.count("contract(") == 3 * 18
     assert "s = " not in source
     assert source.count("r = r ") == 17
@@ -444,9 +477,9 @@ def test_linked_expectation_drops_the_closed_hamiltonian() -> None:
         Fraction(1), Factor(Kind.FOCK, (m, e)), (Operator(m, True), Operator(e, False))
     )
     strings = [
-        lambda_singles_cluster(dummies),
+        Cluster.LAMBDA_SINGLES.string(dummies),
         fock,
-        singles_cluster(dummies),
+        Cluster.SINGLES.string(dummies),
         OperatorString(Fraction(1), None, projection.ket),
     ]
     unlinked = {str(t) for t in Term.merge(expectation(strings, 1, [2]))}
