@@ -12,7 +12,7 @@ the nuclear attraction regularized by the range-separated Coulomb kernel
 (ADR-0012, ADR-0018).
 """
 
-from hafnium.integrals.density_fitting import DensityFitting
+from hafnium.integrals.density_fitting import DensityFitting, DensityFittingDerivatives
 from hafnium.integrals.engine import (
     BlochImages,
     CoulombKernel,
@@ -23,8 +23,11 @@ from hafnium.integrals.native import RustEngine
 from hafnium.integrals.one_electron import (
     core_hamiltonian,
     kinetic,
+    kinetic_derivative,
     nuclear_attraction,
+    nuclear_attraction_derivative,
     overlap,
+    overlap_derivative,
 )
 from hafnium.integrals.periodic import (
     DEFAULT_LATTICE_SUM_PRECISION,
@@ -48,6 +51,7 @@ __all__ = [
     "BlochImages",
     "CoulombKernel",
     "DensityFitting",
+    "DensityFittingDerivatives",
     "IntegralEngine",
     "PeriodicCoulombFitting",
     "PeriodicDensityFitting",
@@ -61,11 +65,14 @@ __all__ = [
     "density_fitting_k",
     "eri",
     "kinetic",
+    "kinetic_derivative",
     "kinetic_k",
     "lattice_images",
     "madelung_constant",
     "nuclear_attraction",
+    "nuclear_attraction_derivative",
     "nuclear_attraction_k",
     "overlap",
+    "overlap_derivative",
     "overlap_k",
 ]

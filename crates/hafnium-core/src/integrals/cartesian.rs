@@ -30,6 +30,55 @@ pub fn cartesian_components(l: usize) -> Vec<[usize; 3]> {
     components
 }
 
+/// Position of the component `[i, j, k]` of angular momentum `l = i + j + k`
+/// in [`cartesian_components`]`(l)`.
+#[must_use]
+pub fn component_index([i, j, _]: [usize; 3], l: usize) -> usize {
+    let below = l - i;
+    below * (below + 1) / 2 + (below - j)
+}
+
+/// The derivative of Cartesian values with respect to the centre of the
+/// function with angular momentum `l`, from the values with that angular
+/// momentum raised and lowered: `∂_A G_a = 2α G_{a + e} − a_e G_{a − e}` along
+/// each axis `e`.
+///
+/// `raised[a'][r]` holds the values of the components of `l + 1` and
+/// `lowered[a'][r]` those of `l − 1` (empty for `l = 0`), with `trailing`
+/// values `r` each; `out[axis][a][r]` receives the derivative for the
+/// `components` of `l`.
+pub(crate) fn center_derivative(
+    exponent: f64,
+    components: &[[usize; 3]],
+    raised: &[f64],
+    lowered: &[f64],
+    trailing: usize,
+    out: &mut [f64],
+) {
+    let l: usize = components[0].iter().sum();
+    let n = components.len();
+    for (index, component) in components.iter().enumerate() {
+        for axis in 0..3 {
+            let mut up = *component;
+            up[axis] += 1;
+            let source = &raised[component_index(up, l + 1) * trailing..][..trailing];
+            let target = &mut out[(axis * n + index) * trailing..][..trailing];
+            for (t, s) in target.iter_mut().zip(source) {
+                *t = 2.0 * exponent * s;
+            }
+            if component[axis] > 0 {
+                let mut down = *component;
+                down[axis] -= 1;
+                let source = &lowered[component_index(down, l - 1) * trailing..][..trailing];
+                let factor = to_f64(component[axis]);
+                for (t, s) in target.iter_mut().zip(source) {
+                    *t -= factor * s;
+                }
+            }
+        }
+    }
+}
+
 /// Row-major `[2l + 1, n_cartesian(l)]` matrix taking Cartesian monomial
 /// integrals to real solid harmonics normalized on the sphere.
 ///
@@ -212,6 +261,29 @@ mod tests {
             ]
         );
         assert_eq!(n_cartesian(4), 15);
+    }
+
+    #[test]
+    fn component_index_inverts_the_component_list() {
+        for l in 0..=5 {
+            for (index, component) in cartesian_components(l).into_iter().enumerate() {
+                assert_eq!(component_index(component, l), index);
+            }
+        }
+    }
+
+    #[test]
+    fn center_derivative_combines_the_raised_and_lowered_values() {
+        // One trailing value, l = 1: ∂_x of [1, 0, 0] is 2α [2, 0, 0] − [0, 0, 0].
+        let components = cartesian_components(1);
+        let raised: Vec<f64> = (0..6).map(|i| 10.0 + to_f64(i)).collect();
+        let lowered = [3.0];
+        let mut out = vec![0.0; 9];
+        center_derivative(0.5, &components, &raised, &lowered, 1, &mut out);
+        // x-derivatives of x, y, z: 2α·raised[xx] − 1·lowered, 2α·raised[xy], 2α·raised[xz].
+        assert_eq!(&out[..3], &[10.0 - 3.0, 11.0, 12.0]);
+        // z-derivatives of x, y, z: 2α·raised[xz], 2α·raised[yz], 2α·raised[zz] − lowered.
+        assert_eq!(&out[6..], &[12.0, 14.0, 15.0 - 3.0]);
     }
 
     #[test]

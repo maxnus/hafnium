@@ -51,6 +51,10 @@ Until then the packages are documented directly.
 
 ::: hafnium.cc
 
+## hafnium.properties
+
+::: hafnium.properties
+
 ## hafnium.cc.generator
 
 ::: hafnium.cc.generator

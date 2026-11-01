@@ -109,6 +109,66 @@ class DensityFitting:
         return xp.einsum("Puv,Pwx->uvwx", fitted, fitted)
 
 
+@dataclass(frozen=True, slots=True)
+class DensityFittingDerivatives:
+    """The derivatives of the metric and the three-centre integrals (ADR-0035).
+
+    Parameters
+    ----------
+    metric : Array[3, aux, aux]
+        ``(∂_P P | Q)``, the derivative with respect to the bra centre; the
+        ket derivative is its negative.
+    auxiliary : Array[3, aux, ao, ao]
+        ``(∂_P P | u v)``, the derivative with respect to the auxiliary
+        centre.
+    orbital : Array[3, aux, ao, ao]
+        ``(P | ∂_A u v)``, the derivative with respect to the centre of the
+        first orbital function; the derivative with respect to the second
+        is its transpose in the orbital indices.
+    """
+
+    metric: Array
+    auxiliary: Array
+    orbital: Array
+
+    def __post_init__(self) -> None:
+        n_aux = self.metric.shape[1]
+        if self.metric.shape != (3, n_aux, n_aux):
+            raise InputError("the metric derivative has shape [3, aux, aux]")
+        for derivative in (self.auxiliary, self.orbital):
+            if derivative.ndim != 4 or derivative.shape[:2] != (3, n_aux):
+                raise InputError(
+                    "the three-centre derivatives have shape [3, aux, ao, ao]"
+                )
+
+    @classmethod
+    def build(
+        cls,
+        engine: IntegralEngine,
+        basis: BasisSet,
+        auxiliary: BasisSet,
+        molecule: Molecule,
+        *,
+        omega: float | None = None,
+    ) -> DensityFittingDerivatives:
+        """Evaluate the derivatives of the integrals of :meth:`DensityFitting.build`."""
+        orbital = ShellTable.from_basis(basis, molecule)
+        fitting = ShellTable.from_basis(auxiliary, molecule)
+        kernel = CoulombKernel(omega)
+        zero = host_array([[0.0, 0.0, 0.0]])
+        metric = engine.coulomb_two_center_derivative(
+            fitting, fitting, zero, kernel=kernel
+        )
+        by_auxiliary, by_orbital = engine.coulomb_three_center_derivative(
+            fitting,
+            orbital,
+            orbital,
+            host_array([[[0.0] * 3, [0.0] * 3]]),
+            kernel=kernel,
+        )
+        return cls(metric[0], by_auxiliary[0], by_orbital[0])
+
+
 def inverse_square_root(metric: Array, threshold: float) -> Array:
     """``M^{-1/2}`` of a Hermitian positive ``metric`` ``[aux, aux]``.
 

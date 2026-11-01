@@ -175,3 +175,12 @@ CCSD_ENERGY_TOL = 1e-10
 # Natural occupations of CCSD densities, both codes' amplitudes converged to
 # a norm of 1e-10.
 NATURAL_OCCUPATION_TOL = 1e-8
+
+# Analytic nuclear gradients against five-point central differences of the
+# energy with a step of 2e-3 Bohr, the states converged to a gradient of 1e-10:
+# the differences are limited by the rounding of the energies.
+GRADIENT_FINITE_DIFFERENCE_TOL = 1e-7
+# Analytic nuclear gradients against PySCF's density-fitted gradients with the
+# same auxiliary basis, and across the Fukutome classes: first order in the
+# residual orbital error.
+GRADIENT_TOL = 1e-7

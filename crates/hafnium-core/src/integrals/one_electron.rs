@@ -1,5 +1,6 @@
 //! One-electron integrals over shell pairs: overlap, kinetic energy and
-//! nuclear attraction, with the ket shells translated by lattice vectors.
+//! nuclear attraction, with the ket shells translated by lattice vectors,
+//! and their first derivatives with respect to the centres (ADR-0035).
 //!
 //! The nuclear attraction takes a [`CoulombKernel`] and a screening
 //! threshold: every term of the sum over charges and primitive pairs whose
@@ -11,14 +12,24 @@
 //! `[s_lo, s_hi]` is the exponent range of the kernel, `M` the pair's
 //! envelope with the weights `s_hi^t h_t(ε)`, and `h_t` the Hermite
 //! envelopes of [`super::pairs`].
+//!
+//! A derivative with respect to the centre of the bra function raises and
+//! lowers its angular momentum, `∂_A G_a = 2α G_{a + e} − a_e G_{a − e}`,
+//! so the derivative kernels evaluate the values of the undifferentiated
+//! kernel for the raised and the lowered components from one expansion
+//! with an extra order on the bra. A derivative with respect to the
+//! position of a charge shifts the Hermite Coulomb integrals,
+//! `∂_C R_{tuv} = −R_{t+1,uv}`. The derivatives with respect to the ket
+//! centre follow from translational invariance and are not formed. The
+//! derivative kernels evaluate every term.
 
 use std::f64::consts::PI;
 
 use rayon::prelude::*;
 
 use super::ShellTable;
-use super::cartesian::n_cartesian;
-use super::coulomb::{CoulombKernel, HermiteTable, HermiteWorkspace};
+use super::cartesian::{center_derivative, n_cartesian};
+use super::coulomb::{CoulombKernel, HermiteIntegrals, HermiteTable, HermiteWorkspace};
 use super::pairs::{ENVELOPE_EPSILON, PrimitivePair, hermite_envelopes, primitive_pairs};
 use super::two_electron::{Tables, check_finite, check_threshold};
 use crate::Error;
@@ -31,14 +42,34 @@ pub fn overlap(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) ->
         bra,
         ket,
         translations,
-        0,
-        |pair, a, b, _screen, _workspace, values| {
-            let scale = (PI / pair.p).powf(1.5);
-            for (ia, ca) in a.iter().enumerate() {
-                for (ib, cb) in b.iter().enumerate() {
-                    values[ia * b.len() + ib] = scale * pair.product(ca, cb, [0, 0, 0]);
-                }
-            }
+        [0, 0],
+        1,
+        |pair, [la, lb], tables, _screen, _workspace, values| {
+            overlap_values(pair, &tables.components[la], &tables.components[lb], values);
+            true
+        },
+    )
+}
+
+/// The derivative of the overlap with respect to the centre of the bra
+/// function, `⟨∂_A μ | ν(r − T)⟩`, as `[n_translations, 3, n_bra, n_ket]`;
+/// the derivative with respect to the ket centre is its negative.
+#[must_use]
+pub fn overlap_derivative(
+    bra: &ShellTable,
+    ket: &ShellTable,
+    translations: &[[f64; 3]],
+) -> Vec<f64> {
+    assemble(
+        bra,
+        ket,
+        translations,
+        [1, 0],
+        3,
+        |pair, ls, tables, _screen, workspace, values| {
+            bra_derivative_values(pair, ls, tables, workspace, values, |a, b, out| {
+                overlap_values(pair, a, b, out);
+            });
             true
         },
     )
@@ -51,20 +82,35 @@ pub fn kinetic(bra: &ShellTable, ket: &ShellTable, translations: &[[f64; 3]]) ->
         bra,
         ket,
         translations,
-        2,
-        |pair, a, b, _screen, _workspace, values| {
-            let scale = (PI / pair.p).powf(1.5);
-            for (ia, ca) in a.iter().enumerate() {
-                for (ib, cb) in b.iter().enumerate() {
-                    let s: [f64; 3] =
-                        std::array::from_fn(|axis| pair.hermite[axis].get(ca[axis], cb[axis], 0));
-                    let d: [f64; 3] = std::array::from_fn(|axis| {
-                        pair.second_derivative(axis, ca[axis], cb[axis])
-                    });
-                    let value = d[0] * s[1] * s[2] + s[0] * d[1] * s[2] + s[0] * s[1] * d[2];
-                    values[ia * b.len() + ib] = -0.5 * scale * value;
-                }
-            }
+        [0, 2],
+        1,
+        |pair, [la, lb], tables, _screen, _workspace, values| {
+            kinetic_values(pair, &tables.components[la], &tables.components[lb], values);
+            true
+        },
+    )
+}
+
+/// The derivative of the kinetic energy integrals with respect to the
+/// centre of the bra function, `⟨∂_A μ | −½∇² | ν(r − T)⟩`, laid out as
+/// [`overlap_derivative`]; the derivative with respect to the ket centre
+/// is its negative.
+#[must_use]
+pub fn kinetic_derivative(
+    bra: &ShellTable,
+    ket: &ShellTable,
+    translations: &[[f64; 3]],
+) -> Vec<f64> {
+    assemble(
+        bra,
+        ket,
+        translations,
+        [1, 2],
+        3,
+        |pair, ls, tables, _screen, workspace, values| {
+            bra_derivative_values(pair, ls, tables, workspace, values, |a, b, out| {
+                kinetic_values(pair, a, b, out);
+            });
             true
         },
     )
@@ -97,19 +143,8 @@ pub fn nuclear_attraction(
     kernel: CoulombKernel,
     threshold: f64,
 ) -> Result<Vec<f64>, Error> {
-    if charges.len() != positions.len() {
-        return Err(Error::LengthMismatch {
-            left: charges.len(),
-            right: positions.len(),
-        });
-    }
-    kernel.validate()?;
+    check_charges(translations, charges, positions, kernel)?;
     check_threshold(threshold)?;
-    check_finite(translations, "translations")?;
-    check_finite(positions, "positions")?;
-    if !charges.iter().all(|z| z.is_finite()) {
-        return Err(Error::InvalidArgument("charges are finite".to_string()));
-    }
     let charge_max = charges.iter().fold(0.0_f64, |acc, z| acc.max(z.abs()));
     let max_order = 2 * bra.max_angular_momentum().max(ket.max_angular_momentum());
     let envelopes = hermite_envelopes(max_order, ENVELOPE_EPSILON);
@@ -117,11 +152,13 @@ pub fn nuclear_attraction(
         bra,
         ket,
         translations,
-        0,
-        |pair, a, b, screen, workspace, values| {
-            let (low, high) = kernel.exponent_range(pair.p);
+        [0, 0],
+        1,
+        |pair, [la, lb], tables, screen, workspace, values| {
+            let (a, b) = (&tables.components[la], &tables.components[lb]);
             let mut radius_squared = f64::INFINITY;
             if threshold > 0.0 {
+                let (low, high) = kernel.exponent_range(pair.p);
                 let bound =
                     charge_max * screen * attraction_bound(pair, a, b, low, high, &envelopes);
                 if bound < threshold {
@@ -134,7 +171,7 @@ pub fn nuclear_attraction(
             }
             let mut summed = HermiteTable::zeros(pair.order);
             for (charge, position) in charges.iter().zip(positions) {
-                let pc: [f64; 3] = std::array::from_fn(|axis| pair.center[axis] - position[axis]);
+                let pc = displacement(pair, position);
                 if pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2] > radius_squared {
                     continue;
                 }
@@ -143,23 +180,212 @@ pub fn nuclear_attraction(
                     -charge,
                 );
             }
-            let prefactor = 2.0 * PI / pair.p;
-            for (ia, ca) in a.iter().enumerate() {
-                for (ib, cb) in b.iter().enumerate() {
-                    let mut value = 0.0;
-                    for t in 0..=ca[0] + cb[0] {
-                        for u in 0..=ca[1] + cb[1] {
-                            for v in 0..=ca[2] + cb[2] {
-                                value += pair.product(ca, cb, [t, u, v]) * summed.get(t, u, v);
-                            }
-                        }
-                    }
-                    values[ia * b.len() + ib] = prefactor * value;
-                }
-            }
+            contract_hermite(pair, a, b, &summed, 2.0 * PI / pair.p, values);
             true
         },
     ))
+}
+
+/// The derivatives of the nuclear attraction: with respect to the centre
+/// of the bra function, `⟨∂_A μ | V | ν(r − T)⟩`, in the slots `0..3`, and
+/// with respect to the position of each charge `C`,
+/// `⟨μ | ∂_C (−Z_C v(r_C)) | ν(r − T)⟩`, in the slots `3 + 3C..6 + 3C`, as
+/// `[n_translations, 3 (1 + n_charges), n_bra, n_ket]`. The derivative
+/// with respect to the ket centre is minus the sum of all slots. Every
+/// term is evaluated.
+///
+/// # Errors
+///
+/// As [`nuclear_attraction`], without the threshold.
+pub fn nuclear_attraction_derivative(
+    bra: &ShellTable,
+    ket: &ShellTable,
+    translations: &[[f64; 3]],
+    charges: &[f64],
+    positions: &[[f64; 3]],
+    kernel: CoulombKernel,
+) -> Result<Vec<f64>, Error> {
+    check_charges(translations, charges, positions, kernel)?;
+    Ok(assemble(
+        bra,
+        ket,
+        translations,
+        [1, 0],
+        3 * (1 + charges.len()),
+        |pair, ls, tables, _screen, workspace, values| {
+            let [la, lb] = ls;
+            let (a, b) = (&tables.components[la], &tables.components[lb]);
+            let n_ab = a.len() * b.len();
+            let prefactor = 2.0 * PI / pair.p;
+            let mut summed = HermiteTable::zeros(pair.order);
+            for (index, (charge, position)) in charges.iter().zip(positions).enumerate() {
+                let table = workspace.compute_kernel(
+                    pair.order,
+                    pair.p,
+                    kernel,
+                    displacement(pair, position),
+                );
+                // ∂_C of −Z (2π/p) Σ E_tuv R_tuv is Z (2π/p) Σ E_tuv R_{tuv + e}.
+                let slots = &mut values[(3 + 3 * index) * n_ab..][..3 * n_ab];
+                contract_hermite_shifted(pair, a, b, &table, prefactor * charge, slots);
+                summed.add_scaled(table, -charge);
+            }
+            bra_derivative_values(
+                pair,
+                ls,
+                tables,
+                workspace,
+                &mut values[..3 * n_ab],
+                |a, b, out| contract_hermite(pair, a, b, &summed, prefactor, out),
+            );
+            true
+        },
+    ))
+}
+
+/// Validate the arguments the attraction kernels share.
+fn check_charges(
+    translations: &[[f64; 3]],
+    charges: &[f64],
+    positions: &[[f64; 3]],
+    kernel: CoulombKernel,
+) -> Result<(), Error> {
+    if charges.len() != positions.len() {
+        return Err(Error::LengthMismatch {
+            left: charges.len(),
+            right: positions.len(),
+        });
+    }
+    kernel.validate()?;
+    check_finite(translations, "translations")?;
+    check_finite(positions, "positions")?;
+    if !charges.iter().all(|z| z.is_finite()) {
+        return Err(Error::InvalidArgument("charges are finite".to_string()));
+    }
+    Ok(())
+}
+
+/// `P − C`, the displacement of a charge from the product centre.
+#[inline]
+fn displacement(pair: &PrimitivePair, position: &[f64; 3]) -> [f64; 3] {
+    std::array::from_fn(|axis| pair.center[axis] - position[axis])
+}
+
+/// `values[a][b] = (π/p)^{3/2} E^{ab}_{000}` over the components.
+fn overlap_values(pair: &PrimitivePair, a: &[[usize; 3]], b: &[[usize; 3]], values: &mut [f64]) {
+    let scale = (PI / pair.p).powf(1.5);
+    for (ia, ca) in a.iter().enumerate() {
+        for (ib, cb) in b.iter().enumerate() {
+            values[ia * b.len() + ib] = scale * pair.product(ca, cb, [0, 0, 0]);
+        }
+    }
+}
+
+/// `values[a][b] = ⟨a | −½∇² | b⟩` over the components, the second
+/// derivative taken on the ket (Helgaker 9.3.33).
+fn kinetic_values(pair: &PrimitivePair, a: &[[usize; 3]], b: &[[usize; 3]], values: &mut [f64]) {
+    let scale = (PI / pair.p).powf(1.5);
+    for (ia, ca) in a.iter().enumerate() {
+        for (ib, cb) in b.iter().enumerate() {
+            let s: [f64; 3] =
+                std::array::from_fn(|axis| pair.hermite[axis].get(ca[axis], cb[axis], 0));
+            let d: [f64; 3] =
+                std::array::from_fn(|axis| pair.second_derivative(axis, ca[axis], cb[axis]));
+            let value = d[0] * s[1] * s[2] + s[0] * d[1] * s[2] + s[0] * s[1] * d[2];
+            values[ia * b.len() + ib] = -0.5 * scale * value;
+        }
+    }
+}
+
+/// `values[a][b] = scale Σ_{tuv} E^{ab}_{tuv} R_{tuv}` over the components,
+/// for a table of Hermite Coulomb integrals.
+fn contract_hermite(
+    pair: &PrimitivePair,
+    a: &[[usize; 3]],
+    b: &[[usize; 3]],
+    table: &impl HermiteIntegrals,
+    scale: f64,
+    values: &mut [f64],
+) {
+    for (ia, ca) in a.iter().enumerate() {
+        for (ib, cb) in b.iter().enumerate() {
+            let mut value = 0.0;
+            for t in 0..=ca[0] + cb[0] {
+                for u in 0..=ca[1] + cb[1] {
+                    for v in 0..=ca[2] + cb[2] {
+                        value += pair.product(ca, cb, [t, u, v]) * table.get(t, u, v);
+                    }
+                }
+            }
+            values[ia * b.len() + ib] = scale * value;
+        }
+    }
+}
+
+/// `values[axis][a][b] = scale Σ_{tuv} E^{ab}_{tuv} R_{tuv + e_axis}` over the
+/// components, the three shifts of the table in one pass.
+fn contract_hermite_shifted(
+    pair: &PrimitivePair,
+    a: &[[usize; 3]],
+    b: &[[usize; 3]],
+    table: &impl HermiteIntegrals,
+    scale: f64,
+    values: &mut [f64],
+) {
+    let n_ab = a.len() * b.len();
+    for (ia, ca) in a.iter().enumerate() {
+        for (ib, cb) in b.iter().enumerate() {
+            let mut sums = [0.0; 3];
+            for t in 0..=ca[0] + cb[0] {
+                for u in 0..=ca[1] + cb[1] {
+                    for v in 0..=ca[2] + cb[2] {
+                        let weight = pair.product(ca, cb, [t, u, v]);
+                        sums[0] += weight * table.get(t + 1, u, v);
+                        sums[1] += weight * table.get(t, u + 1, v);
+                        sums[2] += weight * table.get(t, u, v + 1);
+                    }
+                }
+            }
+            for (axis, sum) in sums.iter().enumerate() {
+                values[axis * n_ab + ia * b.len() + ib] = scale * sum;
+            }
+        }
+    }
+}
+
+/// Fill `values[axis][a][b]` with the derivative of a kernel's values with
+/// respect to the bra centre, from the values `base` gives for the
+/// components of the bra's angular momentum raised and lowered; the pair's
+/// expansion carries the extra order on the bra.
+fn bra_derivative_values(
+    pair: &PrimitivePair,
+    [la, lb]: [usize; 2],
+    tables: &Tables,
+    workspace: &mut HermiteWorkspace,
+    values: &mut [f64],
+    mut base: impl FnMut(&[[usize; 3]], &[[usize; 3]], &mut [f64]),
+) {
+    let b = &tables.components[lb];
+    let mut raised = std::mem::take(&mut workspace.raised);
+    raised.clear();
+    raised.resize(n_cartesian(la + 1) * b.len(), 0.0);
+    base(&tables.components[la + 1], b, &mut raised);
+    let mut lowered = std::mem::take(&mut workspace.lowered);
+    lowered.clear();
+    if la > 0 {
+        lowered.resize(n_cartesian(la - 1) * b.len(), 0.0);
+        base(&tables.components[la - 1], b, &mut lowered);
+    }
+    center_derivative(
+        pair.exponent_a,
+        &tables.components[la],
+        &raised,
+        &lowered,
+        b.len(),
+        values,
+    );
+    workspace.raised = raised;
+    workspace.lowered = lowered;
 }
 
 /// Bound on every Cartesian attraction integral of `pair` with a unit
@@ -185,38 +411,36 @@ fn attraction_bound(
     2.0 * PI / pair.p / pair.p.sqrt() * (high - low) * pair.envelope(a, b, &weights)
 }
 
-/// Loop over translations in parallel and over shell pairs, let `values_fn`
-/// fill the Cartesian values of each primitive pair (or return `false` to
-/// skip it), accumulate them into every contraction, transform to spherical
-/// functions and place the block. `screen` passed to `values_fn` is the
-/// factor by which a Cartesian primitive value can be amplified on its way
-/// into the matrix: the largest contraction coefficient of the pair times
-/// the row norms of the two spherical transformations.
+/// Loop over translations in parallel and over shell pairs, let `fill`
+/// write the Cartesian values of each primitive pair into `n_slots` slots
+/// `[slot][a][b]` (or return `false` to skip the pair), accumulate them into
+/// every contraction, transform to spherical functions and place the
+/// blocks as `[translation][slot][n_bra][n_ket]`. `extra` raises the bra
+/// and the ket order of the expansion of every pair. `screen` passed to
+/// `fill` is the factor by which a Cartesian primitive value can be
+/// amplified on its way into the matrix: the largest contraction
+/// coefficient of the pair times the row norms of the two spherical
+/// transformations.
 fn assemble(
     bra: &ShellTable,
     ket: &ShellTable,
     translations: &[[f64; 3]],
-    extra_b: usize,
-    values_fn: impl Fn(
-        &PrimitivePair,
-        &[[usize; 3]],
-        &[[usize; 3]],
-        f64,
-        &mut HermiteWorkspace,
-        &mut [f64],
-    ) -> bool
+    extra: [usize; 2],
+    n_slots: usize,
+    fill: impl Fn(&PrimitivePair, [usize; 2], &Tables, f64, &mut HermiteWorkspace, &mut [f64]) -> bool
     + Sync,
 ) -> Vec<f64> {
     let n_bra = bra.n_functions();
     let n_ket = ket.n_functions();
     let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
-    let tables = Tables::new(max_l);
+    let tables = Tables::new(max_l + extra[0]);
     let bra_offsets = bra.function_offsets();
     let ket_offsets = ket.function_offsets();
-    let mut out = vec![0.0; translations.len() * n_bra * n_ket];
-    out.par_chunks_mut((n_bra * n_ket).max(1))
+    let matrix_size = n_bra * n_ket;
+    let mut out = vec![0.0; translations.len() * n_slots * matrix_size];
+    out.par_chunks_mut((n_slots * matrix_size).max(1))
         .zip(translations.par_iter())
-        .for_each(|(matrix, translation)| {
+        .for_each(|(matrices, translation)| {
             let mut workspace = HermiteWorkspace::default();
             for (ia, &bra_offset) in bra_offsets.iter().enumerate() {
                 let a = bra.shell(ia);
@@ -224,33 +448,39 @@ fn assemble(
                     let b = ket.shell(ib);
                     let b_center: [f64; 3] =
                         std::array::from_fn(|axis| b.center[axis] + translation[axis]);
-                    let pairs = primitive_pairs(&a, &b, b_center, extra_b);
+                    let pairs = primitive_pairs(&a, &b, b_center, extra);
                     let (la, lb) = (a.angular_momentum, b.angular_momentum);
                     let (nca, ncb) = (n_cartesian(la), n_cartesian(lb));
                     let shell_screen = tables.row_norms[la] * tables.row_norms[lb];
-                    let mut cartesian = vec![0.0; pairs.n_contracted() * nca * ncb];
-                    let mut values = vec![0.0; nca * ncb];
+                    let block = nca * ncb;
+                    let contracted = pairs.n_contracted() * block;
+                    let mut cartesian = vec![0.0; n_slots * contracted];
+                    let mut values = vec![0.0; n_slots * block];
                     for (index, pair) in pairs.pairs.iter().enumerate() {
                         let screen = shell_screen * pairs.coefficient_max(index);
-                        if values_fn(
-                            pair,
-                            &tables.components[la],
-                            &tables.components[lb],
-                            screen,
-                            &mut workspace,
-                            &mut values,
-                        ) {
-                            pairs.accumulate(index, &values, nca, ncb, &mut cartesian);
+                        if fill(pair, [la, lb], &tables, screen, &mut workspace, &mut values) {
+                            for slot in 0..n_slots {
+                                pairs.accumulate(
+                                    index,
+                                    &values[slot * block..][..block],
+                                    nca,
+                                    ncb,
+                                    &mut cartesian[slot * contracted..][..contracted],
+                                );
+                            }
                         }
                     }
-                    let spherical = tables.to_spherical(
-                        &cartesian,
-                        [Some(la), Some(lb), None, None],
-                        [a.n_contractions, b.n_contractions, 1, 1],
-                    );
-                    for (row, values) in spherical.chunks(b.n_functions()).enumerate() {
-                        let start = (bra_offset + row) * n_ket + ket_offset;
-                        matrix[start..start + values.len()].copy_from_slice(values);
+                    for slot in 0..n_slots {
+                        let spherical = tables.to_spherical(
+                            &cartesian[slot * contracted..][..contracted],
+                            [Some(la), Some(lb), None, None],
+                            [a.n_contractions, b.n_contractions, 1, 1],
+                        );
+                        let matrix = &mut matrices[slot * matrix_size..][..matrix_size];
+                        for (row, values) in spherical.chunks(b.n_functions()).enumerate() {
+                            let start = (bra_offset + row) * n_ket + ket_offset;
+                            matrix[start..start + values.len()].copy_from_slice(values);
+                        }
                     }
                 }
             }
@@ -578,7 +808,7 @@ mod tests {
                 vec![1],
             )
             .expect("valid");
-            let pairs = primitive_pairs(&bra.shell(0), &ket.shell(0), center_b, 0);
+            let pairs = primitive_pairs(&bra.shell(0), &ket.shell(0), center_b, [0, 0]);
             let pair = &pairs.pairs[0];
             for omega in [0.4, 1.5] {
                 let kernel = CoulombKernel::ShortRange(omega);
@@ -617,5 +847,147 @@ mod tests {
                 }
             }
         }
+    }
+
+    use crate::integrals::test_tables::{
+        assert_close, assert_rows_match, central_difference, d_shell, rows_of, sp_table_at,
+        vector_difference,
+    };
+
+    #[test]
+    fn overlap_and_kinetic_derivatives_match_finite_differences() {
+        let ket = sp_table_at([0.4, 0.1, -0.2]);
+        let translations = [[0.0; 3], [0.3, -0.2, 0.5]];
+        let n_ket = ket.n_functions();
+        for bra in [general_table(), d_shell()] {
+            let n_bra = bra.n_functions();
+            let s = overlap_derivative(&bra, &ket, &translations);
+            let t = kinetic_derivative(&bra, &ket, &translations);
+            for shell in 0..bra.n_shells() {
+                for axis in 0..3 {
+                    let rows = rows_of(&bra, shell);
+                    let ds = central_difference(&bra, shell, axis, |moved| {
+                        overlap(moved, &ket, &translations)
+                    });
+                    assert_rows_match(&s, (3, axis), (n_bra, n_ket), rows.clone(), &ds);
+                    let dt = central_difference(&bra, shell, axis, |moved| {
+                        kinetic(moved, &ket, &translations)
+                    });
+                    assert_rows_match(&t, (3, axis), (n_bra, n_ket), rows, &dt);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn attraction_derivatives_match_finite_differences() {
+        let ket = sp_table_at([0.4, 0.1, -0.2]);
+        let translations = [[0.0; 3], [0.3, -0.2, 0.5]];
+        let charges = [1.0, 2.5];
+        let positions = [[0.1, 0.2, 0.3], [-0.5, 0.4, 0.0]];
+        let n_ket = ket.n_functions();
+        let n_slots = 3 * (1 + charges.len());
+        for (bra, kernel) in [
+            (general_table(), CoulombKernel::Full),
+            (d_shell(), CoulombKernel::Full),
+            (general_table(), CoulombKernel::LongRange(0.7)),
+        ] {
+            let n_bra = bra.n_functions();
+            let evaluate = |bra: &ShellTable, positions: &[[f64; 3]]| {
+                nuclear_attraction(bra, &ket, &translations, &charges, positions, kernel, 0.0)
+                    .expect("valid")
+            };
+            let derivative = nuclear_attraction_derivative(
+                &bra,
+                &ket,
+                &translations,
+                &charges,
+                &positions,
+                kernel,
+            )
+            .expect("valid");
+            for axis in 0..3 {
+                for shell in 0..bra.n_shells() {
+                    let difference =
+                        central_difference(&bra, shell, axis, |moved| evaluate(moved, &positions));
+                    assert_rows_match(
+                        &derivative,
+                        (n_slots, axis),
+                        (n_bra, n_ket),
+                        rows_of(&bra, shell),
+                        &difference,
+                    );
+                }
+                for (index, position) in positions.iter().enumerate() {
+                    let difference = vector_difference(*position, axis, |moved| {
+                        let mut positions = positions;
+                        positions[index] = moved;
+                        evaluate(&bra, &positions)
+                    });
+                    assert_rows_match(
+                        &derivative,
+                        (n_slots, 3 + 3 * index + axis),
+                        (n_bra, n_ket),
+                        0..n_bra,
+                        &difference,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn attraction_derivatives_sum_to_zero_under_translation() {
+        // With one table on both sides and no translation the ket derivative
+        // is the transpose of the bra derivative, and ∂_A + ∂_B + Σ_C ∂_C = 0.
+        let table = general_table();
+        let charges = [1.0, 2.5];
+        let positions = [[0.1, 0.2, 0.3], [-0.5, 0.4, 0.0]];
+        let n = table.n_functions();
+        let derivative = nuclear_attraction_derivative(
+            &table,
+            &table,
+            &[[0.0; 3]],
+            &charges,
+            &positions,
+            CoulombKernel::Full,
+        )
+        .expect("valid");
+        let slot = |s: usize, i: usize, j: usize| derivative[(s * n + i) * n + j];
+        for axis in 0..3 {
+            for i in 0..n {
+                for j in 0..n {
+                    let charges_total: f64 = (0..charges.len())
+                        .map(|c| slot(3 + 3 * c + axis, i, j))
+                        .sum();
+                    let total = slot(axis, i, j) + slot(axis, j, i) + charges_total;
+                    assert!(total.abs() < 1e-12, "{total}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn derivative_kernels_treat_general_contractions_like_split_shells() {
+        let (general, split) = (general_table(), split_table());
+        let translations = [[0.0; 3], [0.3, -0.2, 0.5]];
+        assert_close(
+            &overlap_derivative(&general, &general, &translations),
+            &overlap_derivative(&split, &split, &translations),
+            1e-12,
+        );
+        assert_close(
+            &kinetic_derivative(&general, &split, &translations),
+            &kinetic_derivative(&split, &split, &translations),
+            1e-12,
+        );
+        let charges = [1.0, 2.0];
+        let positions = [[0.1, 0.2, 0.3], [-0.5, 0.4, 0.0]];
+        let kernel = CoulombKernel::ShortRange(0.7);
+        let evaluate = |table: &ShellTable| {
+            nuclear_attraction_derivative(table, table, &translations, &charges, &positions, kernel)
+                .expect("valid")
+        };
+        assert_close(&evaluate(&general), &evaluate(&split), 1e-12);
     }
 }

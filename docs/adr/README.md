@@ -41,3 +41,4 @@ ADR that supersedes it.
 | [0032](0032-coupled-cluster-equations-from-an-in-house-generator.md) | Coupled-cluster equations come from an in-house Wick generator and run as one program over block tensors | accepted 2026-10-30 |
 | [0033](0033-the-triples-correction-over-windows-of-the-occupied-axis.md) | The (T) correction comes from the same generator and runs over windows of the occupied axis | accepted 2026-10-31 |
 | [0034](0034-the-lambda-equations-and-the-density-from-the-same-generator.md) | The Λ equations and the one-particle density come from the same generator as the linked terms of the energy functional | accepted 2026-10-31 |
+| [0035](0035-derivative-integrals-from-the-undifferentiated-kernels.md) | Derivative integrals come from the undifferentiated kernels, and the gradient contracts them at fixed density | accepted 2026-11-01 |

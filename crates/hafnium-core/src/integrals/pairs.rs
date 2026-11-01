@@ -17,11 +17,14 @@ use crate::to_f64;
 pub(crate) struct PrimitivePair {
     /// Total exponent `p = a + b`.
     pub p: f64,
+    /// Exponent of the bra primitive, needed by the centre derivatives.
+    pub exponent_a: f64,
     /// Exponent of the ket primitive, needed by derivative formulas.
     pub exponent_b: f64,
     /// Product centre `P = (aA + bB) / p`.
     pub center: [f64; 3],
-    /// `l_a + l_b`, the highest Hermite order of the product.
+    /// The highest Hermite order the expansion holds: `l_a + l_b` plus the
+    /// extra orders the kernel asked for.
     pub order: usize,
     /// Expansion coefficients along x, y and z.
     pub hermite: [ExpansionCoefficients; 3],
@@ -197,13 +200,14 @@ fn factorial(n: usize) -> f64 {
 }
 
 /// All primitive pairs of two shells, with the ket centred at `b_center`.
-/// `extra_b` raises the ket order of the expansion, as kinetic integrals
-/// need.
+/// `extra` raises the bra and the ket order of the expansion, as the
+/// centre derivatives (one on the bra) and the kinetic integrals (two on
+/// the ket) need.
 pub(crate) fn primitive_pairs(
     a: &ShellRef<'_>,
     b: &ShellRef<'_>,
     b_center: [f64; 3],
-    extra_b: usize,
+    extra: [usize; 2],
 ) -> PrimitivePairs {
     let (n_a, n_b) = (a.exponents.len(), b.exponents.len());
     let contractions = [a.n_contractions, b.n_contractions];
@@ -218,8 +222,8 @@ pub(crate) fn primitive_pairs(
             });
             let hermite = std::array::from_fn(|axis| {
                 ExpansionCoefficients::new(
-                    a.angular_momentum,
-                    b.angular_momentum + extra_b,
+                    a.angular_momentum + extra[0],
+                    b.angular_momentum + extra[1],
                     p,
                     mu,
                     a.center[axis] - b_center[axis],
@@ -229,9 +233,10 @@ pub(crate) fn primitive_pairs(
             });
             pairs.push(PrimitivePair {
                 p,
+                exponent_a,
                 exponent_b,
                 center,
-                order: a.angular_momentum + b.angular_momentum,
+                order: a.angular_momentum + extra[0] + b.angular_momentum + extra[1],
                 hermite,
             });
             for k_a in 0..contractions[0] {
@@ -260,5 +265,5 @@ pub(crate) fn single_shell_pairs(a: &ShellRef<'_>, center: [f64; 3]) -> Primitiv
         coefficients: &[1.0],
     };
     let shifted = ShellRef { center, ..*a };
-    primitive_pairs(&shifted, &unit, center, 0)
+    primitive_pairs(&shifted, &unit, center, [0, 0])
 }

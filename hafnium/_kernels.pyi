@@ -68,6 +68,37 @@ def nuclear_attraction(
     bounded below ``threshold`` are skipped.
     """
 
+def overlap_derivative(
+    bra: ShellTable, ket: ShellTable, translations: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Return the derivative of the overlap with respect to the bra centres.
+
+    ``[image, 3, bra, ket]``.
+    """
+
+def kinetic_derivative(
+    bra: ShellTable, ket: ShellTable, translations: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Return the derivative of the kinetic integrals with respect to the bra centres.
+
+    ``[image, 3, bra, ket]``.
+    """
+
+def nuclear_attraction_derivative(
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    charges: NDArray[np.float64],
+    positions: NDArray[np.float64],
+    omega: float | None = None,
+    short_range: bool = False,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Return the derivatives of the nuclear attraction.
+
+    With respect to the bra centres as ``[image, 3, bra, ket]`` and with
+    respect to the charge positions as ``[image, charge, 3, bra, ket]``.
+    """
+
 def coulomb_two_center(
     bra: ShellTable,
     ket: ShellTable,
@@ -82,6 +113,18 @@ def coulomb_two_center(
     terms bounded below ``threshold`` are skipped.
     """
 
+def coulomb_two_center_derivative(
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    omega: float | None = None,
+    short_range: bool = False,
+) -> NDArray[np.float64]:
+    """Return the derivative of ``(P|Q)`` with respect to the bra centres.
+
+    ``[image, 3, bra, ket]``.
+    """
+
 def coulomb_three_center(
     auxiliary: ShellTable,
     bra: ShellTable,
@@ -94,6 +137,20 @@ def coulomb_three_center(
     """Return three-centre Coulomb integrals ``(P|uv)`` as ``[image, aux, bra, ket]``.
 
     ``translations`` has shape ``[image, 2, 3]`` (auxiliary, ket).
+    """
+
+def coulomb_three_center_derivative(
+    auxiliary: ShellTable,
+    bra: ShellTable,
+    ket: ShellTable,
+    translations: NDArray[np.float64],
+    omega: float | None = None,
+    short_range: bool = False,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Return the derivatives of ``(P|uv)``.
+
+    With respect to the auxiliary and to the bra centres, each as
+    ``[image, 3, aux, bra, ket]``.
     """
 
 def coulomb_three_center_bloch(
