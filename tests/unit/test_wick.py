@@ -1,29 +1,32 @@
 """The equation generator: Wick contractions, canonical terms, the emitted program."""
 
+import ast
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
 import hafnium.cc._ccsd_equations as generated
+import hafnium.cc._ccsd_lambda_equations as generated_ccsd_lambda
 import hafnium.cc._ccsd_pt_equations as generated_ccsd_pt
-from hafnium.cc.generator.emit import (
-    ccsd_module_source,
-    ccsd_pt_module_source,
-    function_source,
-    orbits,
-    permutations_of,
-    program,
-)
+from hafnium.cc.generator.emit import VARIABLES, function_source, program
 from hafnium.cc.generator.equations import (
+    Cluster,
     DummyIndices,
     Equation,
     Projection,
     ccsd_equations,
+    ccsd_lambda_equations,
     ccsd_pt_equations,
     hamiltonian_strings,
-    singles_cluster,
 )
+from hafnium.cc.generator.modules import (
+    SIGNATURES,
+    ccsd_lambda_module_source,
+    ccsd_module_source,
+    ccsd_pt_module_source,
+)
+from hafnium.cc.generator.orbits import orbits, permutations_of
 from hafnium.cc.generator.wick import (
     Factor,
     Index,
@@ -34,7 +37,7 @@ from hafnium.cc.generator.wick import (
     expectation,
     full_contractions,
 )
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 
 O, V = Space.OCCUPIED, Space.VIRTUAL
 I, J, K = (Index(O, label, True) for label in "ijk")
@@ -52,6 +55,8 @@ def test_committed_equations_are_current() -> None:
     assert source == ccsd_module_source()
     source = Path(generated_ccsd_pt.__file__).read_text(encoding="utf-8")
     assert source == ccsd_pt_module_source()
+    source = Path(generated_ccsd_lambda.__file__).read_text(encoding="utf-8")
+    assert source == ccsd_lambda_module_source()
 
 
 def test_energy_is_the_known_expression(equations: dict[str, Equation]) -> None:
@@ -149,6 +154,38 @@ def test_normal_ordering_carries_the_sign() -> None:
     assert string.operators[:2] == (Operator(k, False), Operator(m, False))
 
 
+def test_cluster_operators_are_the_excitations_and_their_adjoints() -> None:
+    """``T`` creates the virtual indices of its amplitude, ``Λ`` the occupied ones."""
+    doubles = Cluster.DOUBLES.string(DummyIndices())
+    assert doubles.coefficient == Fraction(1, 4)
+    assert doubles.factor is not None
+    assert doubles.factor.kind is Kind.DOUBLES
+    assert doubles.factor.slots == (O, O, V, V)
+    i, j, a, b = doubles.factor.indices
+    assert doubles.operators == (
+        Operator(a, True),
+        Operator(b, True),
+        Operator(j, False),
+        Operator(i, False),
+    )
+    assert Cluster.SINGLES.string(DummyIndices()).coefficient == Fraction(1)
+    # The adjoint reverses the string and swaps creation with annihilation.
+    for cluster, adjoint in (
+        (Cluster.SINGLES, Cluster.LAMBDA_SINGLES),
+        (Cluster.DOUBLES, Cluster.LAMBDA_DOUBLES),
+    ):
+        excitation = cluster.string(DummyIndices())
+        de_excitation = adjoint.string(DummyIndices())
+        assert cluster.n_operators == adjoint.n_operators == len(excitation.operators)
+        assert de_excitation.coefficient == excitation.coefficient
+        assert de_excitation.factor is not None
+        assert excitation.factor is not None
+        assert de_excitation.factor.slots == excitation.factor.slots
+        assert [(op.index.label, op.creation) for op in de_excitation.operators] == [
+            (op.index.label, not op.creation) for op in reversed(excitation.operators)
+        ]
+
+
 def test_disconnected_terms_are_dropped() -> None:
     """``<Φ_i^a| f_N T1 T1 |Φ>`` keeps only the terms with both T1 linked to f."""
     dummies = DummyIndices()
@@ -159,7 +196,9 @@ def test_disconnected_terms_are_dropped() -> None:
     terms = Term.merge(
         term
         for one_body in hamiltonian_strings(dummies)[:4]
-        for term in expectation([bra, one_body, singles_cluster(dummies)], 1, [2])
+        for term in expectation(
+            [bra, one_body, Cluster.SINGLES.string(dummies)], 1, [2]
+        )
     )
     assert sorted(str(t) for t in terms) == [
         "-1 f[j,i] t1[j,a]",
@@ -168,7 +207,8 @@ def test_disconnected_terms_are_dropped() -> None:
     f_ov = hamiltonian_strings(dummies)[1]
     assert f_ov.factor is not None
     assert f_ov.factor.slots == (O, V)
-    two = [bra, f_ov, singles_cluster(dummies), singles_cluster(dummies)]
+    singles = Cluster.SINGLES
+    two = [bra, f_ov, singles.string(dummies), singles.string(dummies)]
     # The two equivalent contractions of ``T1 T1`` double the term; the
     # ``1/2!`` of the exponential is applied by the equation.
     connected = Term.merge(expectation(two, 1, [2, 3]))
@@ -274,12 +314,13 @@ def test_triples_equations_have_the_textbook_terms() -> None:
         assert group.factored
         assert len(group.occupied_cosets) == len(group.virtual_cosets) == 3
         assert group.occupied_cosets[0] == group.virtual_cosets[0] == ((), 1)
-    source = function_source(connected)
+    source = function_source(connected, SIGNATURES["connected_triples"])
     assert source.count("contract(") == 6
     assert source.count("_windowed(") == 12
     assert 'r = s - s.permute("ijkabc->ijkbac") + s.permute("ijkabc->ijkbca")' in source
     assert "f = h.fock" not in source
-    assert "f, v = h.fock, h.integrals" in function_source(disconnected)
+    source = function_source(disconnected, SIGNATURES["disconnected_triples"])
+    assert "f, v = h.fock, h.integrals" in source
 
 
 def test_unfactored_orbit_over_windows_is_written_image_by_image() -> None:
@@ -305,7 +346,7 @@ def test_unfactored_orbit_over_windows_is_written_image_by_image() -> None:
     assert not orbit.factored
     assert len(orbit.cosets) == 18
     assert len(orbit.occupied_cosets) == len(orbit.virtual_cosets) == 6
-    source = function_source(equation)
+    source = function_source(equation, SIGNATURES["connected_triples"])
     assert source.count("contract(") == 3 * 18
     assert "s = " not in source
     assert source.count("r = r ") == 17
@@ -352,3 +393,125 @@ def test_windowed_program_restricts_the_operands() -> None:
     assert program(term, "ijkabc") == [
         'x = contract("bcdk,ijad->ijkabc", v[VIR, VIR, VIR, OCC], t2)'
     ]
+
+
+@pytest.fixture(scope="module")
+def lambda_equations() -> dict[str, Equation]:
+    return ccsd_lambda_equations()
+
+
+def test_lambda_equations_have_the_textbook_terms(
+    lambda_equations: dict[str, Equation],
+) -> None:
+    """The linear terms of the Λ equations, and no amplitude times the energy."""
+    singles = lambda_equations["lambda_singles"]
+    assert singles.free == "ia"
+    assert singles.antisymmetric
+    terms = {str(term) for term in singles.terms}
+    assert len(terms) == 59
+    assert {
+        "1 f[i,a]",
+        "1 f[b,a] l1[i,b]",
+        "-1 f[i,j] l1[j,a]",
+        "-1 v[i,b,j,a] l1[j,b]",
+        "-1/2 v[b,c,j,a] l2[i,j,b,c]",
+        "-1/2 v[i,b,j,k] l2[j,k,a,b]",
+    } <= terms
+    # The unlinked products ``λ_i^a E`` are left out.
+    assert not any(term.endswith("f[j,b] t1[j,b] l1[i,a]") for term in terms)
+    assert not any(term.endswith("v[j,k,b,c] t2[j,k,b,c] l1[i,a]") for term in terms)
+    doubles = lambda_equations["lambda_doubles"]
+    assert doubles.free == "ijab"
+    assert len(doubles.terms) == 69
+    groups = orbits(doubles)
+    helpers = {str(group.term): group.antisymmetrizer for group in groups}
+    assert helpers["1 v[i,j,a,b]"] == ""
+    assert helpers["1/2 v[c,d,a,b] l2[i,j,c,d]"] == ""
+    assert helpers["1/2 v[i,j,k,l] l2[k,l,a,b]"] == ""
+    assert helpers["1 f[i,a] l1[j,b]"] == "_minus_both"
+    assert helpers["1 f[i,k] l2[j,k,a,b]"] == "_minus_ij"
+    assert helpers["-1 f[c,a] l2[i,j,b,c]"] == "_minus_ab"
+    assert sum(len(group.cosets) for group in groups) == 69
+
+
+def test_density_blocks_are_the_textbook_expressions(
+    lambda_equations: dict[str, Equation],
+) -> None:
+    """The blocks of ``<Φ| (1 + Λ) {p† q} e^T |Φ>`` and their lack of antisymmetry."""
+    blocks = {
+        name: equation
+        for name, equation in lambda_equations.items()
+        if name.startswith("density")
+    }
+    assert all(not equation.antisymmetric for equation in blocks.values())
+    assert {name: e.free for name, e in blocks.items()} == {
+        "density_occupied_occupied": "ij",
+        "density_occupied_virtual": "ia",
+        "density_virtual_occupied": "ai",
+        "density_virtual_virtual": "ab",
+    }
+    assert [str(t) for t in blocks["density_virtual_occupied"].terms] == ["1 l1[i,a]"]
+    assert {str(t) for t in blocks["density_occupied_occupied"].terms} == {
+        "-1 t1[i,a] l1[j,a]",
+        "-1/2 t2[i,k,a,b] l2[j,k,a,b]",
+    }
+    assert {str(t) for t in blocks["density_virtual_virtual"].terms} == {
+        "1 t1[i,b] l1[i,a]",
+        "1/2 t2[i,j,b,c] l2[i,j,a,c]",
+    }
+    occupied_virtual = {str(t) for t in blocks["density_occupied_virtual"].terms}
+    assert len(occupied_virtual) == 5
+    assert {"1 t1[i,a]", "1 t2[i,j,a,b] l1[j,b]"} <= occupied_virtual
+    # Without antisymmetry every term is an orbit of its own.
+    groups = orbits(blocks["density_occupied_occupied"])
+    assert len(groups) == 2
+    assert all(group.antisymmetrizer == "" for group in groups)
+
+
+def test_linked_expectation_drops_the_closed_hamiltonian() -> None:
+    """``<Φ| Λ1 f T1 |Φ_i^a>``: ``λ_i^a f_me t_m^e`` is unlinked, the rest linked."""
+    dummies = DummyIndices()
+    projection = Projection.singles()
+    m, e = dummies.new(O), dummies.new(V)
+    fock = OperatorString(
+        Fraction(1), Factor(Kind.FOCK, (m, e)), (Operator(m, True), Operator(e, False))
+    )
+    strings = [
+        Cluster.LAMBDA_SINGLES.string(dummies),
+        fock,
+        Cluster.SINGLES.string(dummies),
+        OperatorString(Fraction(1), None, projection.ket),
+    ]
+    unlinked = {str(t) for t in Term.merge(expectation(strings, 1, [2]))}
+    linked = {str(t) for t in Term.merge(expectation(strings, 1, [2], linked=True))}
+    assert unlinked - linked == {"1 f[j,b] t1[j,b] l1[i,a]"}
+    assert linked == {"-1 f[i,b] t1[j,b] l1[j,a]", "-1 f[j,a] t1[j,b] l1[i,b]"}
+
+
+def test_generated_functions_declare_their_variables() -> None:
+    """Every generated function declares the variables it assigns before using them.
+
+    Pyright infers an undeclared variable's type from at most 64
+    assignments, which the singles residual of the Λ equations exceeds.
+    """
+    longest = 0
+    for module in (generated, generated_ccsd_pt, generated_ccsd_lambda):
+        assert module.__file__ is not None
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name.startswith("_"):
+                continue
+            assigned: dict[str, int] = {}
+            declared: list[str] = []
+            for statement in node.body:
+                if isinstance(statement, ast.AnnAssign) and statement.value is None:
+                    assert isinstance(statement.target, ast.Name)
+                    declared.append(statement.target.id)
+                elif isinstance(statement, ast.Assign):
+                    for target in statement.targets:
+                        if isinstance(target, ast.Name):
+                            assigned[target.id] = assigned.get(target.id, 0) + 1
+            variables = [name for name in VARIABLES if name in assigned]
+            assert declared == variables, node.name
+            longest = max(longest, *assigned.values())
+    assert longest > 64

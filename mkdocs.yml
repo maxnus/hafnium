@@ -60,6 +60,7 @@ nav:
       - adr/0031-correlated-tensors-over-k-points.md
       - adr/0032-coupled-cluster-equations-from-an-in-house-generator.md
       - adr/0033-the-triples-correction-over-windows-of-the-occupied-axis.md
+      - adr/0034-the-lambda-equations-and-the-density-from-the-same-generator.md
   - API reference: api.md
 
 markdown_extensions:

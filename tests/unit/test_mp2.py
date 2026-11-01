@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.correlated import (
-    OrbitalSpaces,
-    Space,
-    transform_df_tensor,
-)
 from hafnium.errors import InputError, StructureError
 from hafnium.integrals import DensityFitting
 from hafnium.molecule import Molecule
 from hafnium.mp import Mp2Result, df_mp2, mp2_from_df_tensor
+from hafnium.orbitals import (
+    OrbitalSpaces,
+    Space,
+    transform_df_tensor,
+)
 from hafnium.scf import (
     AveragedOccupation,
     DensityFittedCoulombExchange,

@@ -1,4 +1,4 @@
-"""Density matrices from orbital coefficients and occupations."""
+"""Density matrices from orbital coefficients and occupations, and back."""
 
 from __future__ import annotations
 
@@ -39,6 +39,19 @@ def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> Block
         _check_time_reversal(structure, block, density)
         blocks.append(density)
     return BlockMatrix(structure, tuple(blocks))
+
+
+def natural_orbitals(
+    density: BlockMatrix, overlap: BlockMatrix
+) -> tuple[BlockVector, BlockMatrix]:
+    """Return the occupations and orbitals with ``D = C diag(n) adjoint(C)``.
+
+    The natural orbitals of a Hermitian density solve ``D S C = C n`` with
+    ``C`` orthonormal in the metric ``S``, the eigenproblem of ``S D S``
+    with the overlap (:meth:`BlockMatrix.eigh`); the occupations come
+    block by block and point by point in ascending order.
+    """
+    return (overlap @ density @ overlap).eigh(overlap)
 
 
 def _check_time_reversal(

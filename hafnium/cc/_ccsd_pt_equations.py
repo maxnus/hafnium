@@ -15,7 +15,7 @@ occupied indices at a time.
 from __future__ import annotations
 
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 from hafnium.structured import BlockTensor, TensorAxis, contract
 
 OCC, VIR = Space.OCCUPIED, Space.VIRTUAL
@@ -51,6 +51,9 @@ def connected_triples(
     The occupied indices run over the windows ``i``, ``j`` and ``k``.
     """
     v = h.integrals
+    x: BlockTensor
+    s: BlockTensor
+    r: BlockTensor
     x = contract(
         "laij,klbc->ijkabc",
         _windowed(v[OCC, VIR, OCC, OCC], (None, None, i, j)),
@@ -106,6 +109,9 @@ def disconnected_triples(
     The occupied indices run over the windows ``i``, ``j`` and ``k``.
     """
     f, v = h.fock, h.integrals
+    x: BlockTensor
+    s: BlockTensor
+    r: BlockTensor
     x = contract(
         "ai,jkbc->ijkabc",
         _windowed(f[VIR, OCC], (None, i)),

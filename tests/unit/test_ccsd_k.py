@@ -6,8 +6,10 @@ from hafnium.cc import (
     CcsdOptions,
     CcsdPtResult,
     ccsd_from_periodic_fitting,
+    ccsd_lambda_from_periodic_fitting,
     ccsd_pt_from_periodic_fitting,
     df_ccsd,
+    df_ccsd_lambda,
     df_ccsd_pt,
 )
 from hafnium.errors import InputError
@@ -17,6 +19,7 @@ from hafnium.scf import ScfResult, solve_scf
 from hafnium.structured import Symmetry
 from hafnium.symmetry import KPoints, SymmetrySpec
 from tests.cells import box, helium
+from tests.densities import electron_count, natural_occupations
 from tests.hamiltonians import ENGINE
 from tests.tolerances import CCSD_ENERGY_TOL, MP2_ENERGY_TOL
 from tests.unit.test_mp2 import TIGHT
@@ -97,6 +100,24 @@ def test_supercell_at_gamma_folds_the_energy_per_cell(
         ).correlation_energy,
         abs=CCSD_ENERGY_TOL,
     )
+    # The density of the supercell holds the natural occupations of all
+    # k-points, twelve electrons in all.
+    folded_lambda = df_ccsd_lambda(
+        ENGINE, basis, supercell, auxiliary, reference, kpoints=gamma, options=OPTIONS
+    )
+    overlap = hamiltonian.metric(reference.structure)
+    assert electron_count(folded_lambda.density, overlap) == pytest.approx(
+        12.0, abs=1e-9
+    )
+    k_reference, _ = restricted_helium
+    k_lambda = ccsd_lambda_from_periodic_fitting(
+        k_reference, helium_pair[4], options=OPTIONS
+    )
+    k_overlap = helium_pair[5].metric(k_reference.structure)
+    assert electron_count(k_lambda.density, k_overlap) == pytest.approx(4.0, abs=1e-9)
+    assert natural_occupations(folded_lambda.density, overlap) == pytest.approx(
+        natural_occupations(k_lambda.density, k_overlap), abs=1e-9
+    )
 
 
 def test_open_shell_classes_agree_and_fold_over_k() -> None:
@@ -144,6 +165,35 @@ def test_open_shell_classes_agree_and_fold_over_k() -> None:
     )
     assert folded.triples_correction / 3 == pytest.approx(
         corrections[0], abs=CCSD_ENERGY_TOL
+    )
+
+
+@pytest.mark.parametrize("name", ["complex RHF", "paired UHF", "GHF"])
+def test_lambda_density_agrees_across_classes_over_k(
+    name: str, helium_pair: Setup, restricted_helium: tuple[ScfResult, CcsdPtResult]
+) -> None:
+    """The Λ equations over k-points: the classes agree on the density (ADR-0034)."""
+    _, _, _, mesh, fitting, hamiltonian = helium_pair
+    expected_reference, _ = restricted_helium
+    expected = ccsd_lambda_from_periodic_fitting(
+        expected_reference, fitting, options=OPTIONS
+    )
+    reference = solve_scf(
+        hamiltonian, SymmetrySpec.from_name(name).with_kpoints(mesh), options=TIGHT
+    )
+    result = ccsd_lambda_from_periodic_fitting(reference, fitting, options=OPTIONS)
+    assert result.lambda_converged
+    assert result.correlation_energy == pytest.approx(
+        expected.correlation_energy, abs=CCSD_ENERGY_TOL
+    )
+    overlap = hamiltonian.metric(reference.structure)
+    assert result.density.structure == reference.structure
+    assert electron_count(result.density, overlap) == pytest.approx(4.0, abs=1e-9)
+    assert natural_occupations(result.density, overlap) == pytest.approx(
+        natural_occupations(
+            expected.density, hamiltonian.metric(expected_reference.structure)
+        ),
+        abs=1e-9,
     )
 
 

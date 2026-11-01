@@ -96,7 +96,7 @@ expressed; and how MP2 is written once for every class.
   since the occupied coefficients of a doublet have an odd column count.
 - **Layout.** What the correlated methods share, the orbital spaces, the
   fitted integrals in the orbital basis and the energy denominators,
-  lives in `hafnium/correlated/`; MP2 in `hafnium/mp/` as PLAN.md §4
+  lives in `hafnium/orbitals/`; MP2 in `hafnium/mp/` as PLAN.md §4
   foresees.
 
 ## Consequences

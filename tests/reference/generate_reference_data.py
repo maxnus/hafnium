@@ -463,7 +463,8 @@ def record_ccsd() -> None:
             basis_name,
             f"scf.{kind.upper()}.density_fit with conv_tol=1e-13, "
             f"conv_tol_grad=1e-10, then {CCSD_CLASSES[kind]} in the same auxiliary "
-            "basis with conv_tol=1e-12, conv_tol_normt=1e-10, and its ccsd_t; Bohr",
+            "basis with conv_tol=1e-12, conv_tol_normt=1e-10, its ccsd_t, and the "
+            "eigenvalues of make_rdm1 after solve_lambda; Bohr",
             {key: np.asarray(value) for key, value in reference.items()},
             method=kind,
             auxiliary=MP2_AUXILIARY,

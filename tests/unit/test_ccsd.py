@@ -6,30 +6,36 @@ import pytest
 from hafnium.basis import BasisSet
 from hafnium.cc import (
     AmplitudeDiis,
+    CcsdLambdaResult,
     CcsdOptions,
     CcsdPtResult,
     CcsdResult,
     TriplesOptions,
     ccsd_from_df_tensor,
+    ccsd_lambda_from_df_tensor,
     ccsd_pt_from_df_tensor,
     df_ccsd,
+    df_ccsd_lambda,
     df_ccsd_pt,
     solve_ccsd,
     solve_ccsd_pt,
+    solve_lambda,
     triples_correction,
 )
 from hafnium.cc.ccsd_pt import window_size
-from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.molecule import Molecule
 from hafnium.mp import mp2_from_df_tensor
+from hafnium.orbitals import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.scf import (
     DensityFittedCoulombExchange,
     Hamiltonian,
     ScfResult,
     solve_scf,
 )
+from hafnium.structured import BlockVector
 from hafnium.symmetry import KPoints, SymmetrySpec, detect_point_group
+from tests.densities import electron_count, natural_occupations
 from tests.hamiltonians import ENGINE, hamiltonian_for
 from tests.molecules import hydrogen, water, water_cation
 from tests.shell_tables import LIBRARY
@@ -124,14 +130,14 @@ def dense_triples(
     return float(np.real(total)) / 36
 
 
-def two_electron_fci_correlation(
+def two_electron_fci(
     reference: ScfResult, hamiltonian: Hamiltonian, df_tensor: np.ndarray
-) -> float:
-    """The exact correlation energy of two electrons in the fitted integrals.
+) -> tuple[list[tuple[int, int]], np.ndarray, int]:
+    """The two-electron Hamiltonian over the determinants ``a†_p a†_q |0>``.
 
-    The Hamiltonian in the basis of all two-electron determinants
-    ``a†_p a†_q |0>`` (``p < q``) by the Slater–Condon rules, its lowest
-    eigenvalue minus the energy of the reference determinant.
+    Returns the pairs ``p < q`` labelling the determinants, the matrix of
+    the Hamiltonian over them by the Slater–Condon rules, and the position
+    of the reference determinant.
     """
     _, antisymmetrized = spin_orbital_integrals(reference, df_tensor)
     core = np.asarray(hamiltonian.core_hamiltonian)
@@ -156,9 +162,57 @@ def two_electron_fci_correlation(
             if q == r:
                 value -= one_body[p, s]
             matrix[row, column] = value
+    return pairs, matrix, pairs.index((occupied[0], occupied[1]))
+
+
+def two_electron_fci_correlation(
+    reference: ScfResult, hamiltonian: Hamiltonian, df_tensor: np.ndarray
+) -> float:
+    """The exact correlation energy of two electrons in the fitted integrals.
+
+    The lowest eigenvalue of :func:`two_electron_fci` minus the energy of
+    the reference determinant.
+    """
+    _, matrix, determinant = two_electron_fci(reference, hamiltonian, df_tensor)
     lowest = float(np.linalg.eigvalsh(matrix)[0])
-    determinant = pairs.index((occupied[0], occupied[1]))
     return lowest - float(matrix[determinant, determinant].real)
+
+
+def two_electron_fci_density(
+    reference: ScfResult, hamiltonian: Hamiltonian, df_tensor: np.ndarray
+) -> np.ndarray:
+    """The exact density ``D[u, v] = <a†_v a_u>`` of two electrons over spin orbitals.
+
+    With ``Ψ = Σ_{p<q} c_pq a†_p a†_q |0>`` and ``C`` the antisymmetric
+    matrix of the ``c_pq``, ``a_s Ψ = Σ_q C[s, q] a†_q |0>``, so the
+    density in the orbital basis is ``C C†``.
+    """
+    pairs, matrix, _ = two_electron_fci(reference, hamiltonian, df_tensor)
+    _, vectors = np.linalg.eigh(matrix)
+    coefficients = reference.mo_coefficients.to_dense(orbitals=True)
+    n = coefficients.shape[1]
+    amplitudes = np.zeros((n, n), dtype=vectors.dtype)
+    for (p, q), value in zip(pairs, vectors[:, 0], strict=True):
+        amplitudes[p, q] = value
+        amplitudes[q, p] = -value
+    orbital_basis = amplitudes @ amplitudes.conj().T
+    return coefficients @ orbital_basis @ coefficients.conj().T
+
+
+def shifted_energies(
+    spaces: OrbitalSpaces, space: Space, index: int, shift: float
+) -> OrbitalSpaces:
+    """The spaces with one orbital energy of the first block shifted."""
+    energies = spaces.energies(space)
+    first = np.array(energies.blocks[0])
+    first[index] += shift
+    vector = BlockVector(energies.structure, (first, *energies.blocks[1:]))
+    return OrbitalSpaces(
+        spaces.occupied,
+        spaces.virtual,
+        vector if space is Space.OCCUPIED else spaces.occupied_energies,
+        vector if space is Space.VIRTUAL else spaces.virtual_energies,
+    )
 
 
 @pytest.mark.parametrize("name", CLASSES)
@@ -468,3 +522,231 @@ def test_triples_match_the_dense_formula_over_any_window(
     for bad in ({"window": 0}, {"memory_limit": 0}):
         with pytest.raises(InputError):
             TriplesOptions(**bad)  # type: ignore[arg-type]
+
+
+# ----------------------------------------------------------------- Λ equations
+
+
+@pytest.fixture(scope="module")
+def restricted_lambda(
+    water_hamiltonian: Hamiltonian,
+) -> tuple[ScfResult, CcsdLambdaResult]:
+    reference = solve_scf(
+        water_hamiltonian, SymmetrySpec.from_name("RHF"), options=TIGHT
+    )
+    return reference, ccsd_lambda_from_df_tensor(
+        reference, fitted_tensor(water_hamiltonian), options=OPTIONS
+    )
+
+
+@pytest.mark.parametrize("name", CLASSES)
+def test_every_class_gives_the_closed_shell_density(
+    name: str,
+    water_hamiltonian: Hamiltonian,
+    restricted_lambda: tuple[ScfResult, CcsdLambdaResult],
+) -> None:
+    """The Λ equations and the density agree across the classes (ADR-0034)."""
+    expected_reference, expected = restricted_lambda
+    reference = solve_scf(
+        water_hamiltonian, SymmetrySpec.from_name(name), options=TIGHT
+    )
+    result = ccsd_lambda_from_df_tensor(
+        reference, fitted_tensor(water_hamiltonian), options=OPTIONS
+    )
+    assert isinstance(result, CcsdResult)
+    assert result.converged
+    assert result.lambda_converged
+    assert result.correlation_energy == pytest.approx(
+        expected.correlation_energy, abs=CCSD_ENERGY_TOL
+    )
+    assert result.total_energy == pytest.approx(
+        reference.energy + result.correlation_energy
+    )
+    overlap = water_hamiltonian.metric(reference.structure)
+    assert electron_count(result.density, overlap) == pytest.approx(10.0, abs=1e-9)
+    assert natural_occupations(result.density, overlap) == pytest.approx(
+        natural_occupations(
+            expected.density, water_hamiltonian.metric(expected_reference.structure)
+        ),
+        abs=1e-9,
+    )
+    dense = np.asarray(result.density.to_dense())
+    assert np.allclose(dense, dense.conj().T, atol=1e-12)
+    assert result.lambda_singles.structure == result.singles.structure.conjugated()
+    assert result.lambda_doubles.structure == result.doubles.structure.conjugated()
+    assert result.n_lambda_iterations == len(result.lambda_history) > 1
+    assert result.lambda_history[-1].update_norm < OPTIONS.amplitude_tolerance
+    assert result.density.structure == reference.structure
+
+
+@pytest.mark.parametrize("name", OPEN_SHELL_CLASSES)
+def test_open_shell_classes_agree_on_the_density(
+    name: str, cation_hamiltonian: Hamiltonian
+) -> None:
+    unrestricted = solve_scf(
+        cation_hamiltonian, SymmetrySpec.from_name("UHF"), options=TIGHT
+    )
+    df_tensor = fitted_tensor(cation_hamiltonian)
+    expected = ccsd_lambda_from_df_tensor(unrestricted, df_tensor, options=OPTIONS)
+    reference = solve_scf(
+        cation_hamiltonian, SymmetrySpec.from_name(name), options=TIGHT
+    )
+    result = ccsd_lambda_from_df_tensor(reference, df_tensor, options=OPTIONS)
+    overlap = cation_hamiltonian.metric(reference.structure)
+    assert electron_count(result.density, overlap) == pytest.approx(9.0, abs=1e-9)
+    assert natural_occupations(result.density, overlap) == pytest.approx(
+        natural_occupations(
+            expected.density, cation_hamiltonian.metric(unrestricted.structure)
+        ),
+        abs=1e-9,
+    )
+
+
+@pytest.mark.parametrize("name", ["RHF", "UHF", "complex GHF"])
+def test_two_electron_density_is_exact(name: str) -> None:
+    """For two electrons the Λ density is the full-CI density."""
+    molecule = hydrogen()
+    _, hamiltonian = hamiltonian_for(molecule, "cc-pvdz", AUXILIARY)
+    reference = solve_scf(hamiltonian, SymmetrySpec.from_name(name), options=TIGHT)
+    df_tensor = fitted_tensor(hamiltonian)
+    result = ccsd_lambda_from_df_tensor(reference, df_tensor, options=OPTIONS)
+    assert result.correlation_energy == pytest.approx(
+        two_electron_fci_correlation(reference, hamiltonian, df_tensor),
+        abs=CCSD_ENERGY_TOL,
+    )
+    expected = two_electron_fci_density(reference, hamiltonian, df_tensor)
+    assert np.asarray(result.density.to_dense()) == pytest.approx(expected, abs=1e-8)
+
+
+@pytest.mark.parametrize("name", ["UHF", "complex GHF"])
+def test_density_is_the_derivative_of_the_energy(
+    name: str, water_hamiltonian: Hamiltonian
+) -> None:
+    """``dE_CCSD/dε_p = D_pp − n_p``: the Λ equations make the functional stationary.
+
+    One orbital energy of the first block is shifted and the correlation
+    energy differentiated by central differences; the classes without
+    derived blocks are used, so that the shift moves one spin orbital.
+    """
+    reference = solve_scf(
+        water_hamiltonian, SymmetrySpec.from_name(name), options=TIGHT
+    )
+    df_tensor = fitted_tensor(water_hamiltonian)
+    spaces = OrbitalSpaces.from_scf(reference)
+    fitted = FittedOrbitalTensors.from_df_tensor(df_tensor, spaces)
+    result = solve_ccsd(reference, fitted, OPTIONS)
+    with_lambda = solve_lambda(fitted, result, OPTIONS)
+    coefficients = reference.mo_coefficients.to_dense(orbitals=True)
+    overlap = water_hamiltonian.metric(reference.structure).to_dense()
+    orbital_basis = (
+        coefficients.conj().T
+        @ overlap
+        @ np.asarray(with_lambda.density.to_dense())
+        @ overlap
+        @ coefficients
+    )
+    occupations = np.asarray(reference.mo_occupations.to_dense())
+    first_block = np.asarray(reference.mo_occupations.blocks[0])
+    columns = {
+        Space.OCCUPIED: np.flatnonzero(first_block > 0.5),
+        Space.VIRTUAL: np.flatnonzero(first_block < 0.5),
+    }
+    step = 1e-4
+    for space, index in ((Space.OCCUPIED, 1), (Space.VIRTUAL, 0)):
+        energies: list[float] = []
+        for shift in (step, -step):
+            shifted = FittedOrbitalTensors.from_df_tensor(
+                df_tensor, shifted_energies(spaces, space, index, shift)
+            )
+            energies.append(
+                solve_ccsd(
+                    reference,
+                    shifted,
+                    OPTIONS,
+                    guess=(result.singles, result.doubles),
+                ).correlation_energy
+            )
+        derivative = (energies[0] - energies[1]) / (2 * step)
+        column = int(columns[space][index])
+        assert derivative == pytest.approx(
+            float(orbital_basis[column, column].real) - float(occupations[column]),
+            abs=1e-6,
+        )
+
+
+def test_blocked_reference_gives_the_same_density() -> None:
+    molecule = water()
+    detection = detect_point_group(molecule)
+    oriented = detection.orient(molecule)
+    basis = BasisSet.for_atoms(oriented, "sto-3g", library=LIBRARY)
+    auxiliary = BasisSet.for_atoms(oriented, AUXILIARY, library=LIBRARY)
+    two_body = DensityFittedCoulombExchange.from_molecule(
+        ENGINE, basis, auxiliary, oriented
+    )
+    plain = Hamiltonian.from_molecule(ENGINE, basis, oriented, two_body)
+    blocked = Hamiltonian.from_molecule(
+        ENGINE, basis, oriented, two_body, point_group=detection.group
+    )
+    spec = SymmetrySpec.from_name("RHF")
+    plain_reference = solve_scf(plain, spec, options=TIGHT)
+    expected = df_ccsd_lambda(
+        ENGINE, basis, oriented, auxiliary, plain_reference, options=OPTIONS
+    )
+    reference = solve_scf(
+        blocked, spec.with_point_group(detection.group), options=TIGHT
+    )
+    result = df_ccsd_lambda(
+        ENGINE, basis, oriented, auxiliary, reference, options=OPTIONS
+    )
+    assert result.density.structure == reference.structure
+    assert result.density.structure.irreps is not None
+    overlap = blocked.metric(reference.structure)
+    assert electron_count(result.density, overlap) == pytest.approx(10.0, abs=1e-9)
+    assert natural_occupations(result.density, overlap) == pytest.approx(
+        natural_occupations(expected.density, plain.metric(plain_reference.structure)),
+        abs=1e-9,
+    )
+    assert np.asarray(result.density.to_dense()) == pytest.approx(
+        np.asarray(expected.density.to_dense()), abs=1e-8
+    )
+
+
+def test_lambda_guess_and_convergence_are_reported(
+    water_hamiltonian: Hamiltonian,
+) -> None:
+    reference = solve_scf(
+        water_hamiltonian, SymmetrySpec.from_name("RHF"), options=TIGHT
+    )
+    fitted = FittedOrbitalTensors.from_df_tensor(
+        fitted_tensor(water_hamiltonian), OrbitalSpaces.from_scf(reference)
+    )
+    result = solve_ccsd(reference, fitted, OPTIONS)
+    with_lambda = solve_lambda(fitted, result, OPTIONS)
+    assert with_lambda.singles is result.singles
+    assert with_lambda.history == result.history
+    assert with_lambda.total_energy == result.total_energy
+    # Restarting from the solution converges at once.
+    again = solve_lambda(
+        fitted,
+        result,
+        OPTIONS,
+        guess=(with_lambda.lambda_singles, with_lambda.lambda_doubles),
+    )
+    assert again.n_lambda_iterations == 1
+    assert np.asarray(again.density.to_dense()) == pytest.approx(
+        np.asarray(with_lambda.density.to_dense()), abs=1e-10
+    )
+    # The amplitudes themselves have the wrong structure for a guess.
+    with pytest.raises(InputError, match="structure"):
+        solve_lambda(fitted, result, OPTIONS, guess=(result.singles, result.doubles))
+    with pytest.raises(ConvergenceError, match="Λ iteration") as excinfo:
+        solve_lambda(
+            fitted,
+            result,
+            CcsdOptions(max_iterations=2, amplitude_tolerance=1e-12),
+        )
+    last = excinfo.value.last
+    assert isinstance(last, CcsdLambdaResult)
+    assert not last.lambda_converged
+    assert last.converged
+    assert last.n_lambda_iterations == 2

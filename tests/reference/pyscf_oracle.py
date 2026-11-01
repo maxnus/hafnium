@@ -295,7 +295,7 @@ def kmp2_reference(
 
 def ccsd_reference(
     molecule: Molecule, basis: BasisSet, auxiliary: BasisSet, kind: str
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """Density-fitted ``kind`` Hartree–Fock, DF-CCSD and (T) energies in one basis.
 
     The reference is converged to a gradient of 1e-10 and the amplitudes
@@ -303,7 +303,11 @@ def ccsd_reference(
     (``cc.dfuccsd``) references; a GHF reference runs ``cc.gccsd`` on the
     four-centre integrals assembled from the same fitted tensor
     (``with_df.get_eri``), which is the same approximation. The (T)
-    correction is ``ccsd_t`` of the same object.
+    correction is ``ccsd_t`` of the same object, and the natural
+    occupations of the spin orbitals, descending, are the eigenvalues of
+    the density of ``make_rdm1`` after ``solve_lambda`` to the same norm:
+    the spatial density of a closed shell gives every occupation twice,
+    halved.
     """
     scf: Any = pytest.importorskip("pyscf.scf")
     dfccsd: Any = pytest.importorskip("pyscf.cc.dfccsd")
@@ -329,11 +333,26 @@ def ccsd_reference(
     coupled_cluster.max_cycle = 200
     correlation_energy = float(coupled_cluster.kernel()[0])
     assert coupled_cluster.converged
+    triples_correction = float(coupled_cluster.ccsd_t())
+    coupled_cluster.solve_lambda()
+    assert coupled_cluster.converged_lambda
     return {
         "reference_energy": reference_energy,
         "correlation_energy": correlation_energy,
-        "triples_correction": float(coupled_cluster.ccsd_t()),
+        "triples_correction": triples_correction,
+        "natural_occupations": _natural_occupations(kind, coupled_cluster.make_rdm1()),
     }
+
+
+def _natural_occupations(kind: str, density: Any) -> np.ndarray:
+    """Eigenvalues of a PySCF CCSD density over the spin orbitals, descending."""
+    if kind == "rhf":
+        occupations = np.repeat(np.linalg.eigvalsh(density) / 2, 2)
+    elif kind == "uhf":
+        occupations = np.concatenate([np.linalg.eigvalsh(d) for d in density])
+    else:
+        occupations = np.linalg.eigvalsh(density)
+    return np.sort(occupations)[::-1]
 
 
 def kccsd_reference(

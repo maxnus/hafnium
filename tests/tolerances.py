@@ -171,3 +171,7 @@ MP2_ENERGY_TOL = 1e-10
 # full configuration interaction for two electrons: both sides converge the
 # reference to a gradient of 1e-9 and the amplitudes to 1e-10.
 CCSD_ENERGY_TOL = 1e-10
+
+# Natural occupations of CCSD densities, both codes' amplitudes converged to
+# a norm of 1e-10.
+NATURAL_OCCUPATION_TOL = 1e-8

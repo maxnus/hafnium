@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 
 from hafnium.basis import BasisSet
-from hafnium.correlated import OrbitalSpaces, Space, transform_periodic_fitting
 from hafnium.errors import InputError, StructureError
 from hafnium.integrals import PeriodicDensityFitting, density_fitting_k
 from hafnium.molecule import Cell, Molecule
 from hafnium.mp import df_mp2, mp2_from_df_tensor, mp2_from_periodic_fitting
+from hafnium.orbitals import OrbitalSpaces, Space, transform_periodic_fitting
 from hafnium.scf import ExactCoulombExchange, Hamiltonian, ScfResult, solve_scf
 from hafnium.structured import BlockMatrix, BlockVector, Symmetry
 from hafnium.symmetry import KPoints, SymmetrySpec

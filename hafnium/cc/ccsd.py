@@ -27,12 +27,12 @@ from hafnium.cc._ccsd_equations import (
 )
 from hafnium.cc.diis import AmplitudeDiis
 from hafnium.cc.hamiltonian import NormalOrderedHamiltonian
-from hafnium.correlated import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.errors import ConvergenceError, InputError
 from hafnium.integrals import IntegralEngine
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
 from hafnium.molecule import Cell, Molecule
+from hafnium.orbitals import FittedOrbitalTensors, OrbitalSpaces, Space
 from hafnium.scf import ScfResult
 from hafnium.structured import BlockTensor, IrrepSectors, TensorStructure
 from hafnium.symmetry import KPoints
@@ -140,7 +140,7 @@ def df_ccsd(  # noqa: PLR0913
     """Compute the DF-CCSD energy of a converged Hartree–Fock ``reference``.
 
     The two-electron integrals are fitted as
-    :meth:`~hafnium.correlated.FittedOrbitalTensors.build` says: in the
+    :meth:`~hafnium.orbitals.FittedOrbitalTensors.build` says: in the
     ``auxiliary`` basis with the Coulomb metric, adapted to the point
     group of a molecular reference over irrep sectors, with momentum
     transfer over the ``kpoints`` of a cell. Any Fukutome class serves as
@@ -169,7 +169,7 @@ def ccsd_from_df_tensor(
 
     ``auxiliary`` holds the irrep sectors of the auxiliary basis when the
     reference is blocked over a point group; see
-    :func:`~hafnium.correlated.transform_df_tensor`.
+    :func:`~hafnium.orbitals.transform_df_tensor`.
     """
     fitted = FittedOrbitalTensors.from_df_tensor(
         df_tensor, OrbitalSpaces.from_scf(reference), auxiliary=auxiliary
@@ -187,7 +187,7 @@ def ccsd_from_periodic_fitting(
     """Compute the DF-CCSD energy per cell of a periodic ``reference``.
 
     The fitted tensor of ``fitting`` enters the Bloch orbital basis in the
-    supercell normalization (:func:`~hafnium.correlated.transform_periodic_fitting`),
+    supercell normalization (:func:`~hafnium.orbitals.transform_periodic_fitting`),
     the equations of the supercell of the mesh are iterated over the
     blocks that conserve crystal momentum, and the energy per cell is
     that of the supercell divided by the number of k-points.
@@ -241,7 +241,8 @@ def solve_ccsd(
             doubles_residual(hamiltonian, singles, doubles) / denominators_doubles
         )
         change = correlation - history[-1].correlation_energy if history else math.inf
-        norm = math.sqrt(_squared_norm(update_singles) + _squared_norm(update_doubles))
+        update = (update_singles, update_doubles)
+        norm = math.sqrt(AmplitudeDiis.overlap(update, update))
         history.append(CcsdIteration(index, correlation, change, norm))
         # The first iteration has no energy change to judge; the update does.
         converged = norm < options.amplitude_tolerance and (
@@ -251,10 +252,7 @@ def solve_ccsd(
             return CcsdResult(
                 reference.energy, correlation, singles, doubles, True, tuple(history)
             )
-        diis = diis.push(
-            (singles + update_singles, doubles + update_doubles),
-            (update_singles, update_doubles),
-        )
+        diis = diis.push((singles + update_singles, doubles + update_doubles), update)
         singles, doubles = diis.extrapolate()
     result = CcsdResult(
         reference.energy,
@@ -312,11 +310,3 @@ def _real(value: BlockTensor) -> float:
     scalar = value.scalar
     xp = array_namespace(scalar)
     return float(xp.real(scalar))
-
-
-def _squared_norm(tensor: BlockTensor) -> float:
-    total = 0.0
-    for block in tensor.blocks:
-        xp = array_namespace(block)
-        total += float(xp.sum(xp.abs(block) ** 2))
-    return total

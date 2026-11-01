@@ -7,12 +7,12 @@ from dataclasses import dataclass, field
 
 from hafnium.backend import Array, adjoint, array_namespace
 from hafnium.basis import BasisSet
-from hafnium.correlated.orbitals import OrbitalSpaces, Space
 from hafnium.errors import InputError, StructureError
 from hafnium.integrals import DensityFitting, IntegralEngine, density_fitting_k
 from hafnium.integrals.density_fitting import DEFAULT_METRIC_THRESHOLD
 from hafnium.integrals.periodic.fitting import PeriodicDensityFitting
 from hafnium.molecule import Cell, Molecule
+from hafnium.orbitals.spaces import OrbitalSpaces, Space
 from hafnium.scf import ScfResult
 from hafnium.structured import (
     BlockStructure,

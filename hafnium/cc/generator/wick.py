@@ -27,7 +27,7 @@ from enum import Enum
 from fractions import Fraction
 from itertools import permutations, product
 
-from hafnium.correlated import Space
+from hafnium.orbitals import Space
 
 LABELS = {Space.OCCUPIED: "ijklmn", Space.VIRTUAL: "abcdef"}
 """The labels of the indices of each space, free ones first."""
@@ -43,22 +43,32 @@ class Kind(Enum):
     INTEGRAL = "v"
     SINGLES = "t1"
     DOUBLES = "t2"
+    LAMBDA_SINGLES = "l1"
+    LAMBDA_DOUBLES = "l2"
 
     @property
     def antisymmetric_pairs(self) -> tuple[tuple[int, int], ...]:
         """Slot pairs that change the sign of the tensor when swapped.
 
         ``v[p, q, r, s] = <pq||rs>`` is antisymmetric in ``p, q`` and in
-        ``r, s``, ``t2[i, j, a, b]`` in ``i, j`` and in ``a, b``.
+        ``r, s``, ``t2[i, j, a, b]`` and ``l2[i, j, a, b]`` in ``i, j`` and
+        in ``a, b``.
         """
-        if self in (Kind.INTEGRAL, Kind.DOUBLES):
+        if self in (Kind.INTEGRAL, Kind.DOUBLES, Kind.LAMBDA_DOUBLES):
             return ((0, 1), (2, 3))
         return ()
 
     @property
     def order(self) -> int:
         """Position of the kind among the factors of a canonical term."""
-        return {Kind.FOCK: 0, Kind.INTEGRAL: 0, Kind.SINGLES: 1, Kind.DOUBLES: 2}[self]
+        return {
+            Kind.FOCK: 0,
+            Kind.INTEGRAL: 0,
+            Kind.SINGLES: 1,
+            Kind.DOUBLES: 2,
+            Kind.LAMBDA_SINGLES: 3,
+            Kind.LAMBDA_DOUBLES: 4,
+        }[self]
 
     @property
     def of_hamiltonian(self) -> bool:
@@ -320,6 +330,7 @@ def expectation(
     clusters: Iterable[int],
     *,
     connected: bool = True,
+    linked: bool = False,
 ) -> list[Term]:
     """``<Φ| Π strings |Φ>`` keeping the terms connected to the Hamiltonian.
 
@@ -328,8 +339,11 @@ def expectation(
     once, the connectedness of the coupled-cluster equations; the other
     strings (the projection) contract freely. With ``connected`` false
     the terms that are not connected are kept instead, the disconnected
-    products the (T) correction needs. The terms are returned
-    uncanonicalized.
+    products the (T) correction needs. With ``linked`` the terms in which
+    the Hamiltonian and the clusters form a closed part, contracted with
+    none of the other strings, are dropped as well: the unlinked products
+    of the Λ equations, a de-excitation amplitude times the energy. The
+    terms are returned uncanonicalized.
     """
     operators = [(s, op) for s, string in enumerate(strings) for op in string.operators]
     required = set(clusters)
@@ -338,12 +352,16 @@ def expectation(
         coefficient *= string.coefficient
     terms: list[Term] = []
     for sign, pairs in full_contractions([string.operators for string in strings]):
-        linked = {
+        touching = {
             operators[q][0] if operators[p][0] == hamiltonian else operators[p][0]
             for p, q in pairs
             if hamiltonian in (operators[p][0], operators[q][0])
         }
-        if (required <= linked) != connected:
+        if (required <= touching) != connected:
+            continue
+        if linked and _component(hamiltonian, pairs, operators) <= required | {
+            hamiltonian
+        }:
             continue
         representative = _identified(operators, pairs)
         factors = tuple(
@@ -358,6 +376,27 @@ def expectation(
         )
         terms.append(Term(coefficient * sign, factors))
     return terms
+
+
+def _component(
+    start: int,
+    pairs: Iterable[tuple[int, int]],
+    operators: Sequence[tuple[int, Operator]],
+) -> set[int]:
+    """Collect the strings reachable from ``start`` through the contractions."""
+    neighbours: dict[int, set[int]] = {}
+    for p, q in pairs:
+        a, b = operators[p][0], operators[q][0]
+        neighbours.setdefault(a, set()).add(b)
+        neighbours.setdefault(b, set()).add(a)
+    component = {start}
+    frontier = [start]
+    while frontier:
+        for other in neighbours.get(frontier.pop(), ()):
+            if other not in component:
+                component.add(other)
+                frontier.append(other)
+    return component
 
 
 def _identified(

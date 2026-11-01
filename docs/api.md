@@ -39,9 +39,9 @@ Until then the packages are documented directly.
 
 ::: hafnium.scf
 
-## hafnium.correlated
+## hafnium.orbitals
 
-::: hafnium.correlated
+::: hafnium.orbitals
 
 ## hafnium.mp
 
