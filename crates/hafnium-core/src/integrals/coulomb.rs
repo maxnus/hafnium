@@ -97,6 +97,30 @@ pub(crate) struct HermiteWorkspace {
     pub(crate) intermediate: Vec<f64>,
     /// Scratch for the Cartesian values of one primitive quartet.
     pub(crate) values: Vec<f64>,
+    /// Scratch for the values with the bra's angular momentum raised and
+    /// lowered, which the centre derivatives combine.
+    pub(crate) raised: Vec<f64>,
+    pub(crate) lowered: Vec<f64>,
+}
+
+/// A table of Hermite Coulomb integrals `R^0_{tuv}`, borrowed or owned.
+pub(crate) trait HermiteIntegrals {
+    /// `R^0_{tuv}`.
+    fn get(&self, t: usize, u: usize, v: usize) -> f64;
+}
+
+impl HermiteIntegrals for HermiteView<'_> {
+    #[inline]
+    fn get(&self, t: usize, u: usize, v: usize) -> f64 {
+        self.data[(t * self.stride + u) * self.stride + v]
+    }
+}
+
+impl HermiteIntegrals for HermiteTable {
+    #[inline]
+    fn get(&self, t: usize, u: usize, v: usize) -> f64 {
+        self.data[(t * self.stride + u) * self.stride + v]
+    }
 }
 
 /// A read-only view of `R^0_{tuv}` for `t + u + v ≤ order`.
@@ -104,14 +128,6 @@ pub(crate) struct HermiteWorkspace {
 pub(crate) struct HermiteView<'a> {
     data: &'a [f64],
     stride: usize,
-}
-
-impl HermiteView<'_> {
-    /// `R^0_{tuv}`.
-    #[inline]
-    pub(crate) fn get(&self, t: usize, u: usize, v: usize) -> f64 {
-        self.data[(t * self.stride + u) * self.stride + v]
-    }
 }
 
 /// An owned table of `R^0_{tuv}`, used to accumulate over point charges.
@@ -129,12 +145,6 @@ impl HermiteTable {
             data: vec![0.0; stride * stride * stride],
             stride,
         }
-    }
-
-    /// `R^0_{tuv}`.
-    #[inline]
-    pub(crate) fn get(&self, t: usize, u: usize, v: usize) -> f64 {
-        self.data[(t * self.stride + u) * self.stride + v]
     }
 
     /// Add `scale` times a view of the same order.

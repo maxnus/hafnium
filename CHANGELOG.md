@@ -424,4 +424,17 @@ uses [Semantic Versioning](https://semver.org/).
   `solve_lambda` and `make_rdm1` for RHF, UHF and GHF references to
   1e-10 (PySCF has no Λ over k-points). The CCSD iteration measures its
   update by `AmplitudeDiis.overlap`.
+- Derivative integrals and the Hartree–Fock gradient (M9, part one,
+  ADR-0035): the first derivatives of the overlap, kinetic energy,
+  nuclear attraction, two-centre and three-centre Coulomb integrals with
+  respect to the centres of the functions and the positions of the
+  charges, from the undifferentiated kernels with the angular momentum
+  raised and lowered or the Hermite integrals shifted, as derivative
+  methods of the engine; the analytic nuclear gradient of density-fitted
+  Hartree–Fock, `hafnium.properties.nuclear_gradient`, assembled in the
+  dense atomic basis at fixed density from the energy-weighted density
+  `D F D` for all eight Fukutome classes with point-group sectors,
+  reported by term; tested against finite differences of the integrals
+  and of the energy, PySCF's `ip` integrals and its density-fitted RHF
+  and UHF gradients.
 

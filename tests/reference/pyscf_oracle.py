@@ -127,6 +127,65 @@ def density_fitting_reference(
     }
 
 
+def derivative_integral_reference(
+    molecule: Molecule, basis: BasisSet, auxiliary: BasisSet
+) -> dict[str, np.ndarray]:
+    """Derivatives of the one-electron, metric and three-centre integrals from libcint.
+
+    libcint differentiates with respect to the electron coordinate,
+    ``⟨∇μ| … ⟩``, so the derivative with respect to the centre of the
+    function is the negative of every ``ip`` integral (ADR-0035). The
+    derivative with respect to a nucleus follows from translational
+    invariance of its attraction, as in PySCF's gradient code.
+    """
+    mol = pyscf_molecule(molecule, basis)
+    aux = pyscf_molecule(molecule, auxiliary)
+    nuclei: list[np.ndarray] = []
+    for index in range(mol.natm):
+        with mol.with_rinv_origin(mol.atom_coord(index)):
+            rinv = np.asarray(mol.intor("int1e_iprinv", comp=3))
+        nuclei.append(-float(mol.atom_charge(index)) * (rinv + rinv.transpose(0, 2, 1)))
+    orbital = np.asarray(
+        df.incore.aux_e2(mol, aux, intor="int3c2e_ip1", aosym="s1", comp=3)
+    )
+    auxiliary_side = np.asarray(
+        df.incore.aux_e2(mol, aux, intor="int3c2e_ip2", aosym="s1", comp=3)
+    )
+    return {
+        "overlap": -np.asarray(mol.intor("int1e_ipovlp", comp=3)),
+        "kinetic": -np.asarray(mol.intor("int1e_ipkin", comp=3)),
+        "attraction": -np.asarray(mol.intor("int1e_ipnuc", comp=3)),
+        "attraction_nuclei": np.stack(nuclei),
+        "metric": -np.asarray(aux.intor("int2c2e_ip1", comp=3)),
+        "three_center_orbital": -np.ascontiguousarray(np.moveaxis(orbital, 3, 1)),
+        "three_center_auxiliary": -np.ascontiguousarray(
+            np.moveaxis(auxiliary_side, 3, 1)
+        ),
+    }
+
+
+def scf_gradient_reference(
+    molecule: Molecule, basis: BasisSet, kind: str, auxiliary: BasisSet
+) -> np.ndarray:
+    """Nuclear gradient ``[atom, 3]`` of the density-fitted ``kind`` energy.
+
+    ``kind`` is ``"rhf"`` or ``"uhf"``; PySCF has no density-fitted GHF
+    gradient. The two-electron terms are fitted in ``auxiliary`` as in
+    :func:`scf_reference`.
+    """
+    scf: Any = pytest.importorskip("pyscf.scf")
+    mol = pyscf_molecule(molecule, basis)
+    mean_field = {"rhf": scf.RHF, "uhf": scf.UHF}[kind](mol).density_fit(
+        auxbasis=basis_input(molecule, auxiliary)
+    )
+    mean_field.conv_tol = 1e-13
+    mean_field.conv_tol_grad = 1e-10
+    mean_field.max_cycle = 200
+    mean_field.kernel()
+    assert mean_field.converged
+    return np.asarray(mean_field.nuc_grad_method().kernel())
+
+
 def fitted_repulsion_reference(
     molecule: Molecule, basis: BasisSet, auxiliary: BasisSet
 ) -> np.ndarray:

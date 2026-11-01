@@ -65,6 +65,42 @@ class RustEngine:
             threshold,
         )
 
+    def overlap_derivative(
+        self, bra: ShellTable, ket: ShellTable, translations: Array
+    ) -> Array:
+        """Differentiate the overlap with respect to the bra centres."""
+        return _kernels.overlap_derivative(
+            _kernel_table(bra), _kernel_table(ket), to_host(translations)
+        )
+
+    def kinetic_derivative(
+        self, bra: ShellTable, ket: ShellTable, translations: Array
+    ) -> Array:
+        """Differentiate the kinetic integrals with respect to the bra centres."""
+        return _kernels.kinetic_derivative(
+            _kernel_table(bra), _kernel_table(ket), to_host(translations)
+        )
+
+    def nuclear_attraction_derivative(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        charges: PointCharges,
+        *,
+        kernel: CoulombKernel = COULOMB,
+    ) -> tuple[Array, Array]:
+        """Differentiate the attraction by the bra centres and the charge positions."""
+        return _kernels.nuclear_attraction_derivative(
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            to_host(charges.charges),
+            to_host(charges.positions),
+            kernel.omega,
+            kernel.short_range,
+        )
+
     def coulomb_two_center(
         self,
         bra: ShellTable,
@@ -82,6 +118,42 @@ class RustEngine:
             kernel.omega,
             kernel.short_range,
             threshold,
+        )
+
+    def coulomb_two_center_derivative(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        kernel: CoulombKernel = COULOMB,
+    ) -> Array:
+        """``(∂_P P | Q)`` as ``[image, 3, aux, aux]``."""
+        return _kernels.coulomb_two_center_derivative(
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            kernel.omega,
+            kernel.short_range,
+        )
+
+    def coulomb_three_center_derivative(
+        self,
+        auxiliary: ShellTable,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        kernel: CoulombKernel = COULOMB,
+    ) -> tuple[Array, Array]:
+        """``(∂_P P | u v)`` and ``(P | ∂_A u v)``, each ``[image, 3, aux, ao, ao]``."""
+        return _kernels.coulomb_three_center_derivative(
+            _kernel_table(auxiliary),
+            _kernel_table(bra),
+            _kernel_table(ket),
+            to_host(translations),
+            kernel.omega,
+            kernel.short_range,
         )
 
     def coulomb_three_center(

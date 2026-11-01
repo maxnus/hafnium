@@ -1,4 +1,9 @@
-"""One-electron integrals of a molecule in its atomic basis."""
+"""One-electron integrals of a molecule in its atomic basis, and their derivatives.
+
+A derivative with respect to the centre of a basis function is given for
+the bra, ``⟨∂_A μ | O | ν⟩``; the ket derivative is its transpose for the
+symmetric operators of a molecule (ADR-0035).
+"""
 
 from __future__ import annotations
 
@@ -64,3 +69,50 @@ def core_hamiltonian(
     table = _table(basis, molecule)
     kinetic_energy = engine.kinetic(table, table, _no_translation())[0]
     return kinetic_energy + _attraction(engine, table, molecule, None)
+
+
+def overlap_derivative(
+    engine: IntegralEngine, basis: BasisSet, molecule: Molecule
+) -> Array:
+    """Differentiate the overlap with respect to the bra centre.
+
+    ``⟨∂_A μ | ν⟩`` as ``[3, ao, ao]``.
+    """
+    table = _table(basis, molecule)
+    return engine.overlap_derivative(table, table, _no_translation())[0]
+
+
+def kinetic_derivative(
+    engine: IntegralEngine, basis: BasisSet, molecule: Molecule
+) -> Array:
+    """Differentiate the kinetic energy with respect to the bra centre.
+
+    ``⟨∂_A μ | −½∇² | ν⟩`` as ``[3, ao, ao]``.
+    """
+    table = _table(basis, molecule)
+    return engine.kinetic_derivative(table, table, _no_translation())[0]
+
+
+def nuclear_attraction_derivative(
+    engine: IntegralEngine,
+    basis: BasisSet,
+    molecule: Molecule,
+    *,
+    omega: float | None = None,
+) -> tuple[Array, Array]:
+    """Differentiate the nuclear attraction of all nuclei of ``molecule``.
+
+    With respect to the bra centre, ``⟨∂_A μ | V | ν⟩`` as ``[3, ao, ao]``,
+    and with respect to the position of each nucleus, ``⟨μ | ∂_K V_K | ν⟩``
+    as ``[atom, 3, ao, ao]``. With ``omega`` the long-range kernel
+    ``erf(ω r) / r`` replaces ``1 / r``.
+    """
+    table = _table(basis, molecule)
+    by_center, by_nucleus = engine.nuclear_attraction_derivative(
+        table,
+        table,
+        _no_translation(),
+        PointCharges.from_system(molecule),
+        kernel=CoulombKernel(omega),
+    )
+    return by_center[0], by_nucleus[0]

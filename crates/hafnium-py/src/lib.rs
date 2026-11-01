@@ -185,6 +185,169 @@ fn nuclear_attraction<'py>(
 /// Two-centre Coulomb integrals for each translation of the ket,
 /// `[image, bra, ket]`; `omega` selects the `erf(ωr)/r` kernel, or
 /// `erfc(ωr)/r` with `short_range`, and terms bounded below `threshold`
+/// The derivative of the overlap with respect to the centres of the bra
+/// functions, `[image, 3, bra, ket]`.
+#[pyfunction]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn overlap_derivative<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray4<f64>>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let values = integrals::overlap_derivative(&bra.inner, &ket.inner, &translations);
+    to_image_derivatives(py, values, translations.len(), bra, ket)
+}
+
+/// The derivative of the kinetic energy integrals with respect to the
+/// centres of the bra functions, `[image, 3, bra, ket]`.
+#[pyfunction]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn kinetic_derivative<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray4<f64>>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let values = integrals::kinetic_derivative(&bra.inner, &ket.inner, &translations);
+    to_image_derivatives(py, values, translations.len(), bra, ket)
+}
+
+/// The derivatives of the nuclear attraction with respect to the bra
+/// centres and to the charge positions.
+type AttractionDerivatives<'py> = (Bound<'py, PyArray4<f64>>, Bound<'py, PyArray5<f64>>);
+
+/// The derivatives of the three-centre integrals with respect to the
+/// auxiliary centres and to the bra centres.
+type ThreeCenterDerivatives<'py> = (Bound<'py, PyArray5<f64>>, Bound<'py, PyArray5<f64>>);
+
+/// The derivatives of the nuclear attraction: with respect to the centres
+/// of the bra functions, `[image, 3, bra, ket]`, and with respect to the
+/// positions of the charges, `[image, charge, 3, bra, ket]`.
+#[pyfunction]
+#[pyo3(signature = (bra, ket, translations, charges, positions, omega=None, short_range=false))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the binding mirrors the kernel's arguments"
+)]
+fn nuclear_attraction_derivative<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+    charges: PyReadonlyArray1<'py, f64>,
+    positions: PyReadonlyArray2<'py, f64>,
+    omega: Option<f64>,
+    short_range: bool,
+) -> PyResult<AttractionDerivatives<'py>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let positions = to_vectors(&positions, "positions")?;
+    let kernel = to_kernel(omega, short_range)?;
+    let charges = charges.as_slice()?;
+    let values = integrals::nuclear_attraction_derivative(
+        &bra.inner,
+        &ket.inner,
+        &translations,
+        charges,
+        &positions,
+        kernel,
+    )
+    .map_err(|error| value_error(&error))?;
+    let (n_bra, n_ket) = (bra.inner.n_functions(), ket.inner.n_functions());
+    let (centers, charge_values) = split_slots(&values, translations.len(), 3, n_bra * n_ket);
+    Ok((
+        centers
+            .into_pyarray(py)
+            .reshape([translations.len(), 3, n_bra, n_ket])?,
+        charge_values.into_pyarray(py).reshape([
+            translations.len(),
+            charges.len(),
+            3,
+            n_bra,
+            n_ket,
+        ])?,
+    ))
+}
+
+/// The derivative of the two-centre Coulomb integrals with respect to the
+/// centres of the bra functions, `[image, 3, bra, ket]`.
+#[pyfunction]
+#[pyo3(signature = (bra, ket, translations, omega=None, short_range=false))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn coulomb_two_center_derivative<'py>(
+    py: Python<'py>,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray2<'py, f64>,
+    omega: Option<f64>,
+    short_range: bool,
+) -> PyResult<Bound<'py, PyArray4<f64>>> {
+    let translations = to_vectors(&translations, "translations")?;
+    let kernel = to_kernel(omega, short_range)?;
+    let values =
+        integrals::coulomb_two_center_derivative(&bra.inner, &ket.inner, &translations, kernel)
+            .map_err(|error| value_error(&error))?;
+    to_image_derivatives(py, values, translations.len(), bra, ket)
+}
+
+/// The derivatives of the three-centre Coulomb integrals `(P | μ ν)` with
+/// respect to the centres of the auxiliary functions and with respect to
+/// the centres of the bra functions, each `[image, 3, aux, bra, ket]`.
+#[pyfunction]
+#[pyo3(signature = (auxiliary, bra, ket, translations, omega=None, short_range=false))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts #[pyfunction] arguments by value"
+)]
+fn coulomb_three_center_derivative<'py>(
+    py: Python<'py>,
+    auxiliary: &PyShellTable,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+    translations: PyReadonlyArray3<'py, f64>,
+    omega: Option<f64>,
+    short_range: bool,
+) -> PyResult<ThreeCenterDerivatives<'py>> {
+    let translations = to_vector_sets::<2>(&translations)?;
+    let kernel = to_kernel(omega, short_range)?;
+    let values = integrals::coulomb_three_center_derivative(
+        &auxiliary.inner,
+        &bra.inner,
+        &ket.inner,
+        &translations,
+        kernel,
+    )
+    .map_err(|error| value_error(&error))?;
+    let shape = [
+        translations.len(),
+        3,
+        auxiliary.inner.n_functions(),
+        bra.inner.n_functions(),
+        ket.inner.n_functions(),
+    ];
+    let (aux_values, bra_values) =
+        split_slots(&values, shape[0], 3, shape[2] * shape[3] * shape[4]);
+    Ok((
+        aux_values.into_pyarray(py).reshape(shape)?,
+        bra_values.into_pyarray(py).reshape(shape)?,
+    ))
+}
+
 /// are skipped.
 #[pyfunction]
 #[pyo3(signature = (bra, ket, translations, omega=None, short_range=false, threshold=0.0))]
@@ -963,6 +1126,40 @@ fn to_image_matrices<'py>(
     values.into_pyarray(py).reshape(shape)
 }
 
+fn to_image_derivatives<'py>(
+    py: Python<'py>,
+    values: Vec<f64>,
+    n_images: usize,
+    bra: &PyShellTable,
+    ket: &PyShellTable,
+) -> PyResult<Bound<'py, PyArray4<f64>>> {
+    let shape = [
+        n_images,
+        3,
+        bra.inner.n_functions(),
+        ket.inner.n_functions(),
+    ];
+    values.into_pyarray(py).reshape(shape)
+}
+
+/// Split `values`, laid out `[image][slot][block]`, into the first `first`
+/// slots of every image and the rest.
+fn split_slots(
+    values: &[f64],
+    n_images: usize,
+    first: usize,
+    block: usize,
+) -> (Vec<f64>, Vec<f64>) {
+    let image_size = values.len() / n_images.max(1);
+    let mut head = Vec::with_capacity(n_images * first * block);
+    let mut tail = Vec::with_capacity(values.len() - n_images * first * block);
+    for image in values.chunks(image_size.max(1)) {
+        head.extend_from_slice(&image[..first * block]);
+        tail.extend_from_slice(&image[first * block..]);
+    }
+    (head, tail)
+}
+
 #[pymodule]
 fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyShellTable>()?;
@@ -973,8 +1170,13 @@ fn _kernels(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(overlap, module)?)?;
     module.add_function(wrap_pyfunction!(kinetic, module)?)?;
     module.add_function(wrap_pyfunction!(nuclear_attraction, module)?)?;
+    module.add_function(wrap_pyfunction!(overlap_derivative, module)?)?;
+    module.add_function(wrap_pyfunction!(kinetic_derivative, module)?)?;
+    module.add_function(wrap_pyfunction!(nuclear_attraction_derivative, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_two_center, module)?)?;
+    module.add_function(wrap_pyfunction!(coulomb_two_center_derivative, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_three_center, module)?)?;
+    module.add_function(wrap_pyfunction!(coulomb_three_center_derivative, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_three_center_bloch, module)?)?;
     module.add_function(wrap_pyfunction!(coulomb_four_center, module)?)?;
     module.add_function(wrap_pyfunction!(schwarz_bounds, module)?)?;

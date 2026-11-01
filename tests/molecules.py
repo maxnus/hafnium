@@ -1,8 +1,9 @@
 """Molecules shared by the test suites, given in Angstrom."""
 
+import dataclasses
 import math
 
-from hafnium.molecule import Molecule
+from hafnium.molecule import Atom, Molecule
 
 SQRT3 = math.sqrt(3.0)
 
@@ -240,3 +241,12 @@ def icosahedron() -> Molecule:
     ]
     vertices += [(b * phi, 0.0, a) for a in (1.0, -1.0) for b in (1.0, -1.0)]
     return Molecule.from_atoms([("H", vertex) for vertex in vertices])
+
+
+def displaced(molecule: Molecule, atom: int, axis: int, delta: float) -> Molecule:
+    """``molecule`` with ``atom`` moved by ``delta`` Bohr along ``axis``."""
+    atoms = list(molecule.atoms)
+    position = list(atoms[atom].position)
+    position[axis] += delta
+    atoms[atom] = Atom(atoms[atom].symbol, (position[0], position[1], position[2]))
+    return dataclasses.replace(molecule, atoms=tuple(atoms))

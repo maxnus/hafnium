@@ -10,7 +10,8 @@ Rewrites ``tests/reference/data/one_electron_<molecule>_<basis>.json``,
 ``fitting_<cell>_<basis>.json``, ``kscf_<cell>_<basis>.json``,
 ``dft_<molecule>_<basis>.json``, ``mp2_<molecule>_<basis>.json``,
 ``kmp2_<cell>_<basis>.json``, ``ccsd_<molecule>_<basis>.json`` and
-``kccsd_<cell>_<basis>_<class>.json`` with the PySCF values and their provenance.
+``kccsd_<cell>_<basis>_<class>.json`` and ``gradient_<molecule>_<basis>.json``
+with the PySCF values and their provenance.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from tests.reference.pyscf_oracle import (
     periodic_fitted_eri_reference,
     periodic_nuclear_attraction_reference,
     pyscf,
+    scf_gradient_reference,
     scf_reference,
 )
 from tests.reference.test_bloch_reference import CELLS as BLOCH_CELLS
@@ -66,6 +68,7 @@ from tests.reference.test_four_center_reference import (
     STORED_CASES as FOUR_CENTER_CASES,
 )
 from tests.reference.test_fourier_reference import STORED_CASES as FOURIER_CASES
+from tests.reference.test_gradient_reference import STORED_CASES as GRADIENT_CASES
 from tests.reference.test_kccsd_reference import STORED_CASES as KCCSD_CASES
 from tests.reference.test_kdft_reference import STORED_CASES as KDFT_CASES
 from tests.reference.test_kdft_reference import STORED_LEVEL as KDFT_LEVEL
@@ -129,6 +132,7 @@ def main() -> None:
     record_k_point_mp2()
     record_ccsd()
     record_k_point_ccsd()
+    record_gradients()
 
 
 def record_molecules() -> None:
@@ -411,6 +415,28 @@ def record_mp2() -> None:
             f"conv_tol_grad=1e-10, then {MP2_CLASSES[kind]} in the same auxiliary "
             "basis; Bohr",
             {key: np.asarray(value) for key, value in reference.items()},
+            method=kind,
+            auxiliary=MP2_AUXILIARY,
+            charge=molecule.charge,
+            spin=molecule.spin,
+        )
+
+
+def record_gradients() -> None:
+    """Write the density-fitted Hartree–Fock gradient cases."""
+    for name, basis_name, kind in GRADIENT_CASES:
+        molecule = SCF_MOLECULES[name]
+        basis = BasisSet.for_atoms(molecule, basis_name, library=LIBRARY)
+        auxiliary = BasisSet.for_atoms(molecule, MP2_AUXILIARY, library=LIBRARY)
+        gradient = scf_gradient_reference(molecule, basis, kind, auxiliary)
+        record(
+            "gradient",
+            molecule,
+            name,
+            basis_name,
+            f"scf.{kind.upper()}.density_fit with conv_tol=1e-13, "
+            "conv_tol_grad=1e-10, then nuc_grad_method; Hartree per Bohr",
+            {"gradient": np.asarray(gradient)},
             method=kind,
             auxiliary=MP2_AUXILIARY,
             charge=molecule.charge,

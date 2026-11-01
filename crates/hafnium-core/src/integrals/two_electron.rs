@@ -15,6 +15,13 @@
 //! with `[s_lo, s_hi]` the exponent range of the kernel, `M` the quartet's
 //! envelope with the weights `s_hi^n h_n(ε)` over the combined Hermite
 //! orders `n = t + τ`, and `h_n` the Hermite envelopes of [`super::pairs`].
+//!
+//! The derivative kernels (ADR-0035) differentiate with respect to the
+//! centre of a function with a unit partner by the shift of the Hermite
+//! integrals, `∂_P R_{tuv} = R_{t+1,uv}` with `R_PQ = P − Q`, and with
+//! respect to the centre of a function in a real pair by raising and
+//! lowering its angular momentum, `∂_A G_a = 2α G_{a + e} − a_e G_{a − e}`.
+//! They evaluate every quartet.
 
 use std::f64::consts::PI;
 use std::ops::{AddAssign, Mul};
@@ -22,9 +29,10 @@ use std::ops::{AddAssign, Mul};
 use rayon::prelude::*;
 
 use super::cartesian::{
-    cartesian_components, n_cartesian, spherical_transformation, transform_index_into,
+    cartesian_components, center_derivative, n_cartesian, spherical_transformation,
+    transform_index_into,
 };
-use super::coulomb::{CoulombKernel, HermiteWorkspace};
+use super::coulomb::{CoulombKernel, HermiteIntegrals, HermiteWorkspace};
 use super::pairs::{
     ENVELOPE_EPSILON, PrimitivePair, PrimitivePairs, hermite_envelopes, primitive_pairs,
     single_shell_pairs,
@@ -85,6 +93,7 @@ pub fn coulomb_two_center(
     let ket_offsets = ket.function_offsets();
     Ok(assemble_parallel(
         bra,
+        1,
         n_ket,
         translations,
         |translation, a, slab| {
@@ -114,6 +123,72 @@ pub fn coulomb_two_center(
                 for (fa, row) in spherical.chunks(c.n_functions()).enumerate() {
                     slab[fa * n_ket + ket_offset..fa * n_ket + ket_offset + row.len()]
                         .copy_from_slice(row);
+                }
+            }
+        },
+    ))
+}
+
+/// The derivative of the two-centre Coulomb integrals with respect to the
+/// centre of the bra function, `(∂_P P | Q(r − T))`, as
+/// `[n_translations, 3, n_bra, n_ket]`; the derivative with respect to the
+/// ket centre is its negative. Every primitive pair is evaluated.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidArgument`] if the kernel's `omega` is not
+/// positive or a translation is not finite.
+pub fn coulomb_two_center_derivative(
+    bra: &ShellTable,
+    ket: &ShellTable,
+    translations: &[[f64; 3]],
+    kernel: CoulombKernel,
+) -> Result<Vec<f64>, Error> {
+    kernel.validate()?;
+    check_finite(translations, "translations")?;
+    let n_ket = ket.n_functions();
+    let max_l = bra.max_angular_momentum().max(ket.max_angular_momentum());
+    let tables = Tables::new(max_l);
+    let ket_offsets = ket.function_offsets();
+    Ok(assemble_parallel(
+        bra,
+        3,
+        n_ket,
+        translations,
+        |translation, a, slab| {
+            let (la, ka) = (a.angular_momentum, a.n_contractions);
+            let bra_pairs = single_shell_pairs(&a, a.center);
+            let mut workspace = HermiteWorkspace::default();
+            let size = a.n_functions() * n_ket;
+            for (ic, &ket_offset) in ket_offsets.iter().enumerate() {
+                let c = ket.shell(ic);
+                let (lc, kc) = (c.angular_momentum, c.n_contractions);
+                let c_center: [f64; 3] =
+                    std::array::from_fn(|axis| c.center[axis] + translation[axis]);
+                let ket_pairs = single_shell_pairs(&c, c_center);
+                let block_size = ka * n_cartesian(la) * kc * n_cartesian(lc);
+                let mut block = vec![0.0; 3 * block_size];
+                coulomb_block_derivative(
+                    &bra_pairs,
+                    [la, 0],
+                    &ket_pairs,
+                    [lc, 0],
+                    &[Differentiate::HermiteCenter { sign: 1.0 }],
+                    kernel,
+                    &tables,
+                    &mut workspace,
+                    &mut block,
+                );
+                for axis in 0..3 {
+                    let spherical = tables.to_spherical(
+                        &block[axis * block_size..][..block_size],
+                        [Some(la), None, Some(lc), None],
+                        [ka, 1, kc, 1],
+                    );
+                    let target = &mut slab[axis * size..][..size];
+                    for (fa, row) in spherical.chunks(c.n_functions()).enumerate() {
+                        target[fa * n_ket + ket_offset..][..row.len()].copy_from_slice(row);
+                    }
                 }
             }
         },
@@ -163,6 +238,7 @@ pub fn coulomb_three_center(
     let ket_offsets = ket.function_offsets();
     Ok(assemble_parallel(
         aux,
+        1,
         n_bra * n_ket,
         translations,
         |[aux_translation, ket_translation], p_shell, slab| {
@@ -181,7 +257,7 @@ pub fn coulomb_three_center(
                         std::array::from_fn(|axis| b.center[axis] + ket_translation[axis]);
                     let (la, lb) = (a.angular_momentum, b.angular_momentum);
                     let (ka, kb) = (a.n_contractions, b.n_contractions);
-                    let pairs = primitive_pairs(&a, &b, b_center, 0);
+                    let pairs = primitive_pairs(&a, &b, b_center, [0, 0]);
                     let mut block =
                         vec![
                             0.0;
@@ -212,6 +288,103 @@ pub fn coulomb_three_center(
                         slab[(mp * n_bra + bra_offset + ma) * n_ket + ket_offset + mb] = *value;
                         if symmetric && ib != ia {
                             slab[(mp * n_bra + ket_offset + mb) * n_ket + bra_offset + ma] = *value;
+                        }
+                    }
+                }
+            }
+        },
+    ))
+}
+
+/// The derivatives of the three-centre Coulomb integrals
+/// `(P(r − T_P) | μ ν(r − T_ν))`: with respect to the centre of the
+/// auxiliary function, `(∂_P P | μ ν)`, in the slots `0..3`, and with
+/// respect to the centre of the bra function, `(P | ∂_A μ ν)`, in the
+/// slots `3..6`, as `[n_images, 6, n_aux, n_bra, n_ket]`;
+/// `translations[image] = [T_P, T_ν]`. The derivative with respect to the
+/// ket centre is minus the sum of the two. Every shell pair and primitive
+/// quartet is evaluated.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidArgument`] if the kernel's `omega` is not
+/// positive or a translation is not finite.
+pub fn coulomb_three_center_derivative(
+    aux: &ShellTable,
+    bra: &ShellTable,
+    ket: &ShellTable,
+    translations: &[[[f64; 3]; 2]],
+    kernel: CoulombKernel,
+) -> Result<Vec<f64>, Error> {
+    kernel.validate()?;
+    for pair in translations {
+        check_finite(pair, "translations")?;
+    }
+    let (n_bra, n_ket) = (bra.n_functions(), ket.n_functions());
+    let max_l = aux
+        .max_angular_momentum()
+        .max(bra.max_angular_momentum())
+        .max(ket.max_angular_momentum());
+    // The bra derivative reads the components of one order more.
+    let tables = Tables::new(max_l + 1);
+    let bra_offsets = bra.function_offsets();
+    let ket_offsets = ket.function_offsets();
+    Ok(assemble_parallel(
+        aux,
+        6,
+        n_bra * n_ket,
+        translations,
+        |[aux_translation, ket_translation], p_shell, slab| {
+            let (lp, kp) = (p_shell.angular_momentum, p_shell.n_contractions);
+            let p_center: [f64; 3] =
+                std::array::from_fn(|axis| p_shell.center[axis] + aux_translation[axis]);
+            let aux_pairs = single_shell_pairs(&p_shell, p_center);
+            let mut workspace = HermiteWorkspace::default();
+            let nsp = p_shell.n_functions();
+            let size = nsp * n_bra * n_ket;
+            for (ia, &bra_offset) in bra_offsets.iter().enumerate() {
+                let a = bra.shell(ia);
+                for (ib, &ket_offset) in ket_offsets.iter().enumerate() {
+                    let b = ket.shell(ib);
+                    let b_center: [f64; 3] =
+                        std::array::from_fn(|axis| b.center[axis] + ket_translation[axis]);
+                    let (la, lb) = (a.angular_momentum, b.angular_momentum);
+                    let (ka, kb) = (a.n_contractions, b.n_contractions);
+                    let pairs = primitive_pairs(&a, &b, b_center, [1, 0]);
+                    let block_size =
+                        ka * n_cartesian(la) * kb * n_cartesian(lb) * kp * n_cartesian(lp);
+                    let mut block = vec![0.0; 6 * block_size];
+                    // The auxiliary function is the ket of the block, so its
+                    // centre enters the Hermite integrals with a minus sign.
+                    coulomb_block_derivative(
+                        &pairs,
+                        [la, lb],
+                        &aux_pairs,
+                        [lp, 0],
+                        &[
+                            Differentiate::HermiteCenter { sign: -1.0 },
+                            Differentiate::BraFunction,
+                        ],
+                        kernel,
+                        &tables,
+                        &mut workspace,
+                        &mut block,
+                    );
+                    let nsb = b.n_functions();
+                    for slot in 0..6 {
+                        // spherical[fa][fb][fp] → slab[slot][fp][μ][ν]
+                        let spherical = tables.to_spherical(
+                            &block[slot * block_size..][..block_size],
+                            [Some(la), Some(lb), Some(lp), None],
+                            [ka, kb, kp, 1],
+                        );
+                        let target = &mut slab[slot * size..][..size];
+                        for (index, value) in spherical.iter().enumerate() {
+                            let mp = index % nsp;
+                            let mb = (index / nsp) % nsb;
+                            let ma = index / (nsp * nsb);
+                            target[(mp * n_bra + bra_offset + ma) * n_ket + ket_offset + mb] =
+                                *value;
                         }
                     }
                 }
@@ -706,7 +879,7 @@ pub(crate) fn shell_pairs(
                     let b_center: [f64; 3] =
                         std::array::from_fn(|axis| b.center[axis] + translations[1][axis]);
                     let ls = [a.angular_momentum, b.angular_momentum];
-                    let primitives = primitive_pairs(&shifted, &b, b_center, 0);
+                    let primitives = primitive_pairs(&shifted, &b, b_center, [0, 0]);
                     let bound = schwarz_bound(&primitives, ls, kernel, cache, &mut workspace);
                     ShellPair {
                         shells: [ia, ib],
@@ -764,31 +937,38 @@ pub(crate) fn schwarz_bound(
 
 /// Evaluate one slab per leading shell in parallel and place the slabs.
 ///
-/// The output is `[n_images, n_leading, row_size]` row-major, where the
-/// leading index runs over the functions of `leading` and `fill` writes the
-/// `(2l + 1) * row_size` values of one shell for one image.
+/// The output is `[n_images, n_slots, n_leading, row_size]` row-major,
+/// where the leading index runs over the functions of `leading` and `fill`
+/// writes the `n_slots * n_functions * row_size` values of one shell for
+/// one image as `[slot][function][row]`.
 fn assemble_parallel<T: Sync>(
     leading: &ShellTable,
+    n_slots: usize,
     row_size: usize,
     images: &[T],
     fill: impl Fn(&T, ShellRef<'_>, &mut [f64]) + Sync,
 ) -> Vec<f64> {
     let n_leading = leading.n_functions();
     let offsets = leading.function_offsets();
-    let mut out = vec![0.0; images.len() * n_leading * row_size];
+    let image_size = n_slots * n_leading * row_size;
+    let mut out = vec![0.0; images.len() * image_size];
     for (it, image) in images.iter().enumerate() {
         let slabs: Vec<Vec<f64>> = (0..leading.n_shells())
             .into_par_iter()
             .map(|index| {
                 let shell = leading.shell(index);
-                let mut slab = vec![0.0; shell.n_functions() * row_size];
+                let mut slab = vec![0.0; n_slots * shell.n_functions() * row_size];
                 fill(image, shell, &mut slab);
                 slab
             })
             .collect();
-        let target = &mut out[it * n_leading * row_size..(it + 1) * n_leading * row_size];
+        let target = &mut out[it * image_size..(it + 1) * image_size];
         for (&offset, slab) in offsets.iter().zip(&slabs) {
-            target[offset * row_size..offset * row_size + slab.len()].copy_from_slice(slab);
+            let shell_size = slab.len() / n_slots;
+            for (slot, values) in slab.chunks(shell_size).enumerate() {
+                let start = (slot * n_leading + offset) * row_size;
+                target[start..start + shell_size].copy_from_slice(values);
+            }
         }
     }
     out
@@ -953,6 +1133,119 @@ pub(crate) fn coulomb_block(
     added
 }
 
+/// The centre a derivative kernel differentiates with respect to.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Differentiate {
+    /// The centre of the first bra function, by raising and lowering its
+    /// angular momentum; the bra pairs carry one extra order on it.
+    BraFunction,
+    /// The Hermite centre of the bra pair (`sign = 1`) or of the ket pair
+    /// (`sign = −1`), by the shift of the Hermite integrals; the centre of
+    /// a function with a unit partner.
+    HermiteCenter {
+        /// `∂_P R_{tuv} = R_{t+1,uv}` for the bra centre `P` and the negative
+        /// for the ket centre `Q`, since `R_PQ = P − Q`.
+        sign: f64,
+    },
+}
+
+/// The shifts of the Hermite integrals along the three axes.
+const AXIS_SHIFTS: [[usize; 3]; 3] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+/// Accumulate the derivatives of `(ab|cd)` with respect to the centres
+/// `which` selects over all primitive pairs into `out`, laid out
+/// `[which][axis][k_a, cart_a, k_b, cart_b, k_c, cart_c, k_d, cart_d]` with
+/// the layout of [`coulomb_block`] for each axis; `ls_bra` and `ls_ket`
+/// name the component sets of the undifferentiated integrals. Every
+/// quartet is evaluated, with one Hermite table serving every derivative.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "inner kernel; every argument is a distinct table"
+)]
+pub(crate) fn coulomb_block_derivative(
+    bra: &PrimitivePairs,
+    ls_bra: [usize; 2],
+    ket: &PrimitivePairs,
+    ls_ket: [usize; 2],
+    which: &[Differentiate],
+    kernel: CoulombKernel,
+    tables: &Tables,
+    workspace: &mut HermiteWorkspace,
+    out: &mut [f64],
+) {
+    let components: [&[[usize; 3]]; 4] = [
+        &tables.components[ls_bra[0]],
+        &tables.components[ls_bra[1]],
+        &tables.components[ls_ket[0]],
+        &tables.components[ls_ket[1]],
+    ];
+    let dims: [usize; 4] = std::array::from_fn(|i| components[i].len());
+    let n_abcd: usize = dims.iter().product();
+    let orders = [ls_bra[0] + ls_bra[1], ls_ket[0] + ls_ket[1]];
+    // The raised bra components reach one Hermite order more.
+    let n_t = orders[0] + 2;
+    let mut intermediate = std::mem::take(&mut workspace.intermediate);
+    intermediate.clear();
+    intermediate.resize(dims[2] * dims[3] * n_t * n_t * n_t, 0.0);
+    let mut values = std::mem::take(&mut workspace.values);
+    values.clear();
+    values.resize(3 * n_abcd, 0.0);
+    let mut raised = std::mem::take(&mut workspace.raised);
+    let mut lowered = std::mem::take(&mut workspace.lowered);
+    let block = out.len() / (3 * which.len());
+    for (index_bra, pair_bra) in bra.pairs.iter().enumerate() {
+        for (index_ket, pair_ket) in ket.pairs.iter().enumerate() {
+            let pq: [f64; 3] =
+                std::array::from_fn(|axis| pair_bra.center[axis] - pair_ket.center[axis]);
+            let alpha = pair_bra.p * pair_ket.p / (pair_bra.p + pair_ket.p);
+            let prefactor = quartet_prefactor(pair_bra, pair_ket);
+            let r = workspace.compute_kernel(orders[0] + orders[1] + 1, alpha, kernel, pq);
+            for (slot, derivative) in which.iter().enumerate() {
+                let scale = match derivative {
+                    Differentiate::HermiteCenter { sign } => {
+                        contract_quartet(
+                            (pair_bra, pair_ket),
+                            components,
+                            orders,
+                            &AXIS_SHIFTS,
+                            &r,
+                            &mut intermediate,
+                            &mut values,
+                        );
+                        sign * prefactor
+                    }
+                    Differentiate::BraFunction => {
+                        bra_function_derivative(
+                            (pair_bra, pair_ket),
+                            (components, ls_bra[0]),
+                            orders,
+                            tables,
+                            &r,
+                            (&mut intermediate, &mut values),
+                            (&mut raised, &mut lowered),
+                        );
+                        prefactor
+                    }
+                };
+                for axis in 0..3 {
+                    accumulate_quartet(
+                        (bra, index_bra),
+                        (ket, index_ket),
+                        scale,
+                        &values[axis * n_abcd..][..n_abcd],
+                        dims,
+                        &mut out[(slot * 3 + axis) * block..][..block],
+                    );
+                }
+            }
+        }
+    }
+    workspace.intermediate = intermediate;
+    workspace.values = values;
+    workspace.raised = raised;
+    workspace.lowered = lowered;
+}
+
 /// Bound on every Cartesian integral `(ab|cd)` of a primitive quartet for
 /// the context's kernel:
 /// `(2π^{5/2}/(pq√(p+q))) (1/√α) (s_hi − s_lo) exp(−(1 − ε) s_lo² R²) M`
@@ -1036,6 +1329,64 @@ fn quartet_envelope(
     largest
 }
 
+/// `values[axis][ab][cd]`, the derivative of one primitive quartet with
+/// respect to the centre of the first bra function of angular momentum
+/// `la`, from the contractions over the components with `la` raised and
+/// lowered against the Hermite table `r` of one order more than the
+/// quartet; `raised` and `lowered` are the scratch buffers of those
+/// contractions.
+fn bra_function_derivative(
+    pairs: (&PrimitivePair, &PrimitivePair),
+    (components, la): ([&[[usize; 3]]; 4], usize),
+    orders: [usize; 2],
+    tables: &Tables,
+    r: &impl HermiteIntegrals,
+    (intermediate, values): (&mut [f64], &mut [f64]),
+    (raised, lowered): (&mut Vec<f64>, &mut Vec<f64>),
+) {
+    let trailing = components[1].len() * components[2].len() * components[3].len();
+    let shifted = |l: usize| -> [&[[usize; 3]]; 4] {
+        [
+            &tables.components[l],
+            components[1],
+            components[2],
+            components[3],
+        ]
+    };
+    raised.clear();
+    raised.resize(n_cartesian(la + 1) * trailing, 0.0);
+    contract_quartet(
+        pairs,
+        shifted(la + 1),
+        [orders[0] + 1, orders[1]],
+        &[[0; 3]],
+        r,
+        intermediate,
+        raised,
+    );
+    lowered.clear();
+    if la > 0 {
+        lowered.resize(n_cartesian(la - 1) * trailing, 0.0);
+        contract_quartet(
+            pairs,
+            shifted(la - 1),
+            [orders[0] - 1, orders[1]],
+            &[[0; 3]],
+            r,
+            intermediate,
+            lowered,
+        );
+    }
+    center_derivative(
+        pairs.0.exponent_a,
+        components[0],
+        raised,
+        lowered,
+        trailing,
+        values,
+    );
+}
+
 /// `values[ab][cd] = Σ_{tuv} E^{ab}_{tuv} Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ}
 /// R_{t+τ, u+ν, v+φ}` for one primitive quartet whose product centres are
 /// displaced by `pq`, returning the prefactor `2π^{5/2} / (pq √(p+q))`;
@@ -1054,61 +1405,127 @@ pub(crate) fn primitive_quartet(
     intermediate: &mut [f64],
     values: &mut [f64],
 ) -> f64 {
+    primitive_quartet_shifted(
+        pairs,
+        pq,
+        components,
+        orders,
+        kernel,
+        &[[0; 3]],
+        workspace,
+        intermediate,
+        values,
+    )
+}
+
+/// [`primitive_quartet`] with the Hermite integrals shifted: for every
+/// `shifts[s]`, `values[s][ab][cd]` holds the contraction with
+/// `R_{t+τ+s_x, u+ν+s_y, v+φ+s_z}`, which is the derivative of the integral
+/// with respect to the bra centre `P` along the axes the shift selects,
+/// since `∂_P R_{tuv} = R_{t+1,uv}` for `R_PQ = P − Q`. The table is
+/// computed to the order of the largest shift.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "inner kernel; every argument is a distinct table"
+)]
+pub(crate) fn primitive_quartet_shifted(
+    pairs: (&PrimitivePair, &PrimitivePair),
+    pq: [f64; 3],
+    components: [&[[usize; 3]]; 4],
+    orders: [usize; 2],
+    kernel: CoulombKernel,
+    shifts: &[[usize; 3]],
+    workspace: &mut HermiteWorkspace,
+    intermediate: &mut [f64],
+    values: &mut [f64],
+) -> f64 {
+    let (pair_bra, pair_ket) = pairs;
+    let (p, q) = (pair_bra.p, pair_ket.p);
+    let alpha = p * q / (p + q);
+    let extra = shifts
+        .iter()
+        .map(|shift| shift.iter().sum::<usize>())
+        .max()
+        .unwrap_or(0);
+    let r = workspace.compute_kernel(orders[0] + orders[1] + extra, alpha, kernel, pq);
+    contract_quartet(pairs, components, orders, shifts, &r, intermediate, values);
+    quartet_prefactor(pair_bra, pair_ket)
+}
+
+/// `2π^{5/2} / (pq √(p+q))`, the prefactor of a primitive quartet.
+fn quartet_prefactor(pair_bra: &PrimitivePair, pair_ket: &PrimitivePair) -> f64 {
+    let (p, q) = (pair_bra.p, pair_ket.p);
+    2.0 * PI.powf(2.5) / (p * q * (p + q).sqrt())
+}
+
+/// The contraction of [`primitive_quartet_shifted`] with a Hermite table
+/// `r` of at least the order the shifts reach.
+fn contract_quartet(
+    pairs: (&PrimitivePair, &PrimitivePair),
+    components: [&[[usize; 3]]; 4],
+    orders: [usize; 2],
+    shifts: &[[usize; 3]],
+    r: &impl HermiteIntegrals,
+    intermediate: &mut [f64],
+    values: &mut [f64],
+) {
     let (pair_bra, pair_ket) = pairs;
     let [comp_a, comp_b, comp_c, comp_d] = components;
     let n_t = orders[0] + 1;
+    let n_ab = comp_a.len() * comp_b.len();
     let n_cd = comp_c.len() * comp_d.len();
-    let (p, q) = (pair_bra.p, pair_ket.p);
-    let alpha = p * q / (p + q);
-    let prefactor = 2.0 * PI.powf(2.5) / (p * q * (p + q).sqrt());
-    let r = workspace.compute_kernel(orders[0] + orders[1], alpha, kernel, pq);
-    // X[cd][tuv] = Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ} R_{t+τ, u+ν, v+φ}
-    for (icd, (cc, cd)) in comp_c
-        .iter()
-        .flat_map(|cc| comp_d.iter().map(move |cd| (cc, cd)))
-        .enumerate()
-    {
-        let slot = &mut intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
-        // Only t + u + v ≤ l_a + l_b is consumed by the bra contraction.
-        for t in 0..n_t {
-            for u in 0..n_t - t {
-                for v in 0..n_t - t - u {
-                    let mut sum = 0.0;
-                    for tau in 0..=cc[0] + cd[0] {
-                        for nu in 0..=cc[1] + cd[1] {
-                            for phi in 0..=cc[2] + cd[2] {
-                                let sign = if (tau + nu + phi) % 2 == 0 { 1.0 } else { -1.0 };
-                                sum += sign
-                                    * pair_ket.product(cc, cd, [tau, nu, phi])
-                                    * r.get(t + tau, u + nu, v + phi);
+    for (s, shift) in shifts.iter().enumerate() {
+        // X[cd][tuv] = Σ_{τνφ} (−1)^{τ+ν+φ} E^{cd}_{τνφ} R_{t+τ+s_x, u+ν+s_y, v+φ+s_z}
+        for (icd, (cc, cd)) in comp_c
+            .iter()
+            .flat_map(|cc| comp_d.iter().map(move |cd| (cc, cd)))
+            .enumerate()
+        {
+            let slot = &mut intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
+            // Only t + u + v ≤ l_a + l_b is consumed by the bra contraction.
+            for t in 0..n_t {
+                for u in 0..n_t - t {
+                    for v in 0..n_t - t - u {
+                        let mut sum = 0.0;
+                        for tau in 0..=cc[0] + cd[0] {
+                            for nu in 0..=cc[1] + cd[1] {
+                                for phi in 0..=cc[2] + cd[2] {
+                                    let sign = if (tau + nu + phi) % 2 == 0 { 1.0 } else { -1.0 };
+                                    sum += sign
+                                        * pair_ket.product(cc, cd, [tau, nu, phi])
+                                        * r.get(
+                                            t + tau + shift[0],
+                                            u + nu + shift[1],
+                                            v + phi + shift[2],
+                                        );
+                                }
                             }
                         }
-                    }
-                    slot[(t * n_t + u) * n_t + v] = sum;
-                }
-            }
-        }
-    }
-    for (iab, (ca, cb)) in comp_a
-        .iter()
-        .flat_map(|ca| comp_b.iter().map(move |cb| (ca, cb)))
-        .enumerate()
-    {
-        for icd in 0..n_cd {
-            let slot = &intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
-            let mut value = 0.0;
-            for t in 0..=ca[0] + cb[0] {
-                for u in 0..=ca[1] + cb[1] {
-                    for v in 0..=ca[2] + cb[2] {
-                        value +=
-                            pair_bra.product(ca, cb, [t, u, v]) * slot[(t * n_t + u) * n_t + v];
+                        slot[(t * n_t + u) * n_t + v] = sum;
                     }
                 }
             }
-            values[iab * n_cd + icd] = value;
+        }
+        for (iab, (ca, cb)) in comp_a
+            .iter()
+            .flat_map(|ca| comp_b.iter().map(move |cb| (ca, cb)))
+            .enumerate()
+        {
+            for icd in 0..n_cd {
+                let slot = &intermediate[icd * n_t * n_t * n_t..(icd + 1) * n_t * n_t * n_t];
+                let mut value = 0.0;
+                for t in 0..=ca[0] + cb[0] {
+                    for u in 0..=ca[1] + cb[1] {
+                        for v in 0..=ca[2] + cb[2] {
+                            value +=
+                                pair_bra.product(ca, cb, [t, u, v]) * slot[(t * n_t + u) * n_t + v];
+                        }
+                    }
+                }
+                values[(s * n_ab + iab) * n_cd + icd] = value;
+            }
         }
     }
-    prefactor
 }
 
 /// Add `prefactor * values[ab][cd]` of one primitive quartet to `out`
@@ -1825,7 +2242,7 @@ mod tests {
             };
             let bra = make(la, [0.0; 3], exponents[0]);
             let ket = make(lb, center_b, exponents[1]);
-            let pairs = primitive_pairs(&bra.shell(0), &ket.shell(0), center_b, 0);
+            let pairs = primitive_pairs(&bra.shell(0), &ket.shell(0), center_b, [0, 0]);
             let components: [&[[usize; 3]]; 4] = [
                 &tables.components[la],
                 &tables.components[lb],
@@ -1869,5 +2286,153 @@ mod tests {
                 }
             }
         }
+    }
+
+    use crate::integrals::test_tables::{
+        assert_close, assert_rows_match, central_difference, d_shell, rows_of,
+    };
+
+    #[test]
+    fn two_center_derivative_matches_finite_differences() {
+        let ket = sp_table_at([0.4, 0.1, -0.2]);
+        let translations = [ZERO, [0.3, -0.2, 0.5]];
+        let n_ket = ket.n_functions();
+        for (bra, kernel) in [
+            (general_table(), CoulombKernel::Full),
+            (d_shell(), CoulombKernel::Full),
+            (general_table(), CoulombKernel::ShortRange(0.9)),
+        ] {
+            let n_bra = bra.n_functions();
+            let derivative =
+                coulomb_two_center_derivative(&bra, &ket, &translations, kernel).expect("valid");
+            for shell in 0..bra.n_shells() {
+                for axis in 0..3 {
+                    let difference = central_difference(&bra, shell, axis, |moved| {
+                        coulomb_two_center(moved, &ket, &translations, kernel, 0.0).expect("valid")
+                    });
+                    assert_rows_match(
+                        &derivative,
+                        (3, axis),
+                        (n_bra, n_ket),
+                        rows_of(&bra, shell),
+                        &difference,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn three_center_derivatives_match_finite_differences() {
+        let ket = sp_table_at([-0.3, 0.2, 0.1]);
+        let images = [[ZERO, ZERO], [[0.2, 0.1, -0.1], [0.3, -0.2, 0.5]]];
+        let n_ket = ket.n_functions();
+        for (aux, bra, kernel) in [
+            (
+                general_table(),
+                sp_table_at([0.4, 0.1, -0.2]),
+                CoulombKernel::Full,
+            ),
+            (d_shell(), general_table(), CoulombKernel::Full),
+            (sp_table(), d_shell(), CoulombKernel::LongRange(0.8)),
+        ] {
+            let (n_aux, n_bra) = (aux.n_functions(), bra.n_functions());
+            let derivative =
+                coulomb_three_center_derivative(&aux, &bra, &ket, &images, kernel).expect("valid");
+            for axis in 0..3 {
+                for shell in 0..aux.n_shells() {
+                    let difference = central_difference(&aux, shell, axis, |moved| {
+                        coulomb_three_center(moved, &bra, &ket, &images, kernel, 0.0)
+                            .expect("valid")
+                    });
+                    assert_rows_match(
+                        &derivative,
+                        (6, axis),
+                        (n_aux, n_bra * n_ket),
+                        rows_of(&aux, shell),
+                        &difference,
+                    );
+                }
+                for shell in 0..bra.n_shells() {
+                    let difference = central_difference(&bra, shell, axis, |moved| {
+                        coulomb_three_center(&aux, moved, &ket, &images, kernel, 0.0)
+                            .expect("valid")
+                    });
+                    for image in 0..images.len() {
+                        for p in 0..n_aux {
+                            for f in rows_of(&bra, shell) {
+                                for g in 0..n_ket {
+                                    let analytic =
+                                        derivative[(((image * 6 + 3 + axis) * n_aux + p) * n_bra
+                                            + f)
+                                            * n_ket
+                                            + g];
+                                    let numeric =
+                                        difference[((image * n_aux + p) * n_bra + f) * n_ket + g];
+                                    assert!(
+                                        (analytic - numeric).abs() < 1e-8,
+                                        "axis {axis} P {p} μ {f} ν {g}: {analytic} vs {numeric}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn three_center_derivatives_sum_to_zero_under_translation() {
+        // With one table as bra and ket and no translation the ket
+        // derivative is the bra derivative with μ and ν swapped, and
+        // ∂_P + ∂_A + ∂_B = 0.
+        let aux = sp_table_at([0.5, -0.2, 0.1]);
+        let table = general_table();
+        let (n_aux, n) = (aux.n_functions(), table.n_functions());
+        let derivative = coulomb_three_center_derivative(
+            &aux,
+            &table,
+            &table,
+            &[[ZERO, ZERO]],
+            CoulombKernel::Full,
+        )
+        .expect("valid");
+        let at = |slot: usize, p: usize, i: usize, j: usize| {
+            derivative[((slot * n_aux + p) * n + i) * n + j]
+        };
+        for axis in 0..3 {
+            for p in 0..n_aux {
+                for i in 0..n {
+                    for j in 0..n {
+                        let total =
+                            at(axis, p, i, j) + at(3 + axis, p, i, j) + at(3 + axis, p, j, i);
+                        assert!(total.abs() < 1e-12, "{total}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn derivative_kernels_treat_general_contractions_like_split_shells() {
+        let (general, split) = (general_table(), split_table());
+        let translation = [0.3, -0.1, 0.2];
+        let kernel = CoulombKernel::LongRange(0.8);
+        assert_close(
+            &coulomb_two_center_derivative(&general, &general, &[ZERO, translation], kernel)
+                .expect("valid"),
+            &coulomb_two_center_derivative(&split, &split, &[ZERO, translation], kernel)
+                .expect("valid"),
+            1e-12,
+        );
+        let images = [[ZERO, ZERO], [translation, ZERO], [ZERO, translation]];
+        assert_close(
+            &coulomb_three_center_derivative(&general, &general, &general, &images, kernel)
+                .expect("valid"),
+            &coulomb_three_center_derivative(&split, &split, &split, &images, kernel)
+                .expect("valid"),
+            1e-12,
+        );
     }
 }

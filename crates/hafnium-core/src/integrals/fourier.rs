@@ -116,7 +116,7 @@ pub fn pair_fourier_transform(
                     let nfb = b.n_functions();
                     let b_center: [f64; 3] =
                         std::array::from_fn(|axis| b.center[axis] + translation[axis]);
-                    let pairs = primitive_pairs(&a, &b, b_center, 0);
+                    let pairs = primitive_pairs(&a, &b, b_center, [0, 0]);
                     let mut block = vec![Complex64::default(); n_g * ka * nca * kb * ncb];
                     let screen = Screen {
                         threshold,

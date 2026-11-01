@@ -144,6 +144,45 @@ class IntegralEngine(Protocol):
         """
         ...
 
+    def overlap_derivative(
+        self, bra: ShellTable, ket: ShellTable, translations: Array
+    ) -> Array:
+        """Differentiate the overlap with respect to the bra centres.
+
+        ``⟨∂_A μ | ν⟩`` as ``[image, 3, ao, ao]``; the derivative with
+        respect to the ket centres is its negative (ADR-0035).
+        """
+        ...
+
+    def kinetic_derivative(
+        self, bra: ShellTable, ket: ShellTable, translations: Array
+    ) -> Array:
+        """Differentiate the kinetic energy integrals with respect to the bra centres.
+
+        ``⟨∂_A μ | −½∇² | ν⟩`` as ``[image, 3, ao, ao]``, laid out as
+        :meth:`overlap_derivative`.
+        """
+        ...
+
+    def nuclear_attraction_derivative(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        charges: PointCharges,
+        *,
+        kernel: CoulombKernel = COULOMB,
+    ) -> tuple[Array, Array]:
+        """Differentiate the attraction to the point ``charges``.
+
+        With respect to the bra centres, ``⟨∂_A μ | V | ν⟩`` as
+        ``[image, 3, ao, ao]``, and with respect to the positions of the
+        charges, ``⟨μ | ∂_C V_C | ν⟩`` as ``[image, charge, 3, ao, ao]``;
+        the derivative with respect to the ket centres is minus their sum.
+        Every term is evaluated.
+        """
+        ...
+
     def coulomb_two_center(
         self,
         bra: ShellTable,
@@ -157,6 +196,21 @@ class IntegralEngine(Protocol):
 
         Primitive pairs bounded below ``threshold`` are left out; every
         neglected term is smaller than ``threshold`` (ADR-0018).
+        """
+        ...
+
+    def coulomb_two_center_derivative(
+        self,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        kernel: CoulombKernel = COULOMB,
+    ) -> Array:
+        """Differentiate the two-centre integrals with respect to the bra centres.
+
+        ``(∂_P P | Q)`` as ``[image, 3, aux, aux]``; the derivative with
+        respect to the ket centres is its negative. Every term is evaluated.
         """
         ...
 
@@ -175,6 +229,24 @@ class IntegralEngine(Protocol):
         ``translations`` has shape ``[image, 2, 3]``: the first vector
         translates the auxiliary function, the second the ket function.
         Primitive quartets bounded below ``threshold`` are left out.
+        """
+        ...
+
+    def coulomb_three_center_derivative(
+        self,
+        auxiliary: ShellTable,
+        bra: ShellTable,
+        ket: ShellTable,
+        translations: Array,
+        *,
+        kernel: CoulombKernel = COULOMB,
+    ) -> tuple[Array, Array]:
+        """Differentiate ``(P|uv)`` with respect to the auxiliary and the bra centres.
+
+        ``(∂_P P | u v)`` and ``(P | ∂_A u v)``, each as
+        ``[image, 3, aux, ao, ao]`` for the ``translations`` of
+        :meth:`coulomb_three_center`; the derivative with respect to the
+        ket centres is minus their sum. Every term is evaluated.
         """
         ...
 

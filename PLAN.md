@@ -184,7 +184,7 @@ hafnium/                   Python package
                          that basis; shared by mp and cc
   mp/                    DF-MP2
   cc/                    CCSD, (T); generated contraction code + generator
-  properties/            dipoles, population analysis, gradients
+  properties/            nuclear gradients; later dipoles, population analysis
   io/                    xyz, molden, cube, checkpoint (HDF5)
   _kernels/              compiled extension (built by maturin)
 crates/
@@ -1114,7 +1114,16 @@ operations of a space group as further generators over the wedge.
 **M9 JAX backend and AD.** Pytree registration, `jax.ffi` bindings with
 `custom_vjp` from derivative integrals, libxc `custom_jvp`, implicit
 differentiation of the SCF, AD nuclear gradients. Exit: AD gradients match
-analytic gradients and finite differences.
+analytic gradients and finite differences. Status: part one done
+2026-11-01 (ADR-0035): the first derivatives of the overlap, kinetic,
+nuclear attraction, two- and three-centre Coulomb integrals with respect
+to the centres of the functions and the positions of the charges, from
+the undifferentiated kernels with the angular momentum raised and the
+Hermite integrals shifted, tested against finite differences and
+libcint; the analytic gradient of density-fitted Hartree–Fock in the
+dense atomic basis at fixed density for all eight classes with
+point-group sectors, matching finite differences of the energy and
+PySCF's density-fitted gradients. Next: part two, JAX as a backend.
 
 **M10 GPU.** CuPy backend validation, DF-HF and DFT on GPU, GPU
 basis-on-grid kernel, thread and memory policies. Exit: GPU results equal

@@ -89,3 +89,101 @@ pub(crate) fn split_table() -> ShellTable {
     )
     .expect("valid")
 }
+
+/// A d shell of two primitives with arbitrary coefficients.
+pub(crate) fn d_shell() -> ShellTable {
+    ShellTable::new(
+        vec![2],
+        vec![[0.2, -0.1, 0.3]],
+        vec![0, 2],
+        vec![0.9, 0.4],
+        vec![0.6, 0.5],
+        vec![1],
+    )
+    .expect("valid")
+}
+
+/// The functions of shell `shell` of `table` as a row range.
+pub(crate) fn rows_of(table: &ShellTable, shell: usize) -> std::ops::Range<usize> {
+    let start = table.function_offsets()[shell];
+    start..start + table.shell(shell).n_functions()
+}
+
+/// Assert that two arrays agree to `tolerance` element by element.
+pub(crate) fn assert_close(left: &[f64], right: &[f64], tolerance: f64) {
+    assert_eq!(left.len(), right.len());
+    for (l, r) in left.iter().zip(right) {
+        assert!((l - r).abs() < tolerance, "{l} vs {r}");
+    }
+}
+
+/// `table` with the centre of shell `shell` moved by `delta` along `axis`.
+pub(crate) fn moved(table: &ShellTable, shell: usize, axis: usize, delta: f64) -> ShellTable {
+    let mut moved = table.clone();
+    moved.centers[shell][axis] += delta;
+    moved
+}
+
+/// The step of the central differences the derivative tests take.
+pub(crate) const STEP: f64 = 1e-5;
+
+/// The central difference of `evaluate` with respect to the centre of
+/// `shell` of `table` along `axis`.
+pub(crate) fn central_difference(
+    table: &ShellTable,
+    shell: usize,
+    axis: usize,
+    evaluate: impl Fn(&ShellTable) -> Vec<f64>,
+) -> Vec<f64> {
+    let plus = evaluate(&moved(table, shell, axis, STEP));
+    let minus = evaluate(&moved(table, shell, axis, -STEP));
+    plus.iter()
+        .zip(&minus)
+        .map(|(p, m)| (p - m) / (2.0 * STEP))
+        .collect()
+}
+
+/// The central difference of `evaluate` with respect to `vector[axis]`.
+pub(crate) fn vector_difference(
+    vector: [f64; 3],
+    axis: usize,
+    evaluate: impl Fn([f64; 3]) -> Vec<f64>,
+) -> Vec<f64> {
+    let mut plus = vector;
+    plus[axis] += STEP;
+    let mut minus = vector;
+    minus[axis] -= STEP;
+    evaluate(plus)
+        .iter()
+        .zip(&evaluate(minus))
+        .map(|(p, m)| (p - m) / (2.0 * STEP))
+        .collect()
+}
+
+/// Assert that the rows `rows` of every image of `derivative`, laid out
+/// `[image][n_slots][n_rows][row_size]` and read at `slot`, agree with the
+/// same rows of `difference`, laid out `[image][n_rows][row_size]`.
+pub(crate) fn assert_rows_match(
+    derivative: &[f64],
+    (n_slots, slot): (usize, usize),
+    (n_rows, row_size): (usize, usize),
+    rows: std::ops::Range<usize>,
+    difference: &[f64],
+) {
+    let image_size = n_rows * row_size;
+    let n_images = difference.len() / image_size;
+    assert_eq!(derivative.len(), n_images * n_slots * image_size);
+    for image in 0..n_images {
+        for row in rows.clone() {
+            for column in 0..row_size {
+                let analytic =
+                    derivative[((image * n_slots + slot) * n_rows + row) * row_size + column];
+                let numeric = difference[(image * n_rows + row) * row_size + column];
+                assert!(
+                    (analytic - numeric).abs() < 1e-8,
+                    "slot {slot} row {row} column {column}: {analytic} vs {numeric}"
+                );
+            }
+        }
+    }
+}
