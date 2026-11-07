@@ -1,7 +1,6 @@
 """Analytic nuclear gradients against finite differences of the energy (ADR-0035)."""
 
 import dataclasses
-from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -14,7 +13,8 @@ from hafnium.molecule import Molecule
 from hafnium.properties import NuclearGradient, nuclear_gradient
 from hafnium.scf import ScfOptions, ScfResult, hartree_fock
 from hafnium.symmetry import SymmetrySpec
-from tests.molecules import ammonia_tilted, displaced, water
+from tests.gradients import finite_differences
+from tests.molecules import ammonia_tilted, water
 from tests.tolerances import GRADIENT_FINITE_DIFFERENCE_TOL, GRADIENT_TOL
 
 LIBRARY = BasisLibrary(offline=True)
@@ -36,7 +36,6 @@ OPEN_SHELL_CLASSES = ["UHF", "complex UHF", "GHF", "complex GHF"]
 OPTIONS = ScfOptions(
     gradient_tolerance=1e-10, energy_tolerance=1e-13, max_iterations=200
 )
-STEP = 2e-3
 
 
 def bases(molecule: Molecule, basis_name: str) -> tuple[BasisSet, BasisSet]:
@@ -64,23 +63,6 @@ def analytic(
 ) -> NuclearGradient:
     result = converge(molecule, basis, auxiliary, name)
     return nuclear_gradient(ENGINE, basis, auxiliary, molecule, result)
-
-
-def finite_differences(
-    molecule: Molecule, energy: Callable[[Molecule], float]
-) -> Array:
-    """Five-point central differences of ``energy`` along every coordinate."""
-    gradient = np.zeros((molecule.n_atoms, 3))
-    for atom in range(molecule.n_atoms):
-        for axis in range(3):
-            samples = [
-                energy(displaced(molecule, atom, axis, k * STEP))
-                for k in (-2, -1, 1, 2)
-            ]
-            gradient[atom, axis] = (
-                samples[0] - 8 * samples[1] + 8 * samples[2] - samples[3]
-            ) / (12 * STEP)
-    return gradient
 
 
 @pytest.fixture(scope="module")

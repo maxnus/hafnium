@@ -160,6 +160,20 @@ def is_jax_array(array: object) -> bool:
     return array_api_compat.is_jax_array(array)
 
 
+def is_traced(array: object) -> bool:
+    """Whether ``array`` is an abstract value under a JAX transformation.
+
+    Such a value has a shape and a dtype but no entries, so a check that
+    reads entries cannot run on it; the concrete arrays it stands for were
+    checked when they were built.
+    """
+    if not is_jax_array(array):
+        return False
+    from jax.core import Tracer  # pyright: ignore[reportUnknownVariableType]
+
+    return isinstance(array, Tracer)
+
+
 def from_host(array: Array) -> Array:
     """Return a host array as an array of the active backend."""
     return active_backend().from_host(array)

@@ -16,6 +16,7 @@ from hafnium.backend.active import (
     from_host,
     host_namespace,
     is_jax_array,
+    is_traced,
     set_backend,
     use_backend,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "host_array",
     "host_namespace",
     "is_jax_array",
+    "is_traced",
     "set_backend",
     "to_host",
     "use_backend",

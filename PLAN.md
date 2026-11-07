@@ -1133,9 +1133,20 @@ the shell centres, host callbacks under JAX with vector-Jacobian products
 from the derivative integrals, and the functional evaluation with a
 Jacobian-vector product from the second derivatives of `xcx`; the
 gradient of the energy at fixed density equals the analytic gradient
-without its overlap term. Next: part four, the SCF fixed point
-differentiated implicitly and the three-way comparison of AD, analytic
-and finite-difference gradients.
+without its overlap term. Part four done 2026-11-07 (ADR-0038): the
+Hartree–Fock state of a molecule as a differentiable function of its
+positions, `DifferentiableScf`, the host solver wrapped in a custom
+vector-Jacobian product that differentiates the solution implicitly
+through its stationarity condition, the orbitals following the positions
+through a Cholesky re-orthonormalization and the occupied–virtual response
+solved by conjugate gradients with the Hessian–vector products of the Fock
+build; the gradient of the energy equals the analytic gradient and finite
+differences in all eight classes and with point-group sectors, and orbital
+energies differentiate through the response, which meets the exit
+criterion for Hartree–Fock. Next: part five, the Kohn–Sham energy under
+AD, which needs the derivatives of the basis functions on the grid with
+respect to their centres; then the derivative kernels for the exponents
+and contraction coefficients, for basis-set optimization.
 
 **M10 GPU.** CuPy backend validation, DF-HF and DFT on GPU, GPU
 basis-on-grid kernel, thread and memory policies. Exit: GPU results equal

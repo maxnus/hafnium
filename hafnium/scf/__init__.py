@@ -22,6 +22,12 @@ from hafnium.scf.coulomb_exchange import (
     coulomb_matrix,
     exchange_matrix,
 )
+from hafnium.scf.differentiable import (
+    DifferentiableScf,
+    FittedIntegrals,
+    ResponseOptions,
+    ScfSolution,
+)
 from hafnium.scf.diis import Diis
 from hafnium.scf.driver import (
     ScfIteration,
@@ -36,7 +42,7 @@ from hafnium.scf.exchange_correlation import (
     DEFAULT_BATCH_SIZE,
     ExchangeCorrelation,
 )
-from hafnium.scf.hamiltonian import EnergyTerms, Hamiltonian
+from hafnium.scf.hamiltonian import Energy, EnergyTerms, Hamiltonian
 from hafnium.scf.hartree_fock import hartree_fock
 from hafnium.scf.kohn_sham import KohnShamOptions, kohn_sham
 from hafnium.scf.occupation import (
@@ -59,18 +65,23 @@ __all__ = [
     "AveragedOccupation",
     "CoulombExchange",
     "DensityFittedCoulombExchange",
+    "DifferentiableScf",
     "Diis",
+    "Energy",
     "EnergyTerms",
     "ExactCoulombExchange",
     "ExchangeCorrelation",
+    "FittedIntegrals",
     "Hamiltonian",
     "KPointDensityFittedCoulomb",
     "KPointDensityFittedCoulombExchange",
     "KohnShamOptions",
     "OccupationPolicy",
+    "ResponseOptions",
     "ScfIteration",
     "ScfOptions",
     "ScfResult",
+    "ScfSolution",
     "SpinExpectation",
     "atomic_density",
     "atomic_density_guess",

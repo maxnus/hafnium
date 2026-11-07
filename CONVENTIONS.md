@@ -356,6 +356,13 @@ Spin never appears as an explicit index in method code; it is part of the
   that returns integrals converts them with `from_host`. Metadata of a
   structure that enters arithmetic is pulled into the namespace of the
   block it acts on with `xp.asarray`.
+- A scalar that must trace, such as an energy term of the Fock build, is
+  a 0-d array in the namespace of its operands; the host reads it with
+  `float()` at the boundary, as `ScfResult.energy` does.
+- A validation that reads the entries of an array, a closeness or a
+  symmetry check, runs on concrete arrays only: an abstract value under a
+  JAX transformation passes it (`is_traced`), since the arrays it stands
+  for were checked when they were built.
 - Only the operations listed in `backend/allowed.py` may be used; a test
   greps for violations.
 - Dtype is explicit: `float64` and `complex128` only. No silent promotion

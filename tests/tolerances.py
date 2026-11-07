@@ -189,3 +189,17 @@ GRADIENT_TOL = 1e-7
 # JKFIT metric of water has a condition number of 2e7, so two solves that
 # round differently agree only to about that times machine epsilon.
 FITTED_ENERGY_SOLVE_TOL = 1e-8
+# Derivatives of orbital energies through the response of the orbitals
+# against five-point central differences of converged states, limited like
+# the gradients by the rounding of the energies.
+RESPONSE_FINITE_DIFFERENCE_TOL = 1e-7
+# The derivatives of the highest occupied orbital energy of water with
+# respect to the positions are above this, so the comparison with the
+# finite differences is not satisfied trivially.
+RESPONSE_DERIVATIVE_FLOOR = 1e-2
+# One computation traced under jit against its eager evaluation: the two
+# differ in the order of rounding only.
+TRACED_TOL = 1e-12
+# The self-adjointness and positivity of the electronic Hessian applied as
+# an operator, relative to the size of the products.
+OPERATOR_REL_TOL = 1e-10

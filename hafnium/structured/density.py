@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hafnium.backend import Array, adjoint, array_namespace
+from hafnium.backend import Array, adjoint, array_namespace, is_traced
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import is_kramers_symmetric
 from hafnium.structured.matrix import BlockMatrix
@@ -57,8 +57,12 @@ def natural_orbitals(
 def _check_time_reversal(
     structure: BlockStructure, block: Block, density: Array
 ) -> None:
-    """Raise unless ``density`` has the symmetry of ``block`` at invariant k-points."""
-    if block.ring is Ring.COMPLEX:
+    """Raise unless ``density`` has the symmetry of ``block`` at invariant k-points.
+
+    An abstract value under a JAX transformation has no entries to read and
+    passes: the orbitals it is built from were checked when they were built.
+    """
+    if block.ring is Ring.COMPLEX or is_traced(density):
         return
     batched = structure.k_axis is not None
     for position in structure.invariant_positions(block):
