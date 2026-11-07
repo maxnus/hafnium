@@ -90,6 +90,29 @@ pub struct XcValues {
     pub vtau: Vec<f64>,
 }
 
+/// Second derivatives of the energy density at every point, spin-major, in
+/// libxc's packed layouts.
+///
+/// A pair of variables of one kind is stored once, upper triangle first:
+/// `αα, αβ, ββ` over the spins and `αα·αα, αα·αβ, αα·ββ, αβ·αβ, αβ·ββ,
+/// ββ·ββ` over the gradient contractions; a pair of different kinds is
+/// row-major over the first kind. Rows a rung does not read are empty.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct XcSecondDerivatives {
+    /// `∂²(ρ ε_xc)/∂ρ_σ ∂ρ_τ` as `[3][g]`.
+    pub v2rho2: Vec<f64>,
+    /// `∂²(ρ ε_xc)/∂ρ_σ ∂σ_k` as `[6][g]`, `3σ + k`; empty for an LDA.
+    pub v2rhosigma: Vec<f64>,
+    /// `∂²(ρ ε_xc)/∂σ_k ∂σ_l` as `[6][g]`; empty for an LDA.
+    pub v2sigma2: Vec<f64>,
+    /// `∂²(ρ ε_xc)/∂ρ_σ ∂τ_τ` as `[4][g]`, `2σ + τ`; empty below the meta-GGA rung.
+    pub v2rhotau: Vec<f64>,
+    /// `∂²(ρ ε_xc)/∂σ_k ∂τ_σ` as `[6][g]`, `2k + σ`; empty below the meta-GGA rung.
+    pub v2sigmatau: Vec<f64>,
+    /// `∂²(ρ ε_xc)/∂τ_σ ∂τ_τ` as `[3][g]`; empty below the meta-GGA rung.
+    pub v2tau2: Vec<f64>,
+}
+
 /// Look up a functional by its libxc name.
 ///
 /// # Errors
@@ -150,6 +173,85 @@ pub fn evaluate_functional(
     sigma: &[f64],
     tau: &[f64],
 ) -> Result<XcValues, Error> {
+    let (ids, rung, n) = prepare(components, rho, sigma, tau)?;
+    let chunks = evaluate_chunks(&ids, n, |functional, range| {
+        let count = range.len();
+        let packed = Packed::new(rung, n, range, rho, sigma, tau);
+        let result = functional
+            .eval(count, &packed.input(rung))
+            .map_err(|error| Error::InvalidArgument(format!("functional evaluation: {error}")))?;
+        Ok(XcValues {
+            energy_per_particle: result.exc,
+            vrho: deinterleave(&result.vrho, 2, count)?,
+            vsigma: deinterleave_if(&result.vsigma, 3, count, rung != Rung::Lda)?,
+            vtau: deinterleave_if(&result.vtau, 2, count, rung == Rung::MetaGga)?,
+        })
+    })?;
+    Ok(XcValues {
+        energy_per_particle: chunks
+            .iter()
+            .flat_map(|chunk| chunk.energy_per_particle.iter().copied())
+            .collect(),
+        vrho: join(&chunks, n, |chunk| &chunk.vrho, 2),
+        vsigma: join(&chunks, n, |chunk| &chunk.vsigma, 3),
+        vtau: join(&chunks, n, |chunk| &chunk.vtau, 2),
+    })
+}
+
+/// Evaluate the second derivatives of `Σ_i w_i f_i` at every point.
+///
+/// The inputs are those of [`evaluate_functional`]; the result holds the
+/// derivatives the rung of the combination reads, see
+/// [`XcSecondDerivatives`].
+///
+/// # Errors
+///
+/// As for [`evaluate_functional`].
+pub fn evaluate_functional_second(
+    components: &[(String, f64)],
+    rho: &[f64],
+    sigma: &[f64],
+    tau: &[f64],
+) -> Result<XcSecondDerivatives, Error> {
+    let (ids, rung, n) = prepare(components, rho, sigma, tau)?;
+    let gga = rung != Rung::Lda;
+    let meta = rung == Rung::MetaGga;
+    let chunks = evaluate_chunks(&ids, n, |functional, range| {
+        let count = range.len();
+        let packed = Packed::new(rung, n, range, rho, sigma, tau);
+        let result = functional
+            .eval_fxc(count, &packed.input(rung))
+            .map_err(|error| Error::InvalidArgument(format!("functional evaluation: {error}")))?;
+        Ok(XcSecondDerivatives {
+            v2rho2: deinterleave(&result.v2rho2, 3, count)?,
+            v2rhosigma: deinterleave_if(&result.v2rhosigma, 6, count, gga)?,
+            v2sigma2: deinterleave_if(&result.v2sigma2, 6, count, gga)?,
+            v2rhotau: deinterleave_if(&result.v2rhotau, 4, count, meta)?,
+            v2sigmatau: deinterleave_if(&result.v2sigmatau, 6, count, meta)?,
+            v2tau2: deinterleave_if(&result.v2tau2, 3, count, meta)?,
+        })
+    })?;
+    Ok(XcSecondDerivatives {
+        v2rho2: join(&chunks, n, |chunk| &chunk.v2rho2, 3),
+        v2rhosigma: join(&chunks, n, |chunk| &chunk.v2rhosigma, 6),
+        v2sigma2: join(&chunks, n, |chunk| &chunk.v2sigma2, 6),
+        v2rhotau: join(&chunks, n, |chunk| &chunk.v2rhotau, 4),
+        v2sigmatau: join(&chunks, n, |chunk| &chunk.v2sigmatau, 6),
+        v2tau2: join(&chunks, n, |chunk| &chunk.v2tau2, 3),
+    })
+}
+
+/// The resolved components of a combination, its rung and the number of points.
+type Prepared = (Vec<(FunctionalId, f64)>, Rung, usize);
+
+/// Resolve the combination, check the inputs and return the ids, the rung
+/// and the number of points.
+fn prepare(
+    components: &[(String, f64)],
+    rho: &[f64],
+    sigma: &[f64],
+    tau: &[f64],
+) -> Result<Prepared, Error> {
     let (ids, rung) = combination(components)?;
     if rho.len() % 2 != 0 {
         return Err(Error::InvalidArgument(
@@ -165,23 +267,116 @@ pub fn evaluate_functional(
         check_input(tau, 2 * n, "kinetic energy densities")?;
     }
     // Built once here to validate the combination, and once per worker
-    // below: the evaluator is not `Sync`, so it cannot be shared.
+    // in `evaluate_chunks`: the evaluator is not `Sync`, so it cannot be
+    // shared.
     build(&ids)?;
-    let chunks: Vec<XcValues> = (0..n.div_ceil(POINTS_PER_TASK).max(1))
+    Ok((ids, rung, n))
+}
+
+/// Run `chunk` over the points in parallel tasks, each with its own evaluator.
+fn evaluate_chunks<T, F>(ids: &[(FunctionalId, f64)], n: usize, chunk: F) -> Result<Vec<T>, Error>
+where
+    T: Send,
+    F: Fn(&Functional, std::ops::Range<usize>) -> Result<T, Error> + Sync,
+{
+    (0..n.div_ceil(POINTS_PER_TASK).max(1))
         .into_par_iter()
         .map_init(
-            || build(&ids).ok(),
+            || build(ids).ok(),
             |functional, task| {
                 let functional = functional.as_ref().ok_or_else(|| {
                     Error::InvalidArgument("the functional could not be built".to_string())
                 })?;
                 let start = task * POINTS_PER_TASK;
                 let end = (start + POINTS_PER_TASK).min(n);
-                evaluate_chunk(functional, rung, n, start..end, rho, sigma, tau)
+                chunk(functional, start..end)
             },
         )
-        .collect::<Result<_, _>>()?;
-    Ok(concatenate(chunks, n, rung))
+        .collect()
+}
+
+/// The points of one chunk of the spin-major inputs, interleaved per point
+/// as `xcx` reads them.
+struct Packed {
+    rho: Vec<f64>,
+    sigma: Vec<f64>,
+    tau: Vec<f64>,
+}
+
+impl Packed {
+    fn new(
+        rung: Rung,
+        n: usize,
+        range: std::ops::Range<usize>,
+        rho: &[f64],
+        sigma: &[f64],
+        tau: &[f64],
+    ) -> Self {
+        let interleave = |values: &[f64], parts: usize| -> Vec<f64> {
+            let mut packed = Vec::with_capacity(range.len() * parts);
+            for g in range.clone() {
+                for part in 0..parts {
+                    packed.push(values[part * n + g]);
+                }
+            }
+            packed
+        };
+        Self {
+            rho: interleave(rho, 2),
+            sigma: if rung == Rung::Lda {
+                Vec::new()
+            } else {
+                interleave(sigma, 3)
+            },
+            tau: if rung == Rung::MetaGga {
+                interleave(tau, 2)
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    fn input(&self, rung: Rung) -> XcInput<'_> {
+        let mut input = XcInput::lda(&self.rho);
+        if rung != Rung::Lda {
+            input = XcInput::gga(&self.rho, &self.sigma);
+        }
+        if rung == Rung::MetaGga {
+            input = input.with_tau(&self.tau);
+        }
+        input
+    }
+}
+
+/// Spin-major `[parts][count]` from the per-point layout `[count][parts]`.
+fn deinterleave(values: &[f64], parts: usize, count: usize) -> Result<Vec<f64>, Error> {
+    if values.len() != count * parts {
+        return Err(Error::LengthMismatch {
+            left: values.len(),
+            right: count * parts,
+        });
+    }
+    let mut unpacked = vec![0.0; count * parts];
+    for g in 0..count {
+        for part in 0..parts {
+            unpacked[part * count + g] = values[g * parts + part];
+        }
+    }
+    Ok(unpacked)
+}
+
+/// [`deinterleave`] when `wanted`, else the empty vector of a row the rung does not read.
+fn deinterleave_if(
+    values: &[f64],
+    parts: usize,
+    count: usize,
+    wanted: bool,
+) -> Result<Vec<f64>, Error> {
+    if wanted {
+        deinterleave(values, parts, count)
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 /// Resolve the named components to `xcx` ids and the rung of the combination.
@@ -241,73 +436,6 @@ fn check_input(values: &[f64], expected: usize, name: &str) -> Result<(), Error>
     Ok(())
 }
 
-/// Evaluate the points `range` of the spin-major inputs, which are laid out
-/// over `n` points, into spin-major outputs over the chunk.
-fn evaluate_chunk(
-    functional: &Functional,
-    rung: Rung,
-    n: usize,
-    range: std::ops::Range<usize>,
-    rho: &[f64],
-    sigma: &[f64],
-    tau: &[f64],
-) -> Result<XcValues, Error> {
-    let count = range.len();
-    let interleave = |values: &[f64], parts: usize| -> Vec<f64> {
-        let mut packed = Vec::with_capacity(count * parts);
-        for g in range.clone() {
-            for part in 0..parts {
-                packed.push(values[part * n + g]);
-            }
-        }
-        packed
-    };
-    let rho_packed = interleave(rho, 2);
-    let sigma_packed = if rung == Rung::Lda {
-        Vec::new()
-    } else {
-        interleave(sigma, 3)
-    };
-    let tau_packed = if rung == Rung::MetaGga {
-        interleave(tau, 2)
-    } else {
-        Vec::new()
-    };
-    let mut input = XcInput::lda(&rho_packed);
-    if rung != Rung::Lda {
-        input = XcInput::gga(&rho_packed, &sigma_packed);
-    }
-    if rung == Rung::MetaGga {
-        input = input.with_tau(&tau_packed);
-    }
-    let result = functional
-        .eval(count, &input)
-        .map_err(|error| Error::InvalidArgument(format!("functional evaluation: {error}")))?;
-    let deinterleave = |values: &[f64], parts: usize| -> Vec<f64> {
-        let mut unpacked = vec![0.0; count * parts];
-        for g in 0..count {
-            for part in 0..parts {
-                unpacked[part * count + g] = values[g * parts + part];
-            }
-        }
-        unpacked
-    };
-    Ok(XcValues {
-        energy_per_particle: result.exc,
-        vrho: deinterleave(&result.vrho, 2),
-        vsigma: if rung == Rung::Lda {
-            Vec::new()
-        } else {
-            deinterleave(&result.vsigma, 3)
-        },
-        vtau: if rung == Rung::MetaGga {
-            deinterleave(&result.vtau, 2)
-        } else {
-            Vec::new()
-        },
-    })
-}
-
 fn build(ids: &[(FunctionalId, f64)]) -> Result<Functional, Error> {
     let parts = ids
         .iter()
@@ -323,40 +451,26 @@ fn build(ids: &[(FunctionalId, f64)]) -> Result<Functional, Error> {
         .map_err(|error| Error::InvalidArgument(format!("functional mix: {error}")))
 }
 
-/// Join the spin-major chunks into spin-major arrays over all `n` points.
-fn concatenate(chunks: Vec<XcValues>, n: usize, rung: Rung) -> XcValues {
-    let mut values = XcValues {
-        energy_per_particle: Vec::with_capacity(n),
-        vrho: vec![0.0; 2 * n],
-        vsigma: if rung == Rung::Lda {
-            Vec::new()
-        } else {
-            vec![0.0; 3 * n]
-        },
-        vtau: if rung == Rung::MetaGga {
-            vec![0.0; 2 * n]
-        } else {
-            Vec::new()
-        },
-    };
+/// Join one spin-major row set of the chunks into `[parts][n]` over all points.
+///
+/// Empty when the chunks carry no such rows, as for a row the rung does
+/// not read.
+fn join<T>(chunks: &[T], n: usize, rows: impl Fn(&T) -> &[f64], parts: usize) -> Vec<f64> {
+    if chunks.iter().all(|chunk| rows(chunk).is_empty()) {
+        return Vec::new();
+    }
+    let mut target = vec![0.0; parts * n];
     let mut start = 0;
     for chunk in chunks {
-        let count = chunk.energy_per_particle.len();
-        values
-            .energy_per_particle
-            .extend_from_slice(&chunk.energy_per_particle);
-        place(&mut values.vrho, &chunk.vrho, 2, n, start, count);
-        place(&mut values.vsigma, &chunk.vsigma, 3, n, start, count);
-        place(&mut values.vtau, &chunk.vtau, 2, n, start, count);
+        let source = rows(chunk);
+        let count = source.len() / parts;
+        place(&mut target, source, parts, n, start, count);
         start += count;
     }
-    values
+    target
 }
 
 fn place(target: &mut [f64], source: &[f64], parts: usize, n: usize, start: usize, count: usize) {
-    if source.is_empty() {
-        return;
-    }
     for part in 0..parts {
         target[part * n + start..part * n + start + count]
             .copy_from_slice(&source[part * count..(part + 1) * count]);
@@ -397,6 +511,92 @@ mod tests {
             functional_info("gga_x_nonsense"),
             Err(Error::InvalidArgument(_))
         ));
+    }
+
+    #[test]
+    fn second_derivatives_match_finite_differences_of_the_first() {
+        // Two points of (ρ_α, ρ_β, σ_αα, σ_αβ, σ_ββ, τ_α, τ_β), spin-major.
+        let points: [[f64; 7]; 2] = [
+            [0.3, 0.2, 0.05, 0.02, 0.04, 0.4, 0.3],
+            [0.7, 0.1, 0.3, 0.05, 0.02, 1.0, 0.2],
+        ];
+        let layout = |values: &[[f64; 7]; 2]| -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+            let column = |k: usize| values.iter().map(|point| point[k]).collect::<Vec<_>>();
+            (
+                [column(0), column(1)].concat(),
+                [column(2), column(3), column(4)].concat(),
+                [column(5), column(6)].concat(),
+            )
+        };
+        for (name, parts) in [("gga_x_pbe", 5), ("mgga_x_tpss", 7)] {
+            let components = [component(name, 1.0)];
+            let (rho, sigma, tau) = layout(&points);
+            let second =
+                evaluate_functional_second(&components, &rho, &sigma, &tau).expect("valid");
+            let first = |values: &[[f64; 7]; 2]| -> Vec<f64> {
+                let (rho, sigma, tau) = layout(values);
+                let v = evaluate_functional(&components, &rho, &sigma, &tau).expect("valid");
+                // One row per variable, [variable][g].
+                [v.vrho, v.vsigma, v.vtau].concat()
+            };
+            let n = points.len();
+            for variable in 0..parts {
+                let mut up = points;
+                let mut down = points;
+                let mut steps = [0.0; 2];
+                for g in 0..n {
+                    let step = 1e-4 * points[g][variable];
+                    up[g][variable] += step;
+                    down[g][variable] -= step;
+                    steps[g] = step;
+                }
+                let (plus, minus) = (first(&up), first(&down));
+                for other in 0..parts {
+                    for g in 0..n {
+                        let numeric =
+                            (plus[other * n + g] - minus[other * n + g]) / (2.0 * steps[g]);
+                        let analytic = second_derivative(&second, variable, other, n, g);
+                        let scale = numeric.abs().max(1.0);
+                        assert!(
+                            (numeric - analytic).abs() < 1e-6 * scale,
+                            "{name}: d v[{other}] / d x[{variable}] at point {g}: {numeric} vs {analytic}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// `∂²(ρε)/∂x_a ∂x_b` at point `g` from the packed rows, with the
+    /// variables numbered `ρ_α, ρ_β, σ_αα, σ_αβ, σ_ββ, τ_α, τ_β`.
+    fn second_derivative(
+        second: &XcSecondDerivatives,
+        first: usize,
+        other: usize,
+        n_points: usize,
+        point: usize,
+    ) -> f64 {
+        let (low, high) = if first <= other {
+            (first, other)
+        } else {
+            (other, first)
+        };
+        let upper = |i: usize, j: usize, size: usize| i * size - i * (i + 1) / 2 + j;
+        let kind = |x: usize| match x {
+            0 | 1 => (0, x),
+            2..=4 => (1, x - 2),
+            _ => (2, x - 5),
+        };
+        let ((kind_low, i), (kind_high, j)) = (kind(low), kind(high));
+        let row = match (kind_low, kind_high) {
+            (0, 0) => &second.v2rho2[upper(i, j, 2) * n_points..],
+            (0, 1) => &second.v2rhosigma[(3 * i + j) * n_points..],
+            (1, 1) => &second.v2sigma2[upper(i, j, 3) * n_points..],
+            (0, 2) => &second.v2rhotau[(2 * i + j) * n_points..],
+            (1, 2) => &second.v2sigmatau[(2 * i + j) * n_points..],
+            _ => &second.v2tau2[upper(i, j, 2) * n_points..],
+        };
+        row[point]
     }
 
     #[test]

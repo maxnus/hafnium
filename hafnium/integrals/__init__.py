@@ -13,6 +13,7 @@ the nuclear attraction regularized by the range-separated Coulomb kernel
 """
 
 from hafnium.integrals.density_fitting import DensityFitting, DensityFittingDerivatives
+from hafnium.integrals.differentiable import DifferentiableIntegrals, nuclear_repulsion
 from hafnium.integrals.engine import (
     BlochImages,
     CoulombKernel,
@@ -52,6 +53,7 @@ __all__ = [
     "CoulombKernel",
     "DensityFitting",
     "DensityFittingDerivatives",
+    "DifferentiableIntegrals",
     "IntegralEngine",
     "PeriodicCoulombFitting",
     "PeriodicDensityFitting",
@@ -72,6 +74,7 @@ __all__ = [
     "nuclear_attraction",
     "nuclear_attraction_derivative",
     "nuclear_attraction_k",
+    "nuclear_repulsion",
     "overlap",
     "overlap_derivative",
     "overlap_k",

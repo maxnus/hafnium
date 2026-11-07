@@ -1128,9 +1128,14 @@ JAX as a backend, selected with `use_backend`, in which the integrals
 and every new array are created while the setup around the kernels stays
 on the host; the block types registered as pytrees; every method,
 molecular and periodic, giving the same energies under NumPy and JAX.
-Next: part three, the kernels bound through `jax.ffi` with the
-derivative integrals as their vector-Jacobian products and the
-functionals with custom Jacobian-vector products.
+Part three done 2026-11-01 (ADR-0037): the integrals as functions of
+the shell centres, host callbacks under JAX with vector-Jacobian products
+from the derivative integrals, and the functional evaluation with a
+Jacobian-vector product from the second derivatives of `xcx`; the
+gradient of the energy at fixed density equals the analytic gradient
+without its overlap term. Next: part four, the SCF fixed point
+differentiated implicitly and the three-way comparison of AD, analytic
+and finite-difference gradients.
 
 **M10 GPU.** CuPy backend validation, DF-HF and DFT on GPU, GPU
 basis-on-grid kernel, thread and memory policies. Exit: GPU results equal
