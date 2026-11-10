@@ -20,7 +20,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from hafnium.backend import Array, Namespace, adjoint, array_namespace, block_diag
+from hafnium.backend import (
+    Array,
+    Namespace,
+    adjoint,
+    array_namespace,
+    block_diag,
+    require_concrete,
+)
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import (
     half_dimension,
@@ -559,7 +566,14 @@ def require_close(
 
     The deviation is measured relative to the largest entry of ``expected``,
     at least one.
+
+    Raises
+    ------
+    BackendError
+        If either array is an abstract value under a JAX transformation,
+        which has no entries to compare.
     """
+    require_concrete(actual, expected)
     scale = max(1.0, float(xp.max(xp.abs(expected))))
     deviation = float(xp.max(xp.abs(actual - expected)))
     if deviation > tolerance * scale:

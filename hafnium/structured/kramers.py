@@ -12,7 +12,7 @@ matrix at a time.
 
 from __future__ import annotations
 
-from hafnium.backend import Array, adjoint, array_namespace
+from hafnium.backend import Array, adjoint, array_namespace, require_concrete
 from hafnium.errors import StructureError
 
 
@@ -55,7 +55,15 @@ def kramers_symmetrize(x: Array) -> Array:
 
 
 def is_kramers_symmetric(x: Array, *, tolerance: float = 1e-10) -> bool:
-    """Whether a square operator commutes with Θ to within ``tolerance``."""
+    """Whether a square operator commutes with Θ to within ``tolerance``.
+
+    Raises
+    ------
+    BackendError
+        If ``x`` is an abstract value under a JAX transformation, which
+        has no entries to compare.
+    """
+    require_concrete(x)
     xp = array_namespace(x)
     scale = max(1.0, float(xp.max(xp.abs(x))))
     deviation = float(xp.max(xp.abs(x - time_reverse_operator(x))))

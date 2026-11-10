@@ -36,7 +36,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TypeAlias
 
-from hafnium.backend import Array, Namespace, array_namespace, default_namespace
+from hafnium.backend import (
+    Array,
+    Namespace,
+    array_namespace,
+    default_namespace,
+    require_concrete,
+)
 from hafnium.errors import StructureError
 from hafnium.structured.sectors import (
     Characters,
@@ -1025,6 +1031,7 @@ class BlockTensor:
             blocks[key] = dense[slices]
         result = cls.from_blocks(structure, blocks, xp=xp)
         if check and dense.size:
+            require_concrete(dense)
             scale = max(1.0, float(xp.max(xp.abs(dense))))
             deviation = float(xp.max(xp.abs(result.to_dense() - dense)))
             if deviation > tolerance * scale:

@@ -24,6 +24,8 @@ from hafnium.backend import (
     array_namespace,
     generalized_eigh,
     host_namespace,
+    require_concrete,
+    to_host,
 )
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
@@ -137,6 +139,45 @@ class SymmetryAdaptation:
             function_signs,
             _salcs(group, atom_images, function_images, function_signs, starts),
         )
+
+    def require_symmetric(
+        self, positions: Array, *, tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
+    ) -> None:
+        """Raise unless the group maps ``positions`` ``[atom, 3]`` onto themselves.
+
+        The adaptation is built at one geometry and describes another only
+        while every operation carries each atom onto the image it had
+        there, within ``tolerance`` Bohr. A displacement that breaks the
+        group leaves operators that couple the irreps, which a projection
+        onto the sectors would drop without a trace.
+
+        Raises
+        ------
+        SymmetryError
+            If an operation moves an atom away from its image.
+        BackendError
+            If ``positions`` are an abstract value under a JAX
+            transformation, which has no entries to compare.
+        """
+        require_concrete(positions)
+        xp = host_namespace()
+        host = to_host(positions)
+        atoms = xp.arange(len(self.atom_images[0]))
+        for operation, images in zip(
+            self.group.operations, self.atom_images, strict=True
+        ):
+            distance = _image_distances(host, operation.signs)[
+                atoms, xp.asarray(images, dtype=xp.int64)
+            ]
+            atom = int(xp.argmax(distance))
+            if float(distance[atom]) > tolerance:
+                raise SymmetryError(
+                    f"the operation {operation.symbol} does not map atom {atom} "
+                    f"onto atom {images[atom]} at these positions (off by "
+                    f"{float(distance[atom]):.2e} Bohr): the geometry has left "
+                    f"{self.group.name}; impose the subgroup it keeps, or no point "
+                    "group"
+                )
 
     @property
     def n_functions(self) -> int:
@@ -353,11 +394,7 @@ def _atom_images(
 ) -> tuple[int, ...]:
     """Return the atom each atom is mapped onto by the sign operation ``signs``."""
     xp = host_namespace()
-    positions = system.positions_array(xp)
-    moved = positions * xp.asarray(signs, dtype=xp.float64)
-    distance = xp.linalg.vector_norm(
-        xp.expand_dims(moved, 1) - xp.expand_dims(positions, 0), axis=-1
-    )
+    distance = _image_distances(system.positions_array(xp), signs)
     nearest = xp.argmin(distance, axis=1)
     images: list[int] = []
     for atom in range(system.n_atoms):
@@ -373,6 +410,19 @@ def _atom_images(
             )
         images.append(image)
     return tuple(images)
+
+
+def _image_distances(positions: Array, signs: tuple[int, int, int]) -> Array:
+    """Return ``[atom, atom]``: from every atom moved by ``signs`` to every atom.
+
+    The distances in Bohr between the images of the host ``positions``
+    ``[atom, 3]`` under the sign operation and the positions themselves.
+    """
+    xp = host_namespace()
+    moved = positions * xp.asarray(signs, dtype=xp.float64)
+    return xp.linalg.vector_norm(
+        xp.expand_dims(moved, 1) - xp.expand_dims(positions, 0), axis=-1
+    )
 
 
 def _require_equal_shells(

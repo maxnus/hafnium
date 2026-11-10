@@ -1,49 +1,24 @@
 """Analytic nuclear gradients against finite differences of the energy (ADR-0035)."""
 
 import dataclasses
-from collections.abc import Callable
 
 import numpy as np
 import pytest
 
 from hafnium.backend import Array
-from hafnium.basis import BasisLibrary, BasisSet
+from hafnium.basis import BasisSet
 from hafnium.errors import InputError
-from hafnium.integrals import RustEngine
 from hafnium.molecule import Molecule
 from hafnium.properties import NuclearGradient, nuclear_gradient
-from hafnium.scf import ScfOptions, ScfResult, hartree_fock
+from hafnium.scf import ScfResult, hartree_fock
 from hafnium.symmetry import SymmetrySpec
-from tests.molecules import ammonia_tilted, displaced, water
+from tests.gradients import CLASSES, OPTIONS, bases, finite_differences
+from tests.hamiltonians import ENGINE
+from tests.molecules import ammonia_tilted, water
+from tests.shell_tables import LIBRARY
 from tests.tolerances import GRADIENT_FINITE_DIFFERENCE_TOL, GRADIENT_TOL
 
-LIBRARY = BasisLibrary(offline=True)
-ENGINE = RustEngine()
-AUXILIARY = "def2-universal-jkfit"
-CLASSES = [
-    "RHF",
-    "complex RHF",
-    "UHF",
-    "complex UHF",
-    "paired UHF",
-    "GHF",
-    "complex GHF",
-    "paired GHF",
-]
 OPEN_SHELL_CLASSES = ["UHF", "complex UHF", "GHF", "complex GHF"]
-# Tight convergence, so that the finite differences of the energy are limited
-# by the rounding of the energies and not by the residual orbital error.
-OPTIONS = ScfOptions(
-    gradient_tolerance=1e-10, energy_tolerance=1e-13, max_iterations=200
-)
-STEP = 2e-3
-
-
-def bases(molecule: Molecule, basis_name: str) -> tuple[BasisSet, BasisSet]:
-    return (
-        BasisSet.for_atoms(molecule, basis_name, library=LIBRARY),
-        BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY),
-    )
 
 
 def converge(
@@ -64,23 +39,6 @@ def analytic(
 ) -> NuclearGradient:
     result = converge(molecule, basis, auxiliary, name)
     return nuclear_gradient(ENGINE, basis, auxiliary, molecule, result)
-
-
-def finite_differences(
-    molecule: Molecule, energy: Callable[[Molecule], float]
-) -> Array:
-    """Five-point central differences of ``energy`` along every coordinate."""
-    gradient = np.zeros((molecule.n_atoms, 3))
-    for atom in range(molecule.n_atoms):
-        for axis in range(3):
-            samples = [
-                energy(displaced(molecule, atom, axis, k * STEP))
-                for k in (-2, -1, 1, 2)
-            ]
-            gradient[atom, axis] = (
-                samples[0] - 8 * samples[1] + 8 * samples[2] - samples[3]
-            ) / (12 * STEP)
-    return gradient
 
 
 @pytest.fixture(scope="module")

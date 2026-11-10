@@ -19,7 +19,7 @@ from hafnium.backend import (
     set_backend,
     use_backend,
 )
-from hafnium.errors import BackendError
+from hafnium.errors import BackendError, StructureError
 from hafnium.structured import (
     BlockMatrix,
     BlockStructure,
@@ -27,7 +27,10 @@ from hafnium.structured import (
     BlockVector,
     TensorAxis,
     TensorStructure,
+    density_matrix,
 )
+from hafnium.structured.kramers import is_kramers_symmetric
+from hafnium.symmetry import KPoints
 
 pytest.importorskip("jax")
 
@@ -164,6 +167,84 @@ def test_structured_operations_trace_under_jit() -> None:
         np.testing.assert_allclose(
             np.asarray(result.blocks[0]), np.asarray(matrix.blocks[0]) * [[1.0, 0.0]]
         )
+
+
+def test_a_check_that_reads_entries_refuses_abstract_values() -> None:
+    """A validation never passes what it cannot read; ``check=False`` projects."""
+    structure = BlockStructure.restricted()
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        unequal_spins = xp.asarray(np.diag([1.0, 2.0, 3.0, 4.0]))
+        with pytest.raises(StructureError, match="restricted"):
+            BlockMatrix.from_dense(structure, unequal_spins)
+
+        def checked(dense: Array) -> Array:
+            return xp.sum(BlockMatrix.from_dense(structure, dense).blocks[0])
+
+        def projected(dense: Array) -> Array:
+            matrix = BlockMatrix.from_dense(structure, dense, check=False)
+            return xp.sum(matrix.blocks[0])
+
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.jit(checked)(unequal_spins)
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.grad(checked)(unequal_spins)
+        # Alpha and beta averaged: (1 + 3) / 2 + (2 + 4) / 2.
+        assert float(jax.jit(projected)(unequal_spins)) == pytest.approx(5.0)
+
+
+def test_the_density_check_refuses_abstract_values() -> None:
+    structure = BlockStructure.paired_generalized()
+    occupations = np.array([1.0, 0.0, 0.0, 0.0])
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        orbitals = BlockMatrix(structure, (xp.eye(4, dtype=xp.complex128),))
+        split_pair = BlockVector(structure, (xp.asarray(occupations),))
+        with pytest.raises(StructureError, match="Kramers pair"):
+            density_matrix(orbitals, split_pair)
+
+        def checked(c: BlockMatrix) -> Array:
+            density = density_matrix(c, split_pair)
+            return xp.real(xp.linalg.trace(density.blocks[0]))
+
+        def trusted(c: BlockMatrix) -> Array:
+            density = density_matrix(c, split_pair, check=False)
+            return xp.real(xp.linalg.trace(density.blocks[0]))
+
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.jit(checked)(orbitals)
+        assert float(jax.jit(trusted)(orbitals)) == pytest.approx(1.0)
+
+
+def test_the_density_traces_where_no_point_is_time_reversal_invariant() -> None:
+    """Without an invariant point the check reads nothing, so nothing is refused."""
+    kpoints = KPoints.mesh((2, 1, 1), shift=(0.5, 0.0, 0.0))
+    structure = BlockStructure.restricted().with_k_axis(kpoints.axis())
+    (block,) = structure.stored_blocks
+    assert structure.invariant_positions(block) == ()
+    n_stored = len(structure.stored_kpoints(block) or ())
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        identity = xp.asarray(np.eye(2, dtype=np.complex128))
+        orbitals = BlockMatrix(structure, (xp.stack([identity] * n_stored),))
+        occupations = BlockVector(
+            structure, (xp.asarray(np.tile([2.0, 0.0], (n_stored, 1))),)
+        )
+
+        def electrons(c: BlockMatrix) -> Array:
+            density = density_matrix(c, occupations)
+            return xp.real(xp.sum(xp.linalg.trace(density.blocks[0])))
+
+        assert float(jax.jit(electrons)(orbitals)) == pytest.approx(2.0 * n_stored)
+
+
+def test_the_other_checks_that_read_entries_refuse_abstract_values() -> None:
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        matrix = xp.asarray(np.eye(4, dtype=np.complex128))
+        assert is_kramers_symmetric(matrix)
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.jit(is_kramers_symmetric)(matrix)
 
 
 def test_jax_arrays_are_rejected_when_mixed_with_host_arrays() -> None:

@@ -44,3 +44,4 @@ ADR that supersedes it.
 | [0035](0035-derivative-integrals-from-the-undifferentiated-kernels.md) | Derivative integrals come from the undifferentiated kernels, and the gradient contracts them at fixed density | accepted 2026-11-01 |
 | [0036](0036-jax-as-an-eager-backend-behind-the-host-boundary.md) | JAX runs the methods eagerly as the active backend, behind a host boundary around the kernels | accepted 2026-11-01 |
 | [0037](0037-differentiable-kernels-as-host-callbacks-with-custom-rules.md) | The kernels differentiate as host callbacks with custom rules over the shell-table arrays | accepted 2026-11-01 |
+| [0038](0038-the-scf-differentiates-implicitly-through-its-stationarity-condition.md) | The SCF differentiates implicitly through its stationarity condition | accepted 2026-11-07 |

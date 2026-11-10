@@ -457,4 +457,24 @@ uses [Semantic Versioning](https://semver.org/).
   Jacobian-vector product from the second derivatives of `xcx`, bound as
   `evaluate_functional_second`. The gradient of the Hartree–Fock energy
   at fixed density equals the analytic gradient without its overlap term.
+- The differentiable SCF (ADR-0038): `hafnium.scf.DifferentiableScf`
+  solves the density-fitted Hartree–Fock state of a molecule at any
+  positions and, under JAX, differentiates the solution implicitly through
+  its stationarity condition, the host solver wrapped in a custom
+  vector-Jacobian product whose backward pass solves the coupled-perturbed
+  response by conjugate gradients with the Hessian–vector products of the
+  Fock build; the orbitals follow the positions through a Cholesky
+  re-orthonormalization. The gradient of the energy equals the analytic
+  gradient and finite differences in every Fukutome class and with
+  point-group sectors, and orbital energies differentiate through the
+  response. The state lives in the array library of the positions; a
+  geometry that breaks the point group of the state raises
+  `SymmetryError`, and the errors of the host solve and of the response
+  solve raise as themselves wherever the values are concrete and as JAX's
+  runtime error under `jit` and `vmap`. The energy terms of the Fock build
+  and the nuclear repulsion of a `Hamiltonian` are 0-d arrays or host
+  floats (`Energy`), and the validations of the structured algebra that
+  read entries raise `BackendError` on an abstract value under JAX
+  (`require_concrete`) instead of running; `density_matrix` takes
+  `check=False` for a density that is valid by construction.
 

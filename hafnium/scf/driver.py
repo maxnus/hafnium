@@ -118,7 +118,7 @@ class ScfResult:
     @property
     def energy(self) -> float:
         """Total energy in Hartree."""
-        return self.energies.total
+        return float(self.energies.total)
 
     @property
     def structure(self) -> BlockStructure:
@@ -340,7 +340,7 @@ class _Setup:
             "scf %s after %d iterations: energy %.12f, <S^2> %.6f, 2S+1 %.4f",
             "converged" if converged else "stopped",
             len(history),
-            energies.total,
+            float(energies.total),
             spin.square,
             spin.multiplicity,
         )
@@ -369,8 +369,9 @@ class _Setup:
 def _record(
     history: list[ScfIteration], index: int, energies: EnergyTerms, gradient_norm: float
 ) -> ScfIteration:
-    change = energies.total - history[-1].energy if history else math.inf
-    row = ScfIteration(index, energies.total, change, gradient_norm)
+    total = float(energies.total)
+    change = total - history[-1].energy if history else math.inf
+    row = ScfIteration(index, total, change, gradient_norm)
     history.append(row)
     logger.info(
         "scf iteration %3d  energy %20.12f  change %10.2e  gradient %10.2e",

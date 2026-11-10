@@ -424,7 +424,11 @@ def coulomb_matrix(two_body: CoulombExchange, density: BlockMatrix) -> BlockMatr
         )
         xp = array_namespace(total_ao)
         coulomb_ao = two_body.coulomb(xp.astype(xp.real(total_ao), xp.float64))
-        return BlockMatrix.from_spatial(coulomb_ao, irreps=sectors).embed(structure)
+        # A real matrix without a k axis is a real spatial operator as it
+        # stands, so there is nothing to check, and no entries to read.
+        return BlockMatrix.from_spatial(coulomb_ao, irreps=sectors, check=False).embed(
+            structure
+        )
     (total_block,) = total.structure.stored_blocks
     total_full = expand_k(
         total.structure, total_block, total.blocks[0], structure.all_kpoints

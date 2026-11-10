@@ -160,6 +160,39 @@ def is_jax_array(array: object) -> bool:
     return array_api_compat.is_jax_array(array)
 
 
+def is_traced(array: object) -> bool:
+    """Whether ``array`` is an abstract value under a JAX transformation.
+
+    Such a value has a shape and a dtype but no entries, so a check that
+    reads entries cannot run on it (:func:`require_concrete`).
+    """
+    if not is_jax_array(array):
+        return False
+    from jax.core import Tracer  # pyright: ignore[reportUnknownVariableType]
+
+    return isinstance(array, Tracer)
+
+
+def require_concrete(*arrays: object) -> None:
+    """Raise unless every array has entries a validation can read.
+
+    A validation that reads entries calls this first, so that it never
+    passes a value it could not look at (CONVENTIONS.md §5 and §6).
+
+    Raises
+    ------
+    BackendError
+        If an array is an abstract value under a JAX transformation.
+    """
+    if any(is_traced(array) for array in arrays):
+        raise BackendError(
+            "a validation that reads the entries of an array cannot run on an "
+            "abstract value under a JAX transformation (jit, grad, vmap): validate "
+            "the concrete array outside the transformation, or pass check=False "
+            "where the value is valid by construction"
+        )
+
+
 def from_host(array: Array) -> Array:
     """Return a host array as an array of the active backend."""
     return active_backend().from_host(array)
