@@ -49,12 +49,14 @@ class EnergyTerms:
     exact exchange scaled by the functional's fractions, zero for a pure
     functional, and ``E_xc`` the exchange–correlation energy of the
     functional, zero for Hartree–Fock. The electronic terms are 0-d arrays
-    in the namespace of the density, so that the energy traces under JAX
+    in the namespace of the density, and the repulsion of the nuclei is
+    whatever the Hamiltonian carries, a host float or a 0-d array that
+    depends on the positions, so that the energy traces under JAX
     (ADR-0038); the host reads them with ``float()``, as
     :attr:`~hafnium.scf.ScfResult.energy` does.
     """
 
-    nuclear_repulsion: float
+    nuclear_repulsion: Energy
     one_electron: Energy
     coulomb: Energy
     exchange: Energy
@@ -87,7 +89,9 @@ class Hamiltonian:
         Representation of the two-electron integrals, over the k-points
         for a cell.
     nuclear_repulsion
-        Coulomb repulsion of the nuclei in Hartree, the Ewald sum of a cell.
+        Coulomb repulsion of the nuclei in Hartree, the Ewald sum of a cell;
+        a host float, or a 0-d array where it is a function of the
+        positions (ADR-0038).
     n_alpha, n_beta
         Electron counts, per cell for a periodic system.
     kpoints
@@ -110,7 +114,7 @@ class Hamiltonian:
     overlap: Array
     core_hamiltonian: Array
     two_body: CoulombExchange
-    nuclear_repulsion: float
+    nuclear_repulsion: Energy
     n_alpha: int
     n_beta: int
     kpoints: KPoints | None = field(default=None, kw_only=True)

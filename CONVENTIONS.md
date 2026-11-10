@@ -360,9 +360,11 @@ Spin never appears as an explicit index in method code; it is part of the
   a 0-d array in the namespace of its operands; the host reads it with
   `float()` at the boundary, as `ScfResult.energy` does.
 - A validation that reads the entries of an array, a closeness or a
-  symmetry check, runs on concrete arrays only: an abstract value under a
-  JAX transformation passes it (`is_traced`), since the arrays it stands
-  for were checked when they were built.
+  symmetry check, runs on concrete arrays only and never passes a value
+  it could not read: on an abstract value under a JAX transformation it
+  raises `BackendError` (`require_concrete`). Code that runs under a
+  transformation passes `check=False` at the call where the value is
+  valid by construction, and says why there.
 - Only the operations listed in `backend/allowed.py` may be used; a test
   greps for violations.
 - Dtype is explicit: `float64` and `complex128` only. No silent promotion

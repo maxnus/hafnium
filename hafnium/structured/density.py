@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hafnium.backend import Array, adjoint, array_namespace, is_traced
+from hafnium.backend import Array, adjoint, array_namespace, require_concrete
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import is_kramers_symmetric
 from hafnium.structured.matrix import BlockMatrix
@@ -13,7 +13,9 @@ REALITY_TOLERANCE = 1e-10
 """Relative imaginary part a real block may carry at an invariant k-point."""
 
 
-def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> BlockMatrix:
+def density_matrix(
+    coefficients: BlockMatrix, occupations: BlockVector, *, check: bool = True
+) -> BlockMatrix:
     """Return ``C diag(occupations) adjoint(C)`` block by block.
 
     Parameters
@@ -26,6 +28,19 @@ def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> Block
         equal within each Kramers pair at the time-reversal invariant
         k-points, and in a real structure they must leave the density real
         there.
+    check
+        Verify those two requirements on the density, which reads its
+        entries. Without it they are taken on trust, as for orbitals and
+        occupations that a checked state supplies under a JAX
+        transformation, where the entries cannot be read.
+
+    Raises
+    ------
+    StructureError
+        If the structures differ, or ``check`` finds the density without
+        the time-reversal symmetry of its block.
+    BackendError
+        If ``check`` meets an abstract value under a JAX transformation.
     """
     structure = coefficients.structure
     if structure != occupations.structure:
@@ -36,7 +51,8 @@ def density_matrix(coefficients: BlockMatrix, occupations: BlockVector) -> Block
     ):
         xp = array_namespace(c, occupation)
         density = (c * xp.expand_dims(occupation, axis=-2)) @ adjoint(c)
-        _check_time_reversal(structure, block, density)
+        if check:
+            _check_time_reversal(structure, block, density)
         blocks.append(density)
     return BlockMatrix(structure, tuple(blocks))
 
@@ -57,13 +73,13 @@ def natural_orbitals(
 def _check_time_reversal(
     structure: BlockStructure, block: Block, density: Array
 ) -> None:
-    """Raise unless ``density`` has the symmetry of ``block`` at invariant k-points.
-
-    An abstract value under a JAX transformation has no entries to read and
-    passes: the orbitals it is built from were checked when they were built.
-    """
-    if block.ring is Ring.COMPLEX or is_traced(density):
+    """Raise unless ``density`` has the symmetry of ``block`` at invariant k-points."""
+    if block.ring is Ring.COMPLEX:
         return
+    xp = array_namespace(density)
+    if block.ring is Ring.REAL and not xp.isdtype(density.dtype, "complex floating"):
+        return
+    require_concrete(density)
     batched = structure.k_axis is not None
     for position in structure.invariant_positions(block):
         matrix = density[position] if batched else density
@@ -73,9 +89,6 @@ def _check_time_reversal(
                     "occupations of a paired structure must be equal within each "
                     "Kramers pair"
                 )
-            continue
-        xp = array_namespace(matrix)
-        if not xp.isdtype(matrix.dtype, "complex floating"):
             continue
         scale = max(1.0, float(xp.max(xp.abs(matrix))))
         if float(xp.max(xp.abs(xp.imag(matrix)))) > REALITY_TOLERANCE * scale:

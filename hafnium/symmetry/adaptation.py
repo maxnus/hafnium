@@ -24,6 +24,7 @@ from hafnium.backend import (
     array_namespace,
     generalized_eigh,
     host_namespace,
+    to_host,
 )
 from hafnium.basis import BasisSet
 from hafnium.errors import InputError, SymmetryError
@@ -137,6 +138,40 @@ class SymmetryAdaptation:
             function_signs,
             _salcs(group, atom_images, function_images, function_signs, starts),
         )
+
+    def require_symmetric(
+        self, positions: Array, *, tolerance: float = DEFAULT_SYMMETRY_TOLERANCE
+    ) -> None:
+        """Raise unless the group maps ``positions`` ``[atom, 3]`` onto themselves.
+
+        The adaptation is built at one geometry and describes another only
+        while every operation carries each atom onto the image it had
+        there, within ``tolerance`` Bohr. A displacement that breaks the
+        group leaves operators that couple the irreps, which a projection
+        onto the sectors would drop without a trace.
+
+        Raises
+        ------
+        SymmetryError
+            If an operation moves an atom away from its image.
+        """
+        xp = host_namespace()
+        host = to_host(positions)
+        for operation, images in zip(
+            self.group.operations, self.atom_images, strict=True
+        ):
+            moved = host * xp.asarray(operation.signs, dtype=xp.float64)
+            expected = xp.take(host, xp.asarray(images, dtype=xp.int64), axis=0)
+            distance = xp.linalg.vector_norm(moved - expected, axis=-1)
+            atom = int(xp.argmax(distance))
+            if float(distance[atom]) > tolerance:
+                raise SymmetryError(
+                    f"the operation {operation.symbol} does not map atom {atom} "
+                    f"onto atom {images[atom]} at these positions (off by "
+                    f"{float(distance[atom]):.2e} Bohr): the geometry has left "
+                    f"{self.group.name}; impose the subgroup it keeps, or no point "
+                    "group"
+                )
 
     @property
     def n_functions(self) -> int:

@@ -12,13 +12,15 @@ pass solves by conjugate gradients with the Hessian–vector products of the
 Fock build. A function of the state that is stationary, the energy, needs no
 response and gets none beyond the convergence of the field; any other
 function of the state, an orbital energy or an expectation value, gets the
-full response. Under any other backend the same methods run the host solver
-and return its state as arrays of that backend.
+full response. For positions of any other array library the same methods run
+the host solver and return its state as arrays of that library: the state
+lives in the namespace of the positions it is solved at, as every array
+derived from an input does (CONVENTIONS.md §5).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
 from hafnium.backend import (
@@ -29,11 +31,12 @@ from hafnium.backend import (
     host_array,
     host_namespace,
     is_jax_array,
+    is_traced,
     to_host,
     use_backend,
 )
 from hafnium.basis import BasisSet
-from hafnium.errors import InputError
+from hafnium.errors import BackendError, InputError
 from hafnium.integrals import DifferentiableIntegrals, IntegralEngine, nuclear_repulsion
 from hafnium.molecule import Molecule
 from hafnium.scf.atoms import atomic_density_guess
@@ -68,25 +71,28 @@ class ResponseOptions:
 
 
 class FittedIntegrals(NamedTuple):
-    """The integrals a molecular Hamiltonian is built from, in the atomic basis.
+    """What a molecular Hamiltonian is built from at one geometry.
 
-    ``overlap`` and ``core`` are ``[ao, ao]``; ``fitted`` ``[aux, ao, ao]`` is
-    the three-centre integrals with the Cholesky factor of the metric
-    applied, ``L⁻¹ (P|uv)`` for ``(P|Q) = L L†``, so that their products
-    reproduce the fitted four-centre integrals.
+    ``overlap`` and ``core`` are ``[ao, ao]`` in the atomic basis; ``fitted``
+    ``[aux, ao, ao]`` is the three-centre integrals with the Cholesky factor
+    of the metric applied, ``L⁻¹ (P|uv)`` for ``(P|Q) = L L†``, so that
+    their products reproduce the fitted four-centre integrals;
+    ``nuclear_repulsion`` is the repulsion of the nuclei as a 0-d array,
+    which depends on the positions as the integrals do.
     """
 
     overlap: Array
     core: Array
     fitted: Array
+    nuclear_repulsion: Array
 
 
 @dataclass(frozen=True, slots=True, eq=False)
 class ScfSolution:
-    """A mean-field state as arrays of the active backend.
+    """A mean-field state as arrays of the library of the positions it was solved at.
 
-    The state :meth:`DifferentiableScf.solve` returns: under JAX every field
-    is differentiable with respect to the positions it was solved at. The
+    The state :meth:`DifferentiableScf.solve` returns: for JAX positions
+    every field is differentiable with respect to them. The
     orbital coefficients are taken in the gauge of the solver, so a function
     of them that is not invariant under rotations within the occupied and
     within the virtual orbitals differentiates in that gauge; the density,
@@ -145,8 +151,6 @@ class DifferentiableScf:
     occupations
         The occupations of the reference solve, a host block vector in
         which every block fills its first orbitals with one occupation.
-    occupied
-        The number of occupied orbitals in every block.
     guess
         The atomic density guess every solve starts from, a host block
         matrix.
@@ -154,6 +158,18 @@ class DifferentiableScf:
         The convergence controls of the field.
     response
         Controls of the solve of the response equations.
+
+    Attributes
+    ----------
+    occupied : tuple[int, ...]
+        The number of occupied orbitals in every block, counted from
+        ``occupations``.
+
+    Raises
+    ------
+    InputError
+        If the charges are not one per atom, if the occupations belong to
+        another structure, or if a block has fractional occupations.
     """
 
     integrals: DifferentiableIntegrals
@@ -164,17 +180,18 @@ class DifferentiableScf:
     n_beta: int
     adaptation: SymmetryAdaptation | None
     occupations: BlockVector
-    occupied: tuple[int, ...]
     guess: BlockMatrix
     options: ScfOptions
     response: ResponseOptions = field(default_factory=ResponseOptions)
+    occupied: tuple[int, ...] = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "charges", host_array(self.charges))
         if self.charges.ndim != 1:
             raise InputError("the charges are one per atom")
-        if len(self.occupied) != self.structure.n_stored:
-            raise InputError("one occupied count per stored block")
+        if self.occupations.structure != self.structure:
+            raise InputError("the occupations belong to another structure")
+        object.__setattr__(self, "occupied", _occupied_counts(self.occupations))
 
     @classmethod
     def from_molecule(
@@ -199,6 +216,9 @@ class DifferentiableScf:
             If ``symmetry`` carries k-points or a space group, if the
             reference state has fractional occupations, or if the overlap
             threshold removed functions from the basis.
+        SymmetryError
+            If ``symmetry`` names a point group the molecule does not have
+            in its frame.
         """
         symmetry = SymmetrySpec() if symmetry is None else symmetry
         if symmetry.kpoints is not None or symmetry.space_group is not None:
@@ -223,7 +243,6 @@ class DifferentiableScf:
                 molecule.n_alpha,
                 molecule.n_beta,
                 adaptation,
-                molecule.nuclear_repulsion_energy(),
             )
             reference = solve_scf(hamiltonian, symmetry, guess=guess, options=options)
         scf = cls(
@@ -235,7 +254,6 @@ class DifferentiableScf:
             molecule.n_beta,
             adaptation,
             reference.mo_occupations,
-            _occupied_counts(reference.mo_occupations),
             guess,
             options,
             ResponseOptions() if response is None else response,
@@ -251,11 +269,28 @@ class DifferentiableScf:
     # ------------------------------------------------------------------ solving
 
     def solve(self, positions: Array) -> ScfSolution:
-        """Converge the state at ``positions`` ``[atom, 3]``.
+        """Converge the state at ``positions`` ``[atom, 3]``, in their array library.
 
-        Under JAX the orbitals come from a host callback whose
-        vector-Jacobian product differentiates the solution implicitly
-        (ADR-0038); otherwise from the host solver.
+        For JAX positions the orbitals come from the host solver with a
+        vector-Jacobian product that differentiates the solution
+        implicitly (ADR-0038); for any other library from the host solver
+        alone. The library of ``positions`` decides, not the active
+        backend: host positions give a host state under any backend.
+
+        Raises
+        ------
+        InputError
+            If ``positions`` are not ``[atom, 3]``, or the state's
+            occupations differ from the reference's.
+        BackendError
+            If ``positions`` are JAX arrays that are not 64-bit.
+        SymmetryError
+            If ``positions`` break the point group of the state.
+        ConvergenceError
+            If the field does not converge, or under differentiation the
+            response equations do not. Under ``jit`` and ``vmap`` JAX runs
+            the host solver as a callback and reports whatever it raises
+            as its own runtime error, which quotes the original.
         """
         positions = self._checked(positions)
         if is_jax_array(positions):
@@ -278,18 +313,20 @@ class DifferentiableScf:
         ------
         InputError
             If the state's occupations differ from the reference's.
+        SymmetryError
+            If ``positions`` break the point group of the state.
+        ConvergenceError
+            If the field does not converge.
         """
         return self._solve_on_host(self._checked(positions))
 
     def _solve_on_host(self, positions: Array) -> ScfResult:
-        host = to_host(positions)
         with use_backend("numpy"):
-            hamiltonian = replace(
-                self.hamiltonian(host),
-                nuclear_repulsion=float(nuclear_repulsion(host, self.charges)),
-            )
             result = solve_scf(
-                hamiltonian, self.symmetry, guess=self.guess, options=self.options
+                self.hamiltonian(to_host(positions)),
+                self.symmetry,
+                guess=self.guess,
+                options=self.options,
             )
         self._check_state(result)
         return result
@@ -304,8 +341,7 @@ class DifferentiableScf:
         """
         xp = array_namespace(positions)
         hamiltonian = self.hamiltonian(positions)
-        occupations = self.occupations_in(xp)
-        density = density_matrix(coefficients, occupations)
+        density = self.density(coefficients)
         fock, terms = hamiltonian.fock(density)
         mo_energies = BlockVector(
             self.structure,
@@ -314,9 +350,13 @@ class DifferentiableScf:
                 for c, f in zip(coefficients.blocks, fock.blocks, strict=True)
             ),
         )
-        energy = terms.electronic + nuclear_repulsion(positions, self.charges)
         return ScfSolution(
-            coefficients, occupations, mo_energies, density, fock, energy
+            coefficients,
+            self.occupations_in(xp),
+            mo_energies,
+            density,
+            fock,
+            xp.asarray(terms.total),
         )
 
     # -------------------------------------------------------------- integrals
@@ -326,16 +366,25 @@ class DifferentiableScf:
         return _fitted_integrals(self.integrals, self.charges, positions)
 
     def hamiltonian_from(self, integrals: FittedIntegrals) -> Hamiltonian:
-        """Build the Hamiltonian of ``integrals``, without the nuclear repulsion.
-
-        The repulsion of the nuclei enters the energy of :meth:`complete`
-        directly, as a function of the positions; the host solve adds it
-        to its Hamiltonian as a number.
-        """
+        """Build the Hamiltonian of ``integrals``, with their nuclear repulsion."""
         return _hamiltonian(integrals, self.n_alpha, self.n_beta, self.adaptation)
 
     def hamiltonian(self, positions: Array) -> Hamiltonian:
-        """Build the Hamiltonian at ``positions``; see :meth:`hamiltonian_from`."""
+        """Build the Hamiltonian at ``positions``, in their array library.
+
+        With a point group the symmetry adaptation is that of the reference
+        geometry, so the positions must keep the group. Concrete positions
+        are checked here; abstract ones under a JAX transformation cannot
+        be read, and are checked by the host solve of :meth:`solve` that
+        they pass through.
+
+        Raises
+        ------
+        SymmetryError
+            If concrete ``positions`` break the point group of the state.
+        """
+        if self.adaptation is not None and not is_traced(positions):
+            self.adaptation.require_symmetric(positions)
         return self.hamiltonian_from(self.fitted_integrals(positions))
 
     def overlap_from(self, integrals: FittedIntegrals) -> BlockMatrix:
@@ -345,6 +394,18 @@ class DifferentiableScf:
     def occupations_in(self, xp: Namespace) -> BlockVector:
         """Return the occupations as arrays of the namespace ``xp``."""
         return self.occupations.map_blocks(lambda block: xp.asarray(block))
+
+    def density(self, coefficients: BlockMatrix) -> BlockMatrix:
+        """Return the density of ``coefficients`` with the occupations of the state.
+
+        The time-reversal check of :func:`~hafnium.structured.density_matrix`
+        reads entries, so it runs on concrete coefficients. Abstract ones
+        under a JAX transformation are the host solver's, which checked
+        its own density, moved along the connection and the rotations.
+        """
+        xp = array_namespace(*coefficients.blocks)
+        traced = any(is_traced(block) for block in coefficients.blocks)
+        return density_matrix(coefficients, self.occupations_in(xp), check=not traced)
 
     # ------------------------------------------------ the stationarity condition
 
@@ -408,9 +469,7 @@ class DifferentiableScf:
         :meth:`rotate`, so its Jacobian in them is the electronic Hessian,
         self-adjoint and positive definite at a stable state.
         """
-        xp = array_namespace(*coefficients.blocks)
-        density = density_matrix(coefficients, self.occupations_in(xp))
-        fock, _ = hamiltonian.fock(density)
+        fock, _ = hamiltonian.fock(self.density(coefficients))
         return tuple(
             adjoint(c[..., n:]) @ f @ c[..., :n]
             for c, f, n in zip(
@@ -430,6 +489,12 @@ class DifferentiableScf:
     def _checked(self, positions: Array) -> Array:
         if positions.shape != (self.n_atoms, 3):
             raise InputError(f"the positions are [atom, 3] with {self.n_atoms} atoms")
+        if is_jax_array(positions) and positions.dtype != host_namespace().float64:
+            raise BackendError(
+                f"the positions are JAX arrays of {positions.dtype}, and the solver "
+                "works in float64: select the JAX backend, which switches JAX to "
+                "64-bit arrays, with use_backend('jax') before creating them"
+            )
         return positions
 
     def _check_state(self, result: ScfResult) -> None:
@@ -469,7 +534,12 @@ def _fitted_integrals(
         xp.linalg.solve(factor, xp.reshape(three_center, (n_aux, -1))),
         three_center.shape,
     )
-    return FittedIntegrals(integrals.overlap(centers), core, fitted)
+    return FittedIntegrals(
+        integrals.overlap(centers),
+        core,
+        fitted,
+        nuclear_repulsion(positions, charges),
+    )
 
 
 def _hamiltonian(
@@ -477,13 +547,12 @@ def _hamiltonian(
     n_alpha: int,
     n_beta: int,
     adaptation: SymmetryAdaptation | None,
-    repulsion: float = 0.0,
 ) -> Hamiltonian:
     return Hamiltonian(
         integrals.overlap,
         integrals.core,
         DensityFittedCoulombExchange(integrals.fitted),
-        repulsion,
+        integrals.nuclear_repulsion,
         n_alpha,
         n_beta,
         adaptation=adaptation,

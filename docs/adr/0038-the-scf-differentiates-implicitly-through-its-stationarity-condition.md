@@ -10,7 +10,7 @@ is its derivative, and closes the milestone's exit criterion for
 Hartree–Fock: the AD gradient equals the analytic gradient of ADR-0035 and
 finite differences of the energy. PLAN.md §6.2 rules out unrolling the
 iterations and asks for implicit differentiation at the fixed point, the
-coupled-perturbed equations in disguise. Four things had to be settled:
+coupled-perturbed equations in disguise. Five things had to be settled:
 in which variables the fixed point is written, since a fixed point in the
 orbital coefficients has the gauge freedom of rotations within the
 occupied and within the virtual orbitals and a fixed point through the
@@ -18,9 +18,10 @@ eigendecomposition of the Fock matrix differentiates through degenerate
 eigenvalues; how the orbitals follow the positions, since the converged
 coefficients are orthonormal in the overlap of the positions they were
 solved at and nowhere else; how the response equations are solved without
-writing them out for each of the eight Fukutome classes; and how the
+writing them out for each of the eight Fukutome classes; how the
 structured algebra, whose constructors check what they are given, runs on
-abstract values.
+abstract values; and how a solve on the host that fails, or a geometry the
+state was not built for, is reported from inside a transformation.
 
 ## Decision
 
@@ -71,13 +72,49 @@ abstract values.
   differentiate through; the host solve of the forward pass uses the same
   Hamiltonian, so the fixed point and the differentiated functional agree.
   The energy terms of the Fock build are 0-d arrays of the backend, read
-  with `float()` at the host boundary, so that the energy traces.
-- **Validations that read entries pass abstract values.** The closeness
-  check of `from_spatial` and the time-reversal check of `density_matrix`
-  run on concrete arrays only; a tracer under a JAX transformation has no
-  entries to read, and the concrete arrays it stands for were checked when
-  they were built. Everything else in the structured algebra is shapes and
-  dtypes, which trace.
+  with `float()` at the host boundary, so that the energy traces. The
+  repulsion of the nuclei is one of them: the Hamiltonian at given
+  positions carries it as a 0-d array of those positions, so the
+  Hamiltonian of the host solve and the one the energy is traced through
+  are the same object and neither adds the term on the side.
+- **A validation that reads entries refuses an abstract value.** A tracer
+  under a JAX transformation has a shape and a dtype and no entries, so
+  the closeness check of `from_dense` and `from_spatial` and the
+  time-reversal check of `density_matrix` cannot look at it. They raise
+  `BackendError` there (`require_concrete`) and never pass it unseen: a
+  check that is skipped whenever the caller is under `grad` or `jit` is no
+  check. The two places of the differentiable path that meet abstract
+  values say so themselves with `check=False`: the Coulomb matrix of a
+  molecule, a real matrix without a k axis that is a real spatial operator
+  as it stands, and the density of the solver's own orbitals, whose
+  concrete values the host solve checked. Everything else in the
+  structured algebra is shapes and dtypes, which trace.
+- **The state lives in the array library of the positions.** As every
+  array derived from an input does (CONVENTIONS.md §5), `solve` takes the
+  JAX rules for JAX positions and the host solver alone for any other,
+  whatever backend is active, and returns arrays of that library. JAX
+  positions that are not 64-bit, which is what a process that never
+  selected the JAX backend creates, raise `BackendError`.
+- **A point group holds only at geometries that keep it.** The symmetry
+  adaptation is built once, at the reference geometry, and its sectors
+  drop the couplings between irreps. At positions that break the group
+  those couplings are the physics, so the host solve and the Hamiltonian
+  at concrete positions check that every operation still maps each atom
+  onto its image (`SymmetryAdaptation.require_symmetric`) and raise
+  `SymmetryError` otherwise; a displacement that lowers the symmetry needs
+  the subgroup it keeps, or no point group.
+- **Failures raise in Python wherever the values are concrete.** The host
+  solve, with its checks of the occupations, the basis and the point
+  group, runs as a plain call when the positions are concrete, in an
+  eager call and in `grad` outside `jit`, so its `ConvergenceError`,
+  `InputError` or `SymmetryError` reaches the caller as it is, with the
+  last state. The residual of the response solve is verified the same
+  way, and its `ConvergenceError` carries the rotations reached. On
+  abstract values, under `jit`, `vmap` and the batched backward pass of
+  `jacrev`, both run as callbacks, the verification as one the solution
+  passes through so that it cannot be optimized away, and JAX reports
+  what they raise as its own `JaxRuntimeError`, which quotes the original
+  error and cannot carry its type or its state.
 - **The scope is density-fitted Hartree–Fock of a molecule.** A Kohn–Sham
   energy needs the derivatives of the basis functions on the grid with
   respect to their centres, up to second order for the gradient of a
@@ -88,7 +125,7 @@ abstract values.
 ## Consequences
 
 - `DifferentiableScf.solve` returns the state at any positions as arrays
-  of the active backend, and under JAX `jax.grad` of its energy equals the
+  of their library, and for JAX positions `jax.grad` of its energy equals the
   analytic gradient to 1e-7 in all eight classes and with point-group
   sectors, and finite differences of the energy to 1e-7; the derivative of
   an orbital energy, which needs the response, equals finite differences
@@ -101,7 +138,13 @@ abstract values.
 - Derivatives of the orbital coefficients themselves are taken in the
   gauge of the connection and the rotations; the density, the energy and
   the orbital energies to first order are gauge-independent.
-- The response solve is checked for convergence on concrete arrays only,
-  since under `jit` the residual cannot be read; a state with fractional
-  occupations, or whose basis the overlap threshold truncates, is
-  rejected at construction.
+- The response solve is checked for convergence under every
+  transformation, at the cost of one more Hessian–vector product; a state
+  with fractional occupations, or whose basis the overlap threshold
+  truncates, is rejected at construction, and the occupied counts are
+  derived from the occupations and cannot disagree with them.
+- Code that catches the library's errors around a `jit`-compiled function
+  catches JAX's runtime error instead; an optimizer that restarts from the
+  last state of a `ConvergenceError` differentiates outside `jit`.
+- Finite differences and line searches of a state with a point group stay
+  within the displacements that keep the group; any other raises.

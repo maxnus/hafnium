@@ -467,7 +467,14 @@ uses [Semantic Versioning](https://semver.org/).
   re-orthonormalization. The gradient of the energy equals the analytic
   gradient and finite differences in every Fukutome class and with
   point-group sectors, and orbital energies differentiate through the
-  response. The energy terms of the Fock build are 0-d arrays, and the
-  validations of the structured algebra that read entries pass abstract
-  values under JAX.
+  response. The state lives in the array library of the positions; a
+  geometry that breaks the point group of the state raises
+  `SymmetryError`, and the errors of the host solve and of the response
+  solve raise as themselves wherever the values are concrete and as JAX's
+  runtime error under `jit` and `vmap`. The energy terms of the Fock build
+  and the nuclear repulsion of a `Hamiltonian` are 0-d arrays or host
+  floats (`Energy`), and the validations of the structured algebra that
+  read entries raise `BackendError` on an abstract value under JAX
+  (`require_concrete`) instead of running; `density_matrix` takes
+  `check=False` for a density that is valid by construction.
 

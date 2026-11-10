@@ -12,6 +12,12 @@ one Fock build each, preconditioned by the orbital-energy differences.
 Every transpose is JAX's own, so the complex classes follow its
 conventions, and the derivative integrals are evaluated once, for the
 combined cotangent of the integrals.
+
+Whatever can fail on the host, the field, the checks of the state and the
+response solve, raises in Python where the values are concrete, in a plain
+call and in ``grad`` outside ``jit``, so the caller gets the library's own
+error. On abstract values, under ``jit`` and ``vmap``, the same code runs
+as a callback, and JAX reports what it raises as its own runtime error.
 """
 
 # JAX's own annotations leave parts of its API unknown to a strict checker.
@@ -21,7 +27,6 @@ combined cotangent of the integrals.
 from __future__ import annotations
 
 import functools
-import math
 from collections.abc import Callable
 from typing import Any
 
@@ -39,6 +44,9 @@ Rotations = tuple[Array, ...]
 
 conjugate_gradients: Any = cg
 """The solver, whose annotations do not admit the pytrees it accepts."""
+
+as_jax: Any = jnp.asarray
+"""The conversion of a host array, whose result JAX annotates as its own type."""
 
 PRECONDITIONER_FLOOR = 1e-3
 """Orbital-energy differences below this are raised to it in the preconditioner."""
@@ -70,16 +78,24 @@ def _solve(scf: DifferentiableScf, positions: Array) -> tuple[BlockMatrix, Block
 
     The energies are constants of the backward pass; the state's own
     orbital energies come from :meth:`DifferentiableScf.complete`.
+    Concrete positions are solved in Python, so that an error of the host
+    solver reaches the caller as it is; abstract ones in a callback.
     """
-    structs = (
-        tuple(jax.ShapeDtypeStruct(b.shape, b.dtype) for b in scf.guess.blocks),
-        tuple(
-            jax.ShapeDtypeStruct(b.shape, jnp.float64) for b in scf.occupations.blocks
-        ),
-    )
-    coefficients, energies = jax.pure_callback(
-        lambda p: _host(scf, p), structs, positions, vmap_method="sequential"
-    )
+    if is_traced(positions):
+        structs = (
+            tuple(jax.ShapeDtypeStruct(b.shape, b.dtype) for b in scf.guess.blocks),
+            tuple(
+                jax.ShapeDtypeStruct(b.shape, jnp.float64)
+                for b in scf.occupations.blocks
+            ),
+        )
+        coefficients, energies = jax.pure_callback(
+            lambda p: _host(scf, p), structs, positions, vmap_method="sequential"
+        )
+    else:
+        coefficients, energies = (
+            tuple(as_jax(block) for block in blocks) for blocks in _host(scf, positions)
+        )
     return (
         BlockMatrix(scf.structure, tuple(coefficients)),
         jax.lax.stop_gradient(BlockVector(scf.structure, tuple(energies))),
@@ -152,13 +168,15 @@ def _response(
     The operator is the transposed electronic Hessian, self-adjoint and
     positive definite at a stable state; the preconditioner divides by the
     orbital-energy differences, its diagonal in the canonical orbitals.
+    The residual of the solution is verified on the host: in Python where
+    the solution is concrete, and in a callback the solution passes
+    through where it is abstract, under ``jit``, ``vmap`` and ``jacrev``.
 
     Raises
     ------
     ConvergenceError
         If the residual is above the tolerance after the allowed
-        iterations; checked on concrete arrays only, since an abstract
-        value under ``jit`` cannot be read.
+        iterations; ``last`` holds the rotations reached.
     """
     gaps = tuple(jnp.maximum(gap, PRECONDITIONER_FLOOR) for gap in scf.gaps(energies))
 
@@ -175,22 +193,30 @@ def _response(
         atol=tolerance,
         maxiter=scf.response.iterations,
     )
-    if not any(is_traced(block) for block in solution):
-        residual = _norm(
-            jax.tree_util.tree_map(
-                lambda a, b: a - b, operator(solution), right_hand_side
-            )
-        )
-        bound = max(tolerance * _norm(right_hand_side), tolerance)
-        if residual > bound:
+    residual: Array = _norm(
+        jax.tree_util.tree_map(lambda a, b: a - b, operator(solution), right_hand_side)
+    )
+    bound: Array = as_jax(jnp.maximum(tolerance * _norm(right_hand_side), tolerance))
+
+    def verified(z: Rotations, norm: Array, limit: Array) -> Rotations:
+        if float(norm) > float(limit):
             raise ConvergenceError(
                 "the response equations did not converge in "
-                f"{scf.response.iterations} iterations (residual {residual:.2e}, "
-                f"tolerance {bound:.2e})",
-                None,
+                f"{scf.response.iterations} iterations (residual {float(norm):.2e}, "
+                f"tolerance {float(limit):.2e})",
+                z,
             )
-    return solution
+        return z
+
+    if not any(is_traced(value) for value in (*solution, residual, bound)):
+        return verified(solution, residual, bound)
+    structs = tuple(jax.ShapeDtypeStruct(z.shape, z.dtype) for z in solution)
+    checked: Rotations = jax.pure_callback(
+        verified, structs, solution, residual, bound, vmap_method="sequential"
+    )
+    return checked
 
 
-def _norm(rotations: Rotations) -> float:
-    return math.sqrt(sum(float(jnp.sum(jnp.abs(block) ** 2)) for block in rotations))
+def _norm(rotations: Rotations) -> Any:
+    """Return the Euclidean norm over all blocks as a 0-d array, which traces."""
+    return jnp.sqrt(sum(jnp.sum(jnp.abs(block) ** 2) for block in rotations))

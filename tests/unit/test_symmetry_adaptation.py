@@ -136,6 +136,29 @@ def test_mixed_orbitals_are_rejected_and_degenerate_sets_resolved() -> None:
         adaptation.orbital_weights(coefficients[:-1], s)
 
 
+def test_positions_that_leave_the_group_are_rejected() -> None:
+    water = molecules.water()
+    basis = BasisSet.for_atoms(water, "sto-3g", library=LIBRARY)
+    adaptation = SymmetryAdaptation.from_basis(basis, water, PointGroup.named("C2v"))
+    positions = np.array(water.positions_array())
+
+    def shifted(*shifts: tuple[int, int, float]) -> np.ndarray:
+        """``positions`` with ``(atom, axis, distance)`` displacements in Bohr."""
+        result = positions.copy()
+        for atom, axis, distance in shifts:
+            result[atom, axis] += distance
+        return result
+
+    adaptation.require_symmetric(positions)
+    adaptation.require_symmetric(shifted((0, 2, 0.1)))
+    stretched = shifted((1, 1, 0.01))
+    with pytest.raises(SymmetryError, match=r"C2\(z\) does not map atom 1"):
+        adaptation.require_symmetric(stretched)
+    with pytest.raises(SymmetryError, match="has left C2v"):
+        adaptation.require_symmetric(shifted((1, 0, 0.01), (2, 0, 0.01)))
+    adaptation.require_symmetric(stretched, tolerance=0.1)
+
+
 def test_systems_outside_the_frame_or_with_unequal_bases_are_rejected() -> None:
     water = molecules.water()
     basis = BasisSet.for_atoms(water, "sto-3g", library=LIBRARY)

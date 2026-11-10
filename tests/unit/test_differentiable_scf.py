@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from typing import Any
 
@@ -9,23 +10,23 @@ import numpy as np
 import pytest
 
 from hafnium.backend import Array, Backend, array_namespace, use_backend
-from hafnium.basis import BasisSet
-from hafnium.errors import InputError
+from hafnium.errors import BackendError, ConvergenceError, InputError, SymmetryError
 from hafnium.molecule import Molecule
 from hafnium.properties import nuclear_gradient
 from hafnium.scf import (
     DifferentiableScf,
+    ResponseOptions,
     ScfOptions,
     ScfResult,
     ScfSolution,
     hartree_fock,
 )
 from hafnium.symmetry import KPoints, SymmetrySpec
-from tests.gradients import finite_differences
+from tests.gradients import CLASSES, OPTIONS, bases, finite_differences
 from tests.hamiltonians import ENGINE
 from tests.molecules import water, water_cation
-from tests.shell_tables import LIBRARY
 from tests.tolerances import (
+    ENERGY_TOL,
     FITTED_ENERGY_SOLVE_TOL,
     GRADIENT_FINITE_DIFFERENCE_TOL,
     GRADIENT_TOL,
@@ -36,30 +37,8 @@ from tests.tolerances import (
     TRACED_TOL,
 )
 
-AUXILIARY = "def2-universal-jkfit"
-# Tight convergence, so that the finite differences are limited by the
-# rounding of the energies and not by the residual orbital error.
-OPTIONS = ScfOptions(
-    energy_tolerance=1e-13, gradient_tolerance=1e-10, max_iterations=200
-)
-CLASSES = [
-    "RHF",
-    "complex RHF",
-    "UHF",
-    "complex UHF",
-    "paired UHF",
-    "GHF",
-    "complex GHF",
-    "paired GHF",
-]
 RESPONSE_CLASSES = ["RHF", "UHF", "complex GHF"]
-
-
-def bases(molecule: Molecule) -> tuple[BasisSet, BasisSet]:
-    return (
-        BasisSet.for_atoms(molecule, "sto-3g", library=LIBRARY),
-        BasisSet.for_atoms(molecule, AUXILIARY, library=LIBRARY),
-    )
+C2V = SymmetrySpec.from_name("RHF").with_point_group("C2v")
 
 
 def molecule_for(name: str) -> Molecule:
@@ -161,9 +140,7 @@ def test_the_energy_gradient_matches_finite_differences() -> None:
 def test_point_group_sectors_give_the_same_gradient() -> None:
     molecule = water()
     plain = differentiable(molecule, SymmetrySpec.from_name("RHF"))
-    adapted = differentiable(
-        molecule, SymmetrySpec.from_name("RHF").with_point_group("C2v")
-    )
+    adapted = differentiable(molecule, C2V)
     assert adapted.structure.irreps is not None
     expected = gradient_of(plain, molecule, lambda solution: solution.energy)
     gradient = gradient_of(adapted, molecule, lambda solution: solution.energy)
@@ -241,6 +218,145 @@ def test_the_response_operator_is_self_adjoint_and_positive() -> None:
         left, right = inner(u, apply(v)), inner(apply(u), v)
         assert left == pytest.approx(right, rel=OPERATOR_REL_TOL)
         assert inner(v, apply(v)) > 0.0
+
+
+def moved(molecule: Molecule, atom: int, shift: tuple[float, float, float]) -> Array:
+    """The positions of ``molecule`` with ``atom`` moved by ``shift`` Bohr."""
+    positions = np.array(molecule.positions_array())
+    positions[atom] += shift
+    return positions
+
+
+def test_a_geometry_that_breaks_the_point_group_is_rejected() -> None:
+    """The sectors of the reference geometry describe no other symmetry."""
+    jax = pytest.importorskip("jax")
+    molecule = water()
+    scf = differentiable(molecule, C2V)
+    broken = moved(molecule, 1, (0.1, 0.2, 0.0))
+    with pytest.raises(SymmetryError, match="has left C2v"):
+        scf.solve(broken)
+    with pytest.raises(SymmetryError, match="has left C2v"):
+        scf.hamiltonian(broken)
+    with use_backend("jax") as backend:
+        positions = backend.namespace.asarray(broken)
+        with pytest.raises(SymmetryError, match="has left C2v"):
+            scf.solve(positions)
+        with pytest.raises(SymmetryError, match="has left C2v"):
+            jax.grad(scf.energy)(positions)
+        with pytest.raises(jax.errors.JaxRuntimeError, match="has left C2v"):
+            jax.jit(jax.grad(scf.energy))(positions)
+
+
+def test_a_geometry_that_keeps_the_point_group_is_solved_in_its_sectors() -> None:
+    jax = pytest.importorskip("jax")
+    molecule = water()
+    plain = differentiable(molecule, SymmetrySpec.from_name("RHF"))
+    adapted = differentiable(molecule, C2V)
+    along_the_axis = moved(molecule, 0, (0.0, 0.0, 0.05))
+    assert float(adapted.solve(along_the_axis).energy) == pytest.approx(
+        float(plain.solve(along_the_axis).energy), abs=ENERGY_TOL
+    )
+    with use_backend("jax") as backend:
+        positions = backend.namespace.asarray(along_the_axis)
+        expected = np.asarray(jax.grad(plain.energy)(positions))
+        gradient = np.asarray(jax.grad(adapted.energy)(positions))
+    np.testing.assert_allclose(gradient, expected, atol=GRADIENT_TOL)
+
+
+def test_an_unconverged_response_raises_eagerly_and_under_jit() -> None:
+    jax = pytest.importorskip("jax")
+    molecule = water()
+    scf = dataclasses.replace(
+        differentiable(molecule, SymmetrySpec.from_name("RHF")),
+        response=ResponseOptions(iterations=1),
+    )
+    occupied = scf.occupied[0]
+
+    def objective(at: Array) -> Array:
+        return homo_energy(scf.solve(at), occupied)
+
+    def lowest_two(at: Array) -> Array:
+        return scf.solve(at).mo_energies.blocks[0][:2]
+
+    with use_backend("jax") as backend:
+        positions = backend.namespace.asarray(molecule.positions_array())
+        with pytest.raises(ConvergenceError, match="response equations") as error:
+            jax.grad(objective)(positions)
+        rotations = error.value.last
+        assert [block.shape for block in rotations] == [
+            block.shape
+            for block in scf.zero_rotations(scf.solve(positions).mo_coefficients)
+        ]
+        with pytest.raises(jax.errors.JaxRuntimeError, match="response equations"):
+            jax.jit(jax.grad(objective))(positions)
+        with pytest.raises(jax.errors.JaxRuntimeError, match="response equations"):
+            jax.jacrev(lowest_two)(positions)
+
+
+def test_an_unconverged_field_raises_the_same_error_for_jax_positions() -> None:
+    """The host solver's errors reach the caller as themselves outside ``jit``."""
+    jax = pytest.importorskip("jax")
+    molecule = water()
+    scf = dataclasses.replace(
+        differentiable(molecule, SymmetrySpec.from_name("RHF")),
+        options=ScfOptions(max_iterations=3),
+    )
+    host = molecule.positions_array()
+    with pytest.raises(ConvergenceError, match="SCF did not converge"):
+        scf.solve(host)
+    with use_backend("jax") as backend:
+        positions = backend.namespace.asarray(host)
+        with pytest.raises(ConvergenceError, match="SCF did not converge") as error:
+            scf.solve(positions)
+        assert isinstance(error.value.last, ScfResult)
+        with pytest.raises(ConvergenceError, match="SCF did not converge"):
+            jax.grad(scf.energy)(positions)
+        with pytest.raises(jax.errors.JaxRuntimeError, match="ConvergenceError"):
+            jax.jit(scf.energy)(positions)
+
+
+def test_the_hamiltonian_carries_the_nuclear_repulsion(backend: Backend) -> None:
+    molecule = water()
+    scf = differentiable(molecule, SymmetrySpec.from_name("RHF"))
+    positions = backend.namespace.asarray(molecule.positions_array())
+    hamiltonian = scf.hamiltonian(positions)
+    assert float(hamiltonian.nuclear_repulsion) == pytest.approx(
+        molecule.nuclear_repulsion_energy(), abs=ENERGY_TOL
+    )
+    solution = scf.solve(positions)
+    _, terms = hamiltonian.fock(solution.density)
+    assert float(terms.total) == pytest.approx(float(solution.energy), abs=ENERGY_TOL)
+
+
+def test_the_occupied_counts_follow_the_occupations() -> None:
+    scf = differentiable(water(), SymmetrySpec.from_name("RHF"))
+    (count,) = scf.occupied
+    n_mo = int(scf.occupations.blocks[0].shape[0])
+    highest: Array = np.arange(n_mo) == count - 1
+    emptied = scf.occupations.map_blocks(lambda block: np.where(highest, 0.0, block))
+    assert dataclasses.replace(scf, occupations=emptied).occupied == (count - 1,)
+    halved = scf.occupations.map_blocks(
+        lambda block: np.where(highest, block / 2, block)
+    )
+    with pytest.raises(InputError, match="fractional occupations"):
+        dataclasses.replace(scf, occupations=halved)
+    other = differentiable(water_cation(), SymmetrySpec.from_name("UHF"))
+    with pytest.raises(InputError, match="another structure"):
+        dataclasses.replace(scf, occupations=other.occupations)
+
+
+def test_the_state_lives_in_the_library_of_the_positions() -> None:
+    """Host positions give a host state under any backend; JAX ones are 64-bit."""
+    pytest.importorskip("jax")
+    molecule = water()
+    scf = differentiable(molecule, SymmetrySpec.from_name("RHF"))
+    host = molecule.positions_array()
+    with use_backend("jax") as backend:
+        solution = scf.solve(host)
+        assert array_namespace(solution.energy) is array_namespace(host)
+        single = backend.namespace.asarray(host, dtype=backend.namespace.float32)
+        with pytest.raises(BackendError, match="float64"):
+            scf.solve(single)
 
 
 def test_wrong_inputs_are_rejected() -> None:

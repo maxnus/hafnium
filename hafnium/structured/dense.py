@@ -26,7 +26,7 @@ from hafnium.backend import (
     adjoint,
     array_namespace,
     block_diag,
-    is_traced,
+    require_concrete,
 )
 from hafnium.errors import StructureError
 from hafnium.structured.kramers import (
@@ -566,10 +566,14 @@ def require_close(
 
     The deviation is measured relative to the largest entry of ``expected``,
     at least one.
+
+    Raises
+    ------
+    BackendError
+        If either array is an abstract value under a JAX transformation,
+        which has no entries to compare.
     """
-    if is_traced(actual) or is_traced(expected):
-        # Abstract values under a JAX transformation have no entries to read.
-        return
+    require_concrete(actual, expected)
     scale = max(1.0, float(xp.max(xp.abs(expected))))
     deviation = float(xp.max(xp.abs(actual - expected)))
     if deviation > tolerance * scale:
