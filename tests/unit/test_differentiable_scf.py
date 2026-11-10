@@ -247,6 +247,30 @@ def test_a_geometry_that_breaks_the_point_group_is_rejected() -> None:
             jax.jit(jax.grad(scf.energy))(positions)
 
 
+def test_a_check_of_the_geometry_refuses_abstract_positions() -> None:
+    """Outside ``solve`` nothing has verified traced positions; say so, or opt out."""
+    jax = pytest.importorskip("jax")
+    molecule = water()
+    scf = differentiable(molecule, C2V)
+    with use_backend("jax") as backend:
+        positions = backend.namespace.asarray(molecule.positions_array())
+        coefficients = scf.solve(positions).mo_coefficients
+
+        def checked(at: Array) -> Array:
+            return scf.complete(coefficients, at).energy
+
+        def trusted(at: Array) -> Array:
+            return scf.complete(coefficients, at, check=False).energy
+
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.jit(checked)(positions)
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.grad(checked)(positions)
+        assert float(jax.jit(trusted)(positions)) == pytest.approx(
+            float(checked(positions)), abs=ENERGY_TOL
+        )
+
+
 def test_a_geometry_that_keeps_the_point_group_is_solved_in_its_sectors() -> None:
     jax = pytest.importorskip("jax")
     molecule = water()
@@ -291,6 +315,34 @@ def test_an_unconverged_response_raises_eagerly_and_under_jit() -> None:
             jax.jit(jax.grad(objective))(positions)
         with pytest.raises(jax.errors.JaxRuntimeError, match="response equations"):
             jax.jacrev(lowest_two)(positions)
+
+
+def test_a_response_that_is_not_finite_does_not_pass_as_converged() -> None:
+    """A singular operator leaves a residual that is not a number, not a small one."""
+    pytest.importorskip("jax")
+    from hafnium.scf import _jax_rules
+
+    molecule = water()
+    scf = differentiable(molecule, SymmetrySpec.from_name("RHF"))
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        solution = scf.solve(xp.asarray(molecule.positions_array()))
+        zero = scf.zero_rotations(solution.mo_coefficients)
+        ones = tuple(xp.ones_like(block) for block in zero)
+        with pytest.raises(ConvergenceError, match="response equations"):
+            _jax_rules.solve_response(scf, lambda _: zero, ones, solution.mo_energies)
+
+
+def test_the_solution_crosses_a_transformation_whatever_solve_made_it() -> None:
+    """The state is a pytree from the moment the backend loads."""
+    jax = pytest.importorskip("jax")
+    molecule = water()
+    scf = differentiable(molecule, SymmetrySpec.from_name("RHF"))
+    with use_backend("jax"):
+        solution = scf.solve(molecule.positions_array())
+        leaves = jax.tree_util.tree_leaves(solution)
+    assert len(leaves) == 6
+    assert any(leaf is solution.energy for leaf in leaves)
 
 
 def test_an_unconverged_field_raises_the_same_error_for_jax_positions() -> None:

@@ -12,10 +12,11 @@ pass solves by conjugate gradients with the Hessian–vector products of the
 Fock build. A function of the state that is stationary, the energy, needs no
 response and gets none beyond the convergence of the field; any other
 function of the state, an orbital energy or an expectation value, gets the
-full response. For positions of any other array library the same methods run
-the host solver and return its state as arrays of that library: the state
-lives in the namespace of the positions it is solved at, as every array
-derived from an input does (CONVENTIONS.md §5).
+full response. For host positions the same methods run the host solver and
+return its state as host arrays: the state lives in the namespace of the
+positions it is solved at, as every array derived from an input does
+(CONVENTIONS.md §5). The rules are reverse-mode and first-order: JAX
+rejects forward mode and second derivatives of the solver.
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ from hafnium.backend import (
     host_array,
     host_namespace,
     is_jax_array,
-    is_traced,
     to_host,
     use_backend,
 )
@@ -92,7 +92,8 @@ class ScfSolution:
     """A mean-field state as arrays of the library of the positions it was solved at.
 
     The state :meth:`DifferentiableScf.solve` returns: for JAX positions
-    every field is differentiable with respect to them. The
+    every field is differentiable with respect to them in reverse mode,
+    to first order (``grad``, ``vjp``, ``jacrev``). The
     orbital coefficients are taken in the gauge of the solver, so a function
     of them that is not invariant under rotations within the occupied and
     within the virtual orbitals differentiates in that gauge; the density,
@@ -273,7 +274,7 @@ class DifferentiableScf:
 
         For JAX positions the orbitals come from the host solver with a
         vector-Jacobian product that differentiates the solution
-        implicitly (ADR-0038); for any other library from the host solver
+        implicitly (ADR-0038); for host positions from the host solver
         alone. The library of ``positions`` decides, not the active
         backend: host positions give a host state under any backend.
 
@@ -283,7 +284,8 @@ class DifferentiableScf:
             If ``positions`` are not ``[atom, 3]``, or the state's
             occupations differ from the reference's.
         BackendError
-            If ``positions`` are JAX arrays that are not 64-bit.
+            If ``positions`` are JAX arrays that are not 64-bit, or live
+            on a device, which the host boundary refuses.
         SymmetryError
             If ``positions`` break the point group of the state.
         ConvergenceError
@@ -300,7 +302,8 @@ class DifferentiableScf:
             coefficients = self._solve_on_host(positions).mo_coefficients.map_blocks(
                 lambda block: xp.asarray(block)
             )
-        return self.complete(coefficients, positions)
+        # The host solve has checked the geometry and its own density.
+        return self.complete(coefficients, positions, check=False)
 
     def energy(self, positions: Array) -> Array:
         """Return the total energy at ``positions`` as a 0-d array."""
@@ -331,17 +334,41 @@ class DifferentiableScf:
         self._check_state(result)
         return result
 
-    def complete(self, coefficients: BlockMatrix, positions: Array) -> ScfSolution:
+    def complete(
+        self, coefficients: BlockMatrix, positions: Array, *, check: bool = True
+    ) -> ScfSolution:
         """Return the state of ``coefficients`` with the integrals at ``positions``.
 
         The density, the Fock matrix of the density, the orbital energies as
         its diagonal in the orbitals, and the total energy; each traces
         through the integrals, while the dependence of the coefficients
         themselves on the positions is the solver's.
+
+        Parameters
+        ----------
+        coefficients
+            Orbital coefficients in the structure of the state.
+        positions : Array[atom, 3]
+            The positions the integrals are evaluated at.
+        check
+            Verify the positions and the density as :meth:`hamiltonian`
+            and :meth:`density` do, which reads their entries.
+            :meth:`solve` passes false: its host solve has verified both.
+
+        Raises
+        ------
+        SymmetryError
+            If ``check`` finds ``positions`` breaking the point group.
+        StructureError
+            If ``check`` finds the density without the time-reversal
+            symmetry of its structure.
+        BackendError
+            If ``check`` meets an abstract value under a JAX
+            transformation that it would have to read.
         """
         xp = array_namespace(positions)
-        hamiltonian = self.hamiltonian(positions)
-        density = self.density(coefficients)
+        hamiltonian = self.hamiltonian(positions, check=check)
+        density = self.density(coefficients, check=check)
         fock, terms = hamiltonian.fock(density)
         mo_energies = BlockVector(
             self.structure,
@@ -369,21 +396,25 @@ class DifferentiableScf:
         """Build the Hamiltonian of ``integrals``, with their nuclear repulsion."""
         return _hamiltonian(integrals, self.n_alpha, self.n_beta, self.adaptation)
 
-    def hamiltonian(self, positions: Array) -> Hamiltonian:
+    def hamiltonian(self, positions: Array, *, check: bool = True) -> Hamiltonian:
         """Build the Hamiltonian at ``positions``, in their array library.
 
         With a point group the symmetry adaptation is that of the reference
-        geometry, so the positions must keep the group. Concrete positions
-        are checked here; abstract ones under a JAX transformation cannot
-        be read, and are checked by the host solve of :meth:`solve` that
-        they pass through.
+        geometry, so the positions must keep the group, which ``check``
+        verifies by reading them. Abstract positions under a JAX
+        transformation cannot be read: there the caller passes
+        ``check=False`` for positions it knows to keep the group, as
+        :meth:`solve` does for those its host solve has verified.
 
         Raises
         ------
         SymmetryError
-            If concrete ``positions`` break the point group of the state.
+            If ``check`` finds ``positions`` breaking the point group.
+        BackendError
+            If ``check`` meets abstract positions and the state has a
+            point group.
         """
-        if self.adaptation is not None and not is_traced(positions):
+        if check and self.adaptation is not None:
             self.adaptation.require_symmetric(positions)
         return self.hamiltonian_from(self.fitted_integrals(positions))
 
@@ -395,17 +426,17 @@ class DifferentiableScf:
         """Return the occupations as arrays of the namespace ``xp``."""
         return self.occupations.map_blocks(lambda block: xp.asarray(block))
 
-    def density(self, coefficients: BlockMatrix) -> BlockMatrix:
+    def density(self, coefficients: BlockMatrix, *, check: bool = True) -> BlockMatrix:
         """Return the density of ``coefficients`` with the occupations of the state.
 
-        The time-reversal check of :func:`~hafnium.structured.density_matrix`
-        reads entries, so it runs on concrete coefficients. Abstract ones
-        under a JAX transformation are the host solver's, which checked
-        its own density, moved along the connection and the rotations.
+        ``check`` is that of :func:`~hafnium.structured.density_matrix`,
+        whose time-reversal check reads entries. The backward pass of the
+        solver passes false: its orbitals are the host solver's, which
+        checked its own density, moved along the connection and the
+        rotations.
         """
         xp = array_namespace(*coefficients.blocks)
-        traced = any(is_traced(block) for block in coefficients.blocks)
-        return density_matrix(coefficients, self.occupations_in(xp), check=not traced)
+        return density_matrix(coefficients, self.occupations_in(xp), check=check)
 
     # ------------------------------------------------ the stationarity condition
 
@@ -459,7 +490,7 @@ class DifferentiableScf:
         )
 
     def residual(
-        self, coefficients: BlockMatrix, hamiltonian: Hamiltonian
+        self, coefficients: BlockMatrix, hamiltonian: Hamiltonian, *, check: bool = True
     ) -> tuple[Array, ...]:
         """``C_v† F C_o`` per block, the orbital gradient that vanishes at the solution.
 
@@ -467,9 +498,10 @@ class DifferentiableScf:
         occupations of the state. Up to the occupation numbers the residual
         is the derivative of the energy with respect to the rotations of
         :meth:`rotate`, so its Jacobian in them is the electronic Hessian,
-        self-adjoint and positive definite at a stable state.
+        self-adjoint and positive definite at a stable state. ``check`` is
+        that of :meth:`density`.
         """
-        fock, _ = hamiltonian.fock(self.density(coefficients))
+        fock, _ = hamiltonian.fock(self.density(coefficients, check=check))
         return tuple(
             adjoint(c[..., n:]) @ f @ c[..., :n]
             for c, f, n in zip(

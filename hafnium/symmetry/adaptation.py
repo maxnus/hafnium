@@ -24,6 +24,7 @@ from hafnium.backend import (
     array_namespace,
     generalized_eigh,
     host_namespace,
+    require_concrete,
     to_host,
 )
 from hafnium.basis import BasisSet
@@ -154,15 +155,20 @@ class SymmetryAdaptation:
         ------
         SymmetryError
             If an operation moves an atom away from its image.
+        BackendError
+            If ``positions`` are an abstract value under a JAX
+            transformation, which has no entries to compare.
         """
+        require_concrete(positions)
         xp = host_namespace()
         host = to_host(positions)
+        atoms = xp.arange(len(self.atom_images[0]))
         for operation, images in zip(
             self.group.operations, self.atom_images, strict=True
         ):
-            moved = host * xp.asarray(operation.signs, dtype=xp.float64)
-            expected = xp.take(host, xp.asarray(images, dtype=xp.int64), axis=0)
-            distance = xp.linalg.vector_norm(moved - expected, axis=-1)
+            distance = _image_distances(host, operation.signs)[
+                atoms, xp.asarray(images, dtype=xp.int64)
+            ]
             atom = int(xp.argmax(distance))
             if float(distance[atom]) > tolerance:
                 raise SymmetryError(
@@ -388,11 +394,7 @@ def _atom_images(
 ) -> tuple[int, ...]:
     """Return the atom each atom is mapped onto by the sign operation ``signs``."""
     xp = host_namespace()
-    positions = system.positions_array(xp)
-    moved = positions * xp.asarray(signs, dtype=xp.float64)
-    distance = xp.linalg.vector_norm(
-        xp.expand_dims(moved, 1) - xp.expand_dims(positions, 0), axis=-1
-    )
+    distance = _image_distances(system.positions_array(xp), signs)
     nearest = xp.argmin(distance, axis=1)
     images: list[int] = []
     for atom in range(system.n_atoms):
@@ -408,6 +410,19 @@ def _atom_images(
             )
         images.append(image)
     return tuple(images)
+
+
+def _image_distances(positions: Array, signs: tuple[int, int, int]) -> Array:
+    """Return ``[atom, atom]``: from every atom moved by ``signs`` to every atom.
+
+    The distances in Bohr between the images of the host ``positions``
+    ``[atom, 3]`` under the sign operation and the positions themselves.
+    """
+    xp = host_namespace()
+    moved = positions * xp.asarray(signs, dtype=xp.float64)
+    return xp.linalg.vector_norm(
+        xp.expand_dims(moved, 1) - xp.expand_dims(positions, 0), axis=-1
+    )
 
 
 def _require_equal_shells(

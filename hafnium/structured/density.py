@@ -79,9 +79,12 @@ def _check_time_reversal(
     xp = array_namespace(density)
     if block.ring is Ring.REAL and not xp.isdtype(density.dtype, "complex floating"):
         return
+    positions = structure.invariant_positions(block)
+    if not positions:
+        return
     require_concrete(density)
     batched = structure.k_axis is not None
-    for position in structure.invariant_positions(block):
+    for position in positions:
         matrix = density[position] if batched else density
         if block.ring is Ring.QUATERNION:
             if not is_kramers_symmetric(matrix):

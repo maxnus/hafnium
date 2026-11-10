@@ -29,6 +29,8 @@ from hafnium.structured import (
     TensorStructure,
     density_matrix,
 )
+from hafnium.structured.kramers import is_kramers_symmetric
+from hafnium.symmetry import KPoints
 
 pytest.importorskip("jax")
 
@@ -212,6 +214,37 @@ def test_the_density_check_refuses_abstract_values() -> None:
         with pytest.raises(BackendError, match="abstract value"):
             jax.jit(checked)(orbitals)
         assert float(jax.jit(trusted)(orbitals)) == pytest.approx(1.0)
+
+
+def test_the_density_traces_where_no_point_is_time_reversal_invariant() -> None:
+    """Without an invariant point the check reads nothing, so nothing is refused."""
+    kpoints = KPoints.mesh((2, 1, 1), shift=(0.5, 0.0, 0.0))
+    structure = BlockStructure.restricted().with_k_axis(kpoints.axis())
+    (block,) = structure.stored_blocks
+    assert structure.invariant_positions(block) == ()
+    n_stored = len(structure.stored_kpoints(block) or ())
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        identity = xp.asarray(np.eye(2, dtype=np.complex128))
+        orbitals = BlockMatrix(structure, (xp.stack([identity] * n_stored),))
+        occupations = BlockVector(
+            structure, (xp.asarray(np.tile([2.0, 0.0], (n_stored, 1))),)
+        )
+
+        def electrons(c: BlockMatrix) -> Array:
+            density = density_matrix(c, occupations)
+            return xp.real(xp.sum(xp.linalg.trace(density.blocks[0])))
+
+        assert float(jax.jit(electrons)(orbitals)) == pytest.approx(2.0 * n_stored)
+
+
+def test_the_other_checks_that_read_entries_refuse_abstract_values() -> None:
+    with use_backend("jax") as backend:
+        xp = backend.namespace
+        matrix = xp.asarray(np.eye(4, dtype=np.complex128))
+        assert is_kramers_symmetric(matrix)
+        with pytest.raises(BackendError, match="abstract value"):
+            jax.jit(is_kramers_symmetric)(matrix)
 
 
 def test_jax_arrays_are_rejected_when_mixed_with_host_arrays() -> None:

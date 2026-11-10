@@ -37,7 +37,7 @@ from jax.scipy.sparse.linalg import cg
 from hafnium.backend import Array, host_namespace, is_traced
 from hafnium.backend._jax import register_pytrees
 from hafnium.errors import ConvergenceError
-from hafnium.scf.differentiable import DifferentiableScf, FittedIntegrals, ScfSolution
+from hafnium.scf.differentiable import DifferentiableScf, FittedIntegrals
 from hafnium.structured import BlockMatrix, BlockVector
 
 Rotations = tuple[Array, ...]
@@ -52,18 +52,6 @@ PRECONDITIONER_FLOOR = 1e-3
 """Orbital-energy differences below this are raised to it in the preconditioner."""
 
 register_pytrees()
-jax.tree_util.register_dataclass(
-    ScfSolution,
-    data_fields=[
-        "mo_coefficients",
-        "mo_occupations",
-        "mo_energies",
-        "density",
-        "fock",
-        "energy",
-    ],
-    meta_fields=[],
-)
 
 
 def solve(scf: DifferentiableScf, positions: Array) -> BlockMatrix:
@@ -141,12 +129,14 @@ def _solve_bwd(
     _, pull_rotation = jax.vjp(lambda k: scf.rotate(coefficients, k), zero)
     (rotation_bar,) = pull_rotation(coefficient_bar)
     _, pull_hessian = jax.vjp(
-        lambda k: scf.residual(scf.rotate(coefficients, k), hamiltonian), zero
+        lambda k: scf.residual(scf.rotate(coefficients, k), hamiltonian, check=False),
+        zero,
     )
-    response = _response(scf, lambda z: pull_hessian(z)[0], rotation_bar, energies)
+    response = solve_response(scf, lambda z: pull_hessian(z)[0], rotation_bar, energies)
     # The residual's own dependence on the integrals, at zero rotation.
     _, pull_mixed = jax.vjp(
-        lambda at: scf.residual(connected(at), scf.hamiltonian_from(at)), integrals
+        lambda at: scf.residual(connected(at), scf.hamiltonian_from(at), check=False),
+        integrals,
     )
     (mixed,) = pull_mixed(response)
     combined = jax.tree_util.tree_map(lambda a, b: a - b, direct, mixed)
@@ -157,7 +147,7 @@ def _solve_bwd(
 _solve.defvjp(_solve_fwd, _solve_bwd)
 
 
-def _response(
+def solve_response(
     scf: DifferentiableScf,
     operator: Callable[[Rotations], Rotations],
     right_hand_side: Rotations,
@@ -176,7 +166,8 @@ def _response(
     ------
     ConvergenceError
         If the residual is above the tolerance after the allowed
-        iterations; ``last`` holds the rotations reached.
+        iterations, or not finite, as for an operator that is singular
+        along the right-hand side; ``last`` holds the rotations reached.
     """
     gaps = tuple(jnp.maximum(gap, PRECONDITIONER_FLOOR) for gap in scf.gaps(energies))
 
@@ -199,7 +190,8 @@ def _response(
     bound: Array = as_jax(jnp.maximum(tolerance * _norm(right_hand_side), tolerance))
 
     def verified(z: Rotations, norm: Array, limit: Array) -> Rotations:
-        if float(norm) > float(limit):
+        # Written so that a residual that is not a number fails as well.
+        if not float(norm) <= float(limit):
             raise ConvergenceError(
                 "the response equations did not converge in "
                 f"{scf.response.iterations} iterations (residual {float(norm):.2e}, "

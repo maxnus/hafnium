@@ -60,8 +60,13 @@ state was not built for, is reported from inside a transformation.
   JAX's own, so the complex classes follow its conventions and the
   operator stays self-adjoint in the real inner product the solver uses.
   The cotangents of the integrals from the connection and from the
-  response are combined before the derivative integrals of ADR-0035 are
-  evaluated, once. A stationary function of the state, the energy, has a
+  response are combined before the solver contracts them with the
+  derivative integrals of ADR-0035, once; the direct dependence of the
+  state on the integrals, through `complete`, is JAX's own second
+  contraction. The rules are reverse-mode and first-order: a
+  `custom_vjp` with callbacks in its backward pass admits neither forward
+  mode nor a second derivative, which JAX rejects with its own error. A
+  stationary function of the state, the energy, has a
   vanishing right-hand side and costs no response; an orbital energy or an
   expectation value gets the full response.
 - **The two-electron term applies the Cholesky factor of the metric.** The
@@ -83,23 +88,29 @@ state was not built for, is reported from inside a transformation.
   time-reversal check of `density_matrix` cannot look at it. They raise
   `BackendError` there (`require_concrete`) and never pass it unseen: a
   check that is skipped whenever the caller is under `grad` or `jit` is no
-  check. The two places of the differentiable path that meet abstract
-  values say so themselves with `check=False`: the Coulomb matrix of a
-  molecule, a real matrix without a k axis that is a real spatial operator
-  as it stands, and the density of the solver's own orbitals, whose
-  concrete values the host solve checked. Everything else in the
-  structured algebra is shapes and dtypes, which trace.
+  check. The places of the differentiable path that meet abstract values
+  say so themselves with `check=False`: the Coulomb matrix of a molecule,
+  a real matrix without a k axis that is a real spatial operator as it
+  stands, and, in `solve` and its backward pass, the geometry and the
+  density of the solver's own orbitals, whose concrete values the host
+  solve checked. The public `complete`, `hamiltonian`, `density` and
+  `residual` check by default and so refuse abstract values they would
+  have to read, since outside `solve` nothing has verified them.
+  Everything else in the structured algebra is shapes and dtypes, which
+  trace.
 - **The state lives in the array library of the positions.** As every
   array derived from an input does (CONVENTIONS.md §5), `solve` takes the
-  JAX rules for JAX positions and the host solver alone for any other,
-  whatever backend is active, and returns arrays of that library. JAX
-  positions that are not 64-bit, which is what a process that never
-  selected the JAX backend creates, raise `BackendError`.
+  JAX rules for JAX positions and the host solver alone for host
+  positions, whatever backend is active, and returns arrays of that
+  library. JAX positions that are not 64-bit, which is what a process
+  that never selected the JAX backend creates, raise `BackendError`, as
+  positions on a device do at the host boundary. The state is registered
+  as a pytree when the JAX backend loads, with the block types.
 - **A point group holds only at geometries that keep it.** The symmetry
   adaptation is built once, at the reference geometry, and its sectors
   drop the couplings between irreps. At positions that break the group
   those couplings are the physics, so the host solve and the Hamiltonian
-  at concrete positions check that every operation still maps each atom
+  at given positions check that every operation still maps each atom
   onto its image (`SymmetryAdaptation.require_symmetric`) and raise
   `SymmetryError` otherwise; a displacement that lowers the symmetry needs
   the subgroup it keeps, or no point group.
@@ -109,7 +120,8 @@ state was not built for, is reported from inside a transformation.
   eager call and in `grad` outside `jit`, so its `ConvergenceError`,
   `InputError` or `SymmetryError` reaches the caller as it is, with the
   last state. The residual of the response solve is verified the same
-  way, and its `ConvergenceError` carries the rotations reached. On
+  way, a residual that is not a number failing like one that is too
+  large, and its `ConvergenceError` carries the rotations reached. On
   abstract values, under `jit`, `vmap` and the batched backward pass of
   `jacrev`, both run as callbacks, the verification as one the solution
   passes through so that it cannot be optimized away, and JAX reports

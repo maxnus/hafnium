@@ -2,9 +2,11 @@
 
 The block types are registered with their arrays as leaves and their
 structure as static metadata, so ``jax.tree_util`` and the transformations
-see through them. Unflattening bypasses the constructors' validation, as
-JAX asks of pytree types: a transformation may rebuild a type around
-placeholder leaves that are not arrays.
+see through them, and with them the state of the differentiable SCF
+(ADR-0038), a dataclass of block types, so that it crosses a
+transformation whichever solve produced it. Unflattening bypasses the
+constructors' validation, as JAX asks of pytree types: a transformation
+may rebuild a type around placeholder leaves that are not arrays.
 """
 
 # JAX's own annotations leave parts of its API unknown to a strict checker.
@@ -12,6 +14,7 @@ placeholder leaves that are not arrays.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Hashable, Iterable
 from typing import Any
 
@@ -38,16 +41,22 @@ def load() -> Backend:
 
 
 def register_pytrees() -> None:
-    """Register the block types with ``jax.tree_util``, once."""
+    """Register the block types and the SCF state with ``jax.tree_util``, once."""
     global _registered
     if _registered:
         return
-    from jax.tree_util import register_pytree_node
+    from jax.tree_util import register_dataclass, register_pytree_node
 
+    from hafnium.scf.differentiable import ScfSolution
     from hafnium.structured import BlockMatrix, BlockTensor, BlockVector
 
     for cls in (BlockMatrix, BlockVector, BlockTensor):
         register_pytree_node(cls, _flatten, _unflattener(cls))
+    register_dataclass(
+        ScfSolution,
+        data_fields=[entry.name for entry in dataclasses.fields(ScfSolution)],
+        meta_fields=[],
+    )
     _registered = True
 
 
